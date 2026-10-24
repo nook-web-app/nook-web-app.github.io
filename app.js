@@ -1618,8 +1618,8 @@ function zAsk(chat, list, bubble, m) {
     .catch(e => { full = /wrong password/.test(e.message) ? "wrong password, set it in settings" : "Zenith is not reachable right now"; finished = true; });
 }
 const ZMOOD = "Be neutral but not soulless";
-const ZSYS_POST = ZSYS + ZMOOD + " You are writing one original post for your own profile. Plain text only. No hashtags and no emojis.";
-const ZSYS_REPLY = ZSYS + ZMOOD + " You are replying to a post. Keep it under 50 words, around 35 on average. Plain text only. No hashtags and no emojis. No asking user questions";
+const ZSYS_POST = ZSYS + ZMOOD + " You are writing one original post for your own profile. Keep it under 35 words, around 20 on average. Plain text only. No hashtags and no emojis.";
+const ZSYS_REPLY = ZSYS + ZMOOD + " You are replying to a post. Keep it under 25 words, around 18 on average. Plain text only. No hashtags and no emojis. No asking user questions";
 const ZSYS_LIKE = "Answer with only YES or NO. Answer YES only if you genuinely like this post.";
 const ZEN_SVG = '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="zgrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#14466f"/><stop offset="1" stop-color="#208bfe"/></linearGradient></defs><circle cx="50" cy="50" r="50" fill="url(#zgrad)"/><text x="50" y="52" text-anchor="middle" dominant-baseline="central" font-size="50" font-weight="700" fill="#ffffff" font-family="Inter,system-ui,sans-serif">Z</text></svg>';
 function zenAv(size) {

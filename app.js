@@ -41,6 +41,7 @@ async function takeHashLogin() {
   if (p.get("type") !== "recovery" || !p.get("access_token") || !p.get("refresh_token") || (signedIn && !recent)) { if (signedIn) setTimeout(() => toast("That link is for a reset requested on another device. Ask again here"), 800); return; }
   const { error } = await sb.auth.setSession({ access_token: p.get("access_token"), refresh_token: p.get("refresh_token") });
   if (!error) { RECOVERY = true; try { localStorage.removeItem("nook-reset-asked"); } catch (e) {} }
+  else setTimeout(() => { try { toast("Could not check the reset link. Check your connection, or ask for a new link"); } catch (e) {} }, 1500);
 }
 let sbUser = null;
 function isOwner() { return !!sbUser && sbUser.email === "haythamzoubi960@gmail.com"; }
@@ -155,7 +156,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.16";
+const APP_VERSION = "3.4.17";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2527,6 +2528,12 @@ function userV(cur) {
   countsOf(cur.id, c => { counts = c; paintStat(); });
   const hit = cacheRead("ui:" + cur.id);
   if (hit && hit.v && hit.v.acc) applyState(hit.v);
+  // a profile that could not load says so and offers another try, instead of staying a grey shell
+  const profileFail = () => {
+    if (stack[stack.length - 1] !== cur) return;
+    main.textContent = "";
+    main.append(h("div", { class: "rest" }, h("b", {}, who.name), h("p", { class: "note" }, "Could not load this profile. Check your connection."), h("button", { class: "ghost", onclick: () => render() }, "Try again")));
+  };
   Promise.all([
     sb.from("accounts").select(ACC_COLS).eq("id", cur.id).maybeSingle(),
     sb.from("follows").select("followee_id").eq("follower_id", sbUser.id).eq("followee_id", cur.id),
@@ -2537,17 +2544,27 @@ function userV(cur) {
     const [{ data: acc }, { data: fol }, { data: folMe }, { data: blk }, { data: theyBlock }] = results;
     // a page the person has already left is not touched, and a failed call is not shown as a block
     if (stack[stack.length - 1] !== cur) return;
-    if (results.some(r => r && r.error)) return;
-    if (!acc || (theyBlock && theyBlock.length)) {
+    if (results.some(r => r && r.error)) { if (!st) profileFail(); return; }
+    if (!acc) {
+      main.textContent = "";
+      main.append(h("div", { class: "rest" }, h("b", {}, who.name), h("p", { class: "note" }, "This account is not available")));
+      return;
+    }
+    if (theyBlock && theyBlock.length) {
       main.textContent = "";
       main.append(h("div", { class: "rest" }, h("b", {}, who.name), h("p", { class: "note" }, "This account blocked you")));
       return;
     }
     applyState({ acc, following: !!(fol && fol.length), followsMe: !!(folMe && folMe.length), blocked: !!(blk && blk.length) });
     saveState();
-  });
+  }, () => { if (!st) profileFail(); });
+  let followBusy = false;
   followBtn.onclick = async () => {
-    if (!st) return;
+    if (!st || followBusy) return;
+    followBusy = true;
+    try { await followNow(); } finally { followBusy = false; }
+  };
+  const followNow = async () => {
     const on = !st.following;
     st.following = on; counts.followers += on ? 1 : -1;
     paintFollow(); paintStat(); saveState();
@@ -3281,7 +3298,7 @@ function recoverModal(prefill) {
   const ident = h("input", { class: "in", placeholder: "Email or username", autocomplete: "username", "aria-label": "Email or username", autocapitalize: "none" });
   ident.value = prefill || "";
   const msg = h("p", { class: "note", role: "alert" });
-  const alt = h("button", { class: "tbtn", type: "button", hidden: true, onclick: () => { m.close(); recoverCodeModal(ident.value.trim()); } }, "Use my authenticator code instead");
+  const alt = h("button", { class: "tbtn", type: "button", hidden: true, onclick: () => { const v = ident.value.trim(); m.close(() => recoverCodeModal(v)); } }, "Use my authenticator code instead");
   const m = modal({
     title: "Reset password",
     action: "Send link",
@@ -3326,12 +3343,13 @@ function recoverCodeModal(prefill) {
       const c = code.value.replace(/\s+/g, "");
       if (!ident.value.trim() || !/^\d{6}$/.test(c)) { msg.textContent = "Fill in your email or username and the 6 digit code"; return; }
       if (pw.value.length < 8) { msg.textContent = "New password needs 8 or more characters"; return; }
+      if (pw.value.length > 72) { msg.textContent = "New password can be 72 characters at most"; return; }
       if (pw.value !== pw2.value) { msg.textContent = "New passwords do not match"; return; }
       m.act.disabled = true;
       try {
         if (await pwnedPassword(pw.value)) { msg.textContent = PWNED_MSG; return; }
         const r = await callFn("totp", { action: "recover", ident: ident.value.trim(), code: c, password: pw.value });
-        if (!r.ok) { msg.textContent = r.body.error || "Could not reset the password"; return; }
+        if (!r.ok) { msg.textContent = failText(r, "Could not reset the password"); return; }
         close();
         toast("Password changed. Sign in with it now.");
       } finally { m.act.disabled = false; }
@@ -3989,6 +4007,13 @@ function acctsFor(ids) {
     });
     return acctCache;
   });
+}
+// a request that never answers is given up after a while, so a page never waits forever
+const withTimeout = (p, ms) => Promise.race([Promise.resolve(p), new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms || 12000))]);
+// a short message and a Try again button where a list should be
+function failBox(el, text, retry) {
+  el.textContent = "";
+  el.append(h("div", { class: "empty" }, h("p", {}, text), h("button", { class: "ghost", onclick: retry }, "Try again")));
 }
 function loadingEl() {
   return h("div", { class: "empty" }, h("p", {}, "Loading..."));
@@ -5236,7 +5261,7 @@ function dmV(c) {
   if (hit && Array.isArray(hit.v) && hit.v.length) syncRows(hit.v, { initial: true });
   else if (hit && Array.isArray(hit.v)) hint("No messages yet. Say hi.");
   else if (!(pre && pre.length)) hint("load");
-  pull().then(() => { scrollEnd(); }).catch(() => { if (!list.querySelector("[data-mid], .tmpm")) hint("Could not load messages. Pull down to try again."); });
+  pull().then(() => { scrollEnd(); }).catch(() => { if (!list.querySelector("[data-mid], .tmpm")) hint("Could not load messages. Trying again..."); });
   sb.from("notifications").update({ read_at: new Date().toISOString() }).eq("user_id", me).eq("actor_id", c.id).eq("kind", "message").is("read_at", null).then(() => refreshBadge());
   sync();
 }
@@ -5247,8 +5272,8 @@ function blockedV() {
   main.append(list);
   list.append(loadingEl());
   const showNone = () => { list.textContent = ""; list.append(emptyState("user", "You have not blocked anyone.")); };
-  sb.from("blocks").select("blocked_id").eq("blocker_id", sbUser.id).then(({ data, error }) => {
-    if (error) { list.textContent = ""; list.append(emptyState("user", "Could not load blocked accounts.")); return; }
+  withTimeout(sb.from("blocks").select("blocked_id").eq("blocker_id", sbUser.id)).then(({ data, error }) => {
+    if (error) { failBox(list, "Could not load blocked accounts.", () => render()); return; }
     const ids = (data || []).map(r => r.blocked_id).filter(Boolean);
     return cachedAccounts(ids).then(m => {
       list.textContent = "";
@@ -5274,7 +5299,7 @@ function blockedV() {
         list.append(row);
       });
     });
-  }).catch(() => { list.textContent = ""; list.append(emptyState("user", "Could not load blocked accounts.")); });
+  }).catch(() => failBox(list, "Could not load blocked accounts.", () => render()));
 }
 // people to find: a mix that changes every 15 to 25 minutes, plus a search box
 let discSeed = null;
@@ -5351,16 +5376,20 @@ function followListV(c, mode) {
     });
   });
   const hit = cacheRead(ukey);
+  const load = () => {
+    withTimeout(Promise.all([
+      sb.from("follows").select(col).eq(keyCol, c.id).limit(500),
+      sb.from("blocks").select("blocker_id, blocked_id").or("blocker_id.eq." + sbUser.id + ",blocked_id.eq." + sbUser.id)
+    ])).then(([a1, a2]) => {
+      if (a1.error || a2.error) throw new Error("load");
+      const hidden = new Set((a2.data || []).map(b => (b.blocker_id === sbUser.id ? b.blocked_id : b.blocker_id)));
+      const ids = (a1.data || []).map(r => r[col]).filter(id => !hidden.has(id));
+      cacheWrite(ukey, ids);
+      return paintIds(ids);
+    }).catch(() => { if (!list.isConnected) return; if (hit) return; failBox(list, "Could not load this list. Check your connection.", () => { list.textContent = ""; list.append(loadingEl()); load(); }); });
+  };
   if (hit) paintIds(hit.v); else list.append(loadingEl());
-  Promise.all([
-    sb.from("follows").select(col).eq(keyCol, c.id).limit(500),
-    sb.from("blocks").select("blocker_id, blocked_id").or("blocker_id.eq." + sbUser.id + ",blocked_id.eq." + sbUser.id)
-  ]).then(([{ data: rows }, { data: blks }]) => {
-    const hidden = new Set((blks || []).map(b => (b.blocker_id === sbUser.id ? b.blocked_id : b.blocker_id)));
-    const ids = (rows || []).map(r => r[col]).filter(id => !hidden.has(id));
-    cacheWrite(ukey, ids);
-    return paintIds(ids);
-  });
+  load();
 }
 function dmRow(cv, body) {
   const last = cv.last;
@@ -5458,11 +5487,15 @@ async function notifsV() {
   const list = h("div");
   main.append(list);
   list.append(loadingEl());
-  const [{ data, error }] = await Promise.all([
-    sb.from("notifications").select("id, actor_id, kind, post_id, created_at, read_at").eq("user_id", sbUser.id).neq("kind", "message").order("created_at", { ascending: false }).limit(100),
-    loadSocial()
-  ]);
-  if (error) { list.textContent = ""; list.append(emptyState("bell", "Could not load notifications.")); return; }
+  let got;
+  try {
+    got = await withTimeout(Promise.all([
+      sb.from("notifications").select("id, actor_id, kind, post_id, created_at, read_at").eq("user_id", sbUser.id).neq("kind", "message").order("created_at", { ascending: false }).limit(100),
+      loadSocial()
+    ]));
+  } catch (e) { got = [{ error: e }]; }
+  const { data, error } = got[0];
+  if (error) { failBox(list, "Could not load notifications. Check your connection.", () => render()); return; }
   const rows = data || [];
   await acctsFor(rows.map(r => r.actor_id));
   list.textContent = "";

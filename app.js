@@ -139,7 +139,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.32";
+const APP_VERSION = "3.3.33";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -3206,26 +3206,32 @@ async function leaveThisAccount() {
 }
 // makes a brand new account and keeps it on this phone next to the open one; the open one stays open
 function newAccountModal() {
-  const dn = h("input", { class: "in", type: "text", placeholder: "Display name", autocomplete: "off", maxlength: "15", "aria-label": "Display name" });
-  const user = h("input", { class: "in", type: "text", placeholder: "Username", autocomplete: "off", maxlength: "15", "aria-label": "Username" });
+  const dn = h("input", { class: "in", type: "text", placeholder: "Display name", autocomplete: "off", "aria-label": "Display name" });
+  const user = h("input", { class: "in", type: "text", placeholder: "Username", autocomplete: "off", "aria-label": "Username" });
   const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "off", "aria-label": "Email" });
   const pw = pwField("Password");
-  const agree = h("input", { type: "checkbox", id: "agree2", "aria-label": "I am 18+ and agree to the Terms of Use and Privacy Policy" });
   const msg = h("p", { class: "note", role: "alert" });
+  const go1 = h("button", { class: "pri" }, "Create account");
   const m = modal({
-    title: "New account",
+    title: "",
     action: "Create",
-    body: [h("div", { class: "fld" }, dn), h("div", { class: "fld" }, user), h("div", { class: "fld" }, email), pw.wrap,
-      h("label", { class: "agree" }, agree, h("span", {}, "I am 18+ and agree to the Terms and Privacy")), msg],
-    onAction: async close => {
+    body: [h("div", { class: "auth", style: "padding-top:max(4vh,16px)" },
+      h("h1", {}, "Nook"),
+      h("p", { class: "sub" }, "Make your account"),
+      hinted(dn, 15), hinted(user, 15, { re: /^[A-Za-z0-9._]*$/, msg: "Only letters, numbers, dots and underscores" }), email, hinted(pw.input, 72, null, 8, pw.wrap),
+      msg, go1)],
+    onAction: close => create(close)
+  });
+  m.act.hidden = true;
+  go1.addEventListener("click", () => create(m.close));
+  const create = async close => {
       msg.textContent = "";
       const n = dn.value.trim(), u = user.value.trim(), e = email.value.trim(), p = pw.input.value;
       if (!n) { msg.textContent = "Enter a display name"; return; }
       if (!/^[A-Za-z0-9._]{1,15}$/.test(u)) { msg.textContent = "Username: letters, numbers, dots or underscores, max 15"; return; }
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e)) { msg.textContent = "That email does not look right. Check for typos"; return; }
       if (p.length < 8) { msg.textContent = "Password needs at least 8 characters"; return; }
-      if (!agree.checked) { msg.textContent = "Agree to the terms and privacy policy to continue"; return; }
-      m.act.disabled = true;
+      go1.disabled = true;
       try {
         const { data: taken } = await sb.from("accounts").select("id").eq("username", u).maybeSingle();
         if (taken) { msg.textContent = "That username is taken"; return; }
@@ -3255,9 +3261,8 @@ function newAccountModal() {
         close();
         toast("Account created");
         setTimeout(openAccounts, 350);
-      } catch (x) { msg.textContent = "Something went wrong. Try again"; } finally { m.act.disabled = false; }
-    }
-  });
+      } catch (x) { msg.textContent = "Something went wrong. Try again"; } finally { go1.disabled = false; }
+  };
 }
 function addAccountModal() {
   const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "email", "aria-label": "Email" });

@@ -1,8 +1,9 @@
-const VERSION = "nook-3.3.32";
+const VERSION = "nook-3.3.33";
 const SHARE_CACHE = "nook-share";
-const SHELL = ["./", "index.html", "app.js", "update.js", "boot.js", "supabase.js", "fonts/inter-latin.woff2", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
+const SHELL = ["./", "index.html", "app.js", "update.js", "supabase.js", "fonts/inter-latin.woff2", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).catch(() => {}));
+  // the app files are fetched fresh (not from the browser's own cache) and kept under this version, so a version is always whole
+  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: "reload" })))).catch(() => {}));
 });
 self.addEventListener("message", e => { if (e.data === "skip") self.skipWaiting(); });
 async function handleShare(request) {
@@ -33,10 +34,20 @@ self.addEventListener("fetch", e => {
   if (e.request.method !== "GET") return;
   // only the app files are kept offline: data from the server (messages, profiles, signed links) must never sit in a cache that the next person on this phone could read
   if (url.origin !== self.location.origin) return;
-  e.respondWith(fetch(e.request).then(r => {
-    if (r.ok) caches.open(VERSION).then(c => c.put(e.request, r.clone())).catch(() => {});
-    return r;
-  }).catch(() => caches.match(e.request)));
+  // the notes file is how the app learns about a new version: always from the server
+  if (url.pathname.endsWith("/CLAUDE_READ_THIS.txt")) return;
+  e.respondWith((async () => {
+    const c = await caches.open(VERSION);
+    const hit = await c.match(e.request, e.request.mode === "navigate" ? { ignoreSearch: true } : undefined);
+    if (hit) return hit;
+    try {
+      const r = await fetch(e.request);
+      if (r.ok) c.put(e.request, r.clone()).catch(() => {});
+      return r;
+    } catch (err) {
+      return (await caches.match(e.request)) || Response.error();
+    }
+  })());
 });
 const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 // a chat message arrives sealed: the key of this phone opens it here, nothing is sent anywhere

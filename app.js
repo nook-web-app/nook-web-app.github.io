@@ -155,7 +155,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.13";
+const APP_VERSION = "3.4.14";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -671,6 +671,21 @@ function lightbox(imgs, i, cap, opts) {
 
 let stack = [{ r: "home" }];
 const scrolls = [];
+// a page that was left comes back to the same spot even when its pictures are still loading: the spot is set again until the page is tall enough
+function settleScroll(y) {
+  main.scrollTop = y;
+  if (!y) return;
+  let n = 0, stop = false;
+  const off = () => { stop = true; };
+  main.addEventListener("touchstart", off, { once: true, passive: true });
+  main.addEventListener("wheel", off, { once: true, passive: true });
+  const tick = () => {
+    if (stop || n++ > 120) return;
+    if (Math.abs(main.scrollTop - y) > 1 && main.scrollHeight - main.clientHeight >= y - 1) main.scrollTop = y;
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
 function go(r) { scrolls.push(main.scrollTop); stack.push(r); hist(false); render("fwd"); main.scrollTop = 0; }
 function back() { if (stack.length > 1) history.back(); }
 function hist(replace) { const st = { s: JSON.parse(JSON.stringify(stack)), sc: scrolls.slice() }; try { if (replace) history.replaceState(st, ""); else history.pushState(st, ""); } catch (e) {} }
@@ -702,7 +717,7 @@ window.addEventListener("popstate", e => {
   const goingBack = e.state.s.length < stack.length;
   const y = goingBack ? scrolls[e.state.s.length - 1] || 0 : 0;
   stack = e.state.s; scrolls.length = 0; (e.state.sc || []).forEach(v => scrolls.push(v));
-  render(goingBack ? "back" : "fwd"); main.scrollTop = y;
+  render(goingBack ? "back" : "fwd"); settleScroll(y);
 });
 function root(name) { stack = [{ r: name }]; scrolls.length = 0; hist(false); render("root"); main.scrollTop = 0; }
 
@@ -1656,7 +1671,18 @@ function zenPost(text, parent, id) {
   return p;
 }
 // the screen is only rebuilt when his side really changed, and it stays where it was scrolled to, so nothing jumps while somebody reads
-let zenSig = "";
+let zenSig = "", zenSig2 = "";
+// the reply numbers under the posts are changed in place, so they are right at once and nothing on the page moves
+function zenCounts() {
+  document.querySelectorAll(".acts[data-pid]").forEach(el => {
+    const p = byId(el.dataset.pid);
+    const b = el.querySelector(".ab.rl");
+    if (!p || !b) return;
+    const n = p.ra ? (p.rp || 0) : kids(p.id).length;
+    let sp = b.querySelector("span");
+    if (n) { if (!sp) { sp = h("span", {}); b.append(sp); } sp.textContent = String(n); } else if (sp) sp.remove();
+  });
+}
 const zenRefresh = () => {
   const sig = S.posts.length + ":" + S.posts.filter(p => p.zenLike).length;
   if (sig === zenSig) return;
@@ -1670,7 +1696,12 @@ const zenRefresh = () => {
     flat(cur.id, 0, []).forEach(x => main.append(postCard(x.p, { rep: true, d: x.d })));
     return;
   }
-  // a page the person has scrolled is left alone, it shows the news the next time it is drawn
+  zenCounts();
+  // new posts or likes of his redraw the page only while it is at the top; a scrolled page is left alone and shows them the next time it is drawn
+  const sig2 = S.posts.filter(p => p.ai && !p.parent).length + ":" + S.posts.filter(p => p.zenLike).length;
+  if (zenSig2 === "") { zenSig2 = sig2; return; }
+  if (sig2 === zenSig2) return;
+  zenSig2 = sig2;
   if (main.scrollTop > 8) return;
   render();
 };

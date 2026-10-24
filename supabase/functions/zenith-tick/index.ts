@@ -54,8 +54,8 @@ Deno.serve(async (req) => {
   const password = "";
   if (!(await geminiKey())) return json({ error: "no gemini key in the vault" }, 500);
   // a dry run writes a post but saves nothing, to check that everything works
-  let dry = false, mode = "";
-  try { const b = await req.json(); dry = b.dry === true; mode = b.mode === "reply" ? "reply" : ""; } catch { dry = false; }
+  let dry = false, mode = "", force = false;
+  try { const b = await req.json(); dry = b.dry === true; force = b.force === true; mode = b.mode === "reply" ? "reply" : ""; } catch { dry = false; }
 
   const { data: owner } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
   if (!owner) return json({ skipped: "no owner" });
@@ -73,7 +73,7 @@ Deno.serve(async (req) => {
   const recent = (mine || []).filter((r) => r.data && r.data.ai && !r.data.parent && !r.data.parentRemote && now - Number(r.data.t || 0) < 30 * DAY).length;
   const band = 5 * Math.pow(0.93, recent);
   const roll = Math.random() * 100;
-  if (!dry && roll < 100 - band) return json({ skipped: "roll " + roll.toFixed(2) + " needs " + (100 - band).toFixed(2) });
+  if (!dry && !force && roll < 100 - band) return json({ skipped: "roll " + roll.toFixed(2) + " needs " + (100 - band).toFixed(2) });
 
   const base = prompt && prompt.data && typeof prompt.data.post === "string" && prompt.data.post.trim() ? String(prompt.data.post) : FALLBACK;
   const tz = prompt && prompt.data && typeof prompt.data.tz === "string" ? String(prompt.data.tz) : "Asia/Muscat";

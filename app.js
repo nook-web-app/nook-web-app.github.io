@@ -133,7 +133,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.2.37";
+const APP_VERSION = "3.3.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1644,7 +1644,16 @@ function settingsV() {
   main.append(sec("Appearance"));
   main.append(h("div", { class: "seg" }, [["system", "System"], ["dark", "Dark"], ["light", "Light"]].map(t => h("button", { class: S.ui.theme === t[0] ? "on" : "", onclick: () => { S.ui.theme = t[0]; applyTheme(); persist(); render(); } }, t[1]))));
   main.append(sec("Account"));
-  main.append(h("div", { class: "group" }, row(avatar(36), "Edit profile", "@" + S.profile.handle, editProfile), row(ic("user", 22), "Sign out", "Log out of this device.", async () => { await pushDetach().catch(() => {}); await sb.auth.signOut(); location.reload(); })));
+  // the picture of another saved account sits in the switch row
+  const swRow = row(ic("user", 22), "Switch account", "Add or switch account", openAccounts);
+  acctList().then(list => {
+    const other = list.find(a => a.id !== sbUser.id);
+    if (!other) return;
+    swRow.replaceChild(rAv({ name: other.name || other.username || "?", avatar: other.avatar || null }, 36), swRow.firstChild);
+    const sub = swRow.querySelector(".sub");
+    if (sub) sub.textContent = other.username ? "@" + other.username + " is saved here" : "Another account is saved here";
+  }).catch(() => {});
+  main.append(h("div", { class: "group" }, row(avatar(36), "Edit profile", "@" + S.profile.handle, editProfile), swRow, row(ic("user", 22), "Sign out", "Log out of this device.", async () => { await pushDetach().catch(() => {}); await leaveThisAccount(); })));
   main.append(sec("Login"));
   const totpRow = row(ic("lock", 22), "Authenticator app", "Checking...", async () => {
     if (totpOn === null) { toast("One moment..."); return; }
@@ -1686,8 +1695,7 @@ function settingsV() {
       const { error } = await sb.rpc("set_my_deactivated", { flag: true });
       if (error) { toast("Could not deactivate"); return; }
       await pushDetach().catch(() => {});
-      await sb.auth.signOut();
-      location.reload();
+      await leaveThisAccount();
     }))));
   if (isOwner()) {
   main.append(sec("Reports"));
@@ -1710,8 +1718,7 @@ function settingsV() {
     const r = await callFn("delete-account");
     if (!r.ok) { toast(r.body.error || "Could not delete account"); return; }
     await wipeLocal();
-    try { await sb.auth.signOut({ scope: "local" }); } catch (e) {}
-    location.reload();
+    await leaveThisAccount();
   }), "dng")));
 }
 
@@ -3074,6 +3081,130 @@ async function pushDetach() {
   const sub = await pushSub();
   if (sub && sbUser) await sb.from("push_subs").delete().eq("endpoint", sub.endpoint).then(() => {}, () => {});
 }
+// ---- accounts on this phone ----
+// each saved account keeps its own login (the refresh token) and its own local data (lists, notes, settings); a password is only asked when an account is added
+let switching = false;
+function acctDb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("nook-accts", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("a");
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function acctGet(k) {
+  const db = await acctDb();
+  return new Promise((res, rej) => { const q = db.transaction("a").objectStore("a").get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+}
+async function acctPut(k, v) {
+  const db = await acctDb();
+  return new Promise((res, rej) => { const t = db.transaction("a", "readwrite"); t.objectStore("a").put(v, k); t.oncomplete = () => res(); t.onerror = () => rej(t.error); });
+}
+async function acctDel(k) {
+  const db = await acctDb();
+  return new Promise((res, rej) => { const t = db.transaction("a", "readwrite"); t.objectStore("a").delete(k); t.oncomplete = () => res(); t.onerror = () => rej(t.error); });
+}
+async function acctList() {
+  try { const l = await acctGet("list"); return Array.isArray(l) ? l : []; } catch (e) { return []; }
+}
+// keeps the newest login and the name and picture of the account that is open
+async function rememberAccount(info) {
+  if (!sbUser) return;
+  const { data } = await sb.auth.getSession();
+  const ss = data && data.session;
+  if (!ss || ss.user.id !== sbUser.id) return;
+  const list = await acctList();
+  const old = list.find(a => a.id === sbUser.id) || {};
+  const av = info && typeof info.avatar === "string" && info.avatar.length < 400000 ? info.avatar : (info ? null : old.avatar || null);
+  const entry = { id: sbUser.id, rt: ss.refresh_token, username: (info && info.username) || old.username || "", name: (info && info.name) || old.name || "", avatar: av };
+  await acctPut("list", list.filter(a => a.id !== sbUser.id).concat(entry));
+}
+async function forgetAccount(id) {
+  const list = await acctList();
+  await acctPut("list", list.filter(a => a.id !== id));
+  await acctDel("snap:" + id).catch(() => {});
+}
+async function saveSnap(id) { await acctPut("snap:" + id, JSON.stringify(S)); }
+async function loadSnap(id) {
+  let next = null;
+  try { const raw = await acctGet("snap:" + id); next = raw ? JSON.parse(raw) : null; } catch (e) {}
+  noSave = false;
+  S = next || freshState();
+  normalize();
+  await flush();
+}
+// opens a saved account: its login is refreshed, its local data is put in place, then the app restarts
+async function enterAccount(entry) {
+  switching = true;
+  try {
+    const { data, error } = await sb.auth.refreshSession({ refresh_token: entry.rt });
+    if (error || !data || !data.session) { await forgetAccount(entry.id); return false; }
+    await loadSnap(entry.id);
+    try { localStorage.setItem(LOCAL_UID, entry.id); } catch (e) {}
+    location.reload();
+    return true;
+  } catch (e) { return false; } finally { switching = false; }
+}
+async function switchAccount(id) {
+  if (!sbUser || id === sbUser.id) return;
+  const target = (await acctList()).find(a => a.id === id);
+  if (!target) return;
+  toast("Switching...");
+  await rememberAccount().catch(() => {});
+  await saveSnap(sbUser.id).catch(() => {});
+  await pushDetach().catch(() => {});
+  try { localStorage.removeItem("nook-push-ep"); } catch (e) {}
+  if (!(await enterAccount(target))) {
+    pushSync().catch(() => {});
+    toast("Sign in again to use that account");
+    addAccountModal();
+  }
+}
+// signs this account out of this phone; the next saved account, if there is one, is opened
+async function leaveThisAccount() {
+  const me = sbUser.id;
+  await forgetAccount(me);
+  const next = (await acctList())[0];
+  try { await sb.auth.signOut({ scope: "local" }); } catch (e) {}
+  if (next && (await enterAccount(next))) return;
+  location.reload();
+}
+function addAccountModal() {
+  const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "email", "aria-label": "Email" });
+  const pass = h("input", { class: "in", type: "password", placeholder: "Password", autocomplete: "current-password", "aria-label": "Password" });
+  const msg = h("p", { class: "note", role: "alert" });
+  const m = modal({
+    title: "Add account",
+    action: "Add",
+    body: [h("p", { class: "note" }, "Sign in to the other account. Its login stays on this phone only."), h("div", { class: "fld" }, email), h("div", { class: "fld" }, pass), msg],
+    onAction: async close => {
+      msg.textContent = "";
+      const e = email.value.trim();
+      if (!e || !pass.value) { msg.textContent = "Enter the email and password"; return; }
+      m.act.disabled = true;
+      try {
+        const r = await callFn("signin", { email: e, password: pass.value }).catch(() => null);
+        if (!r) { msg.textContent = "Could not reach Nook. Check your connection"; return; }
+        if (r.body && r.body.error === "banned") { msg.textContent = "That account is banned"; return; }
+        if (!r.ok) { msg.textContent = signinMsg(r); return; }
+        const { data: u } = await sb.auth.getUser(r.body.session.access_token);
+        if (!u || !u.user) { msg.textContent = "Could not sign in. Try again"; return; }
+        if (u.user.id === sbUser.id) { msg.textContent = "That is the account you are in"; return; }
+        const list = await acctList();
+        await acctPut("list", list.filter(a => a.id !== u.user.id).concat({ id: u.user.id, rt: r.body.session.refresh_token, username: "", name: "", avatar: null }));
+        close();
+        await switchAccount(u.user.id);
+      } finally { m.act.disabled = false; }
+    }
+  });
+}
+async function openAccounts() {
+  const list = await acctList();
+  const nm = a => a.name || a.username || "Account";
+  const items = list.map(a => ({ av: { name: nm(a), avatar: a.avatar || null }, label: nm(a) + (a.username ? " @" + a.username : "") + (a.id === sbUser.id ? " (this one)" : ""), fn: a.id === sbUser.id ? null : () => switchAccount(a.id) }));
+  items.push({ icon: "plus", label: "Add account", fn: addAccountModal }, { label: "Cancel", cancel: true });
+  sheet(items, "Accounts on this phone");
+}
 function handleOpen(v) {
   if (!sbUser || !v) return;
   if (v === "notifs") go({ r: "notifs" });
@@ -3560,11 +3691,11 @@ function loadEncMedia(md, otherId) {
   }
   return e2eEnc.get(md.url);
 }
-async function openRows(rows, otherId) {
+async function openRows(rows, otherId, waitFor) {
   const out = await Promise.all(rows.map(async m => Object.assign({}, m, { text: await openText(otherId, m.body) })));
-  // photos are opened before their bubbles show, so no grey box sits on the screen while they load
+  // photos are opened before their bubbles show, so no grey box sits on the screen while they load (only the newest ones are waited for when there are many)
   const jobs = [];
-  rows.forEach(m => (m.media || []).forEach(md => { if (md.iv && !/^video\//.test(md.type || "")) jobs.push(loadEncMedia(md, otherId).catch(() => {})); }));
+  rows.slice(-(waitFor || rows.length)).forEach(m => (m.media || []).forEach(md => { if (md.iv && !/^video\//.test(md.type || "")) jobs.push(loadEncMedia(md, otherId).catch(() => {})); }));
   if (jobs.length) await Promise.race([Promise.all(jobs), new Promise(r => setTimeout(r, 6000))]);
   return out;
 }
@@ -3833,16 +3964,23 @@ async function deleteChat(cv, inChat) {
   toast("Chat deleted");
 }
 // the messages and the name of the other person are fetched first, so the chat opens already filled
+// opened (decrypted) messages of chats that are about to open, so the chat paints at once instead of showing an empty page first
+const dmPre = new Map();
 async function openDm(id) {
   const k = "thread:" + sbUser.id + ":" + id;
-  const hit = cacheRead(k);
-  if (!(hit && Array.isArray(hit.v) && Date.now() - hit.t < 30000)) {
-    try {
-      const [rows] = await Promise.all([Promise.race([dmThread(id), new Promise((_, rej) => setTimeout(rej, 2500))]), acctsFor([id])]);
-      cacheWrite(k, rows.slice(-100));
-      await Promise.race([openRows(rows.slice(-12), id), new Promise(r => setTimeout(r, 3000))]);
-    } catch (e) {}
-  }
+  try {
+    let rows;
+    const hit = cacheRead(k);
+    if (hit && Array.isArray(hit.v) && Date.now() - hit.t < 30000) rows = hit.v;
+    else {
+      const [got] = await Promise.all([Promise.race([dmThread(id), new Promise((_, rej) => setTimeout(rej, 2500))]), acctsFor([id])]);
+      rows = got.slice(-100);
+      cacheWrite(k, rows);
+    }
+    await acctsFor([id]);
+    const opened = await Promise.race([openRows(rows.filter(m => visibleMsg(m, id)), id, 12), new Promise(r => setTimeout(r, 3000))]);
+    if (Array.isArray(opened)) { dmPre.set(id, opened); setTimeout(() => dmPre.delete(id), 30000); }
+  } catch (e) {}
   go({ r: "dm", id });
 }
 function dmV(c) {
@@ -4031,18 +4169,26 @@ function dmV(c) {
   list.append(tEl);
   main.append(list, dock);
   navEl.hidden = true;
-  acctsFor([c.id]).then(() => loadSocial()).then(() => {
+  const fillHeader = () => {
     const a = acctCache.get(c.id) || { username: "user", name: "user", avatar: null };
     peer.name = a.name;
     who.replaceChild(rAv({ name: a.name, avatar: a.avatar }, 36), who.firstChild);
     wn.textContent = "";
     wn.append(h("b", {}, nickOf(c.id) || a.name), h("span", {}, "@" + a.username));
-  });
+  };
+  if (acctCache.has(c.id)) fillHeader();
+  acctsFor([c.id]).then(() => loadSocial()).then(fillHeader);
   refreshStatus();
+  const pre = dmPre.get(c.id);
+  dmPre.delete(c.id);
+  if (pre && pre.length) {
+    pre.forEach(m => list.insertBefore(dmBubble(m, m.sender_id === me, c.id), tEl));
+    scrollEnd();
+  }
   const hit = cacheRead(tkey);
   if (hit && Array.isArray(hit.v) && hit.v.length) syncRows(hit.v, { initial: true });
   else if (hit && Array.isArray(hit.v)) hint("No messages yet. Say hi.");
-  else hint("load");
+  else if (!(pre && pre.length)) hint("load");
   pull().then(() => { scrollEnd(); }).catch(() => { if (!list.querySelector("[data-mid], .tmpm")) hint("Could not load messages. Pull down to try again."); });
   sb.from("notifications").update({ read_at: new Date().toISOString() }).eq("user_id", me).eq("actor_id", c.id).eq("kind", "message").is("read_at", null).then(() => refreshBadge());
   sync();
@@ -4525,12 +4671,19 @@ async function boot() {
   if (sbUser) {
     const { data: ban } = await sb.from("bans").select("user_id").eq("user_id", sbUser.id).maybeSingle();
     if (ban) { hist(true); showBanned(); return; }
-    const { data: acct, error: aerr } = await sb.from("accounts").select("id, deactivated, username, avatar").eq("id", sbUser.id).maybeSingle();
+    const { data: acct, error: aerr } = await sb.from("accounts").select("id, deactivated, username, avatar, display_name").eq("id", sbUser.id).maybeSingle();
     if (acct) ownAvatar = acct.avatar || null;
     if (acct) { const { data: held } = await sb.rpc("my_age_hold"); acct.age_hold = held === true; }
     ageHeld = !!(acct && acct.age_hold);
     if (!aerr && (!acct || acct.deactivated)) { await sb.auth.signOut(); sbUser = null; }
     else if (sbUser && await foreignLocalData(acct)) { await wipeLocal(true); try { localStorage.setItem(LOCAL_UID, sbUser.id); } catch (e) {} location.reload(); return; }
+    if (sbUser && acct) rememberAccount({ username: acct.username, name: acct.display_name, avatar: acct.avatar }).catch(() => {});
+    if (sbUser) sb.auth.onAuthStateChange((ev, session) => {
+      if (switching || !session || !sbUser) return;
+      // another tab switched accounts: this one follows
+      if (session.user.id !== sbUser.id) { location.reload(); return; }
+      if (ev === "TOKEN_REFRESHED") acctList().then(list => { const a = list.find(x => x.id === sbUser.id); if (a) { a.rt = session.refresh_token; return acctPut("list", list); } }).catch(() => {});
+    });
   }
   // whether somebody is banned is only ever decided by the server: a banned account sees the banned page when it signs in
   if (!sbUser) { stack = [{ r: "auth" }]; scrolls.length = 0; }

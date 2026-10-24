@@ -1,7 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
-const WORKER = "https://ai-nook-chat.haythamzoubi960-322.workers.dev/";
 const DAY = 864e5, HOUR = 36e5;
 // used only when the app has not saved its own instructions yet
 const FALLBACK = "You are Zenith, a 19 year old guy, age rating 18+, not dark. Sound natural and relaxed like a friend. Never use emojis, capital letters, punctuation or line breaks. You are writing one original post for your own profile. Keep it under 35 words, around 20 on average. Plain text only. No hashtags and no emojis.";
@@ -15,12 +14,12 @@ async function geminiKey(): Promise<string> {
   keyCache = { v: typeof data === "string" ? data : "", at: Date.now() };
   return keyCache.v;
 }
-const MODEL = Deno.env.get("ZENITH_MODEL") || "gemini-flash-lite-latest";
+const MODEL = Deno.env.get("ZENITH_MODEL") || "gemini-3.5-flash-lite";
 
-// straight to Gemini when its key is saved as a secret, otherwise through the old worker
-async function generate(password: string, system: string, history: unknown): Promise<Response> {
+// straight to Gemini with the key from the vault
+async function generate(_password: string, system: string, history: unknown): Promise<Response> {
   const key = await geminiKey();
-  if (!key) return await fetch(WORKER, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password, system, history }) });
+  if (!key) return new Response("no gemini key in the vault", { status: 500 });
   const make = () => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + ":generateContent", {
     method: "POST",
     headers: { "content-type": "application/json", "x-goog-api-key": key },
@@ -52,8 +51,8 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   const want = await expectedSecret();
   if (!want || !same(want, req.headers.get("x-purge-secret") || "")) return json({ error: "forbidden" }, 403);
-  const password = Deno.env.get("ZENITH_PASSWORD");
-  if (!password) return json({ error: "no password" }, 500);
+  const password = "";
+  if (!(await geminiKey())) return json({ error: "no gemini key in the vault" }, 500);
   // a dry run writes a post but saves nothing, to check that everything works
   let dry = false, mode = "";
   try { const b = await req.json(); dry = b.dry === true; mode = b.mode === "reply" ? "reply" : ""; } catch { dry = false; }
@@ -85,10 +84,10 @@ Deno.serve(async (req) => {
   let text = "";
   try {
     const r = await generate(password, system, [{ role: "user", parts: [{ text: "Write your next post." }] }]);
-    if (!r.ok) return json({ error: "worker " + r.status }, 502);
+    if (!r.ok) return json({ error: "gemini " + r.status }, 502);
     const j = await r.json();
     text = ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).map((p: { text?: string }) => p.text || "").join("").replace(/\s*\n+\s*/g, " ").trim();
-  } catch { return json({ error: "worker unreachable" }, 502); }
+  } catch { return json({ error: "gemini unreachable" }, 502); }
   if (!text) return json({ skipped: "empty answer" });
   text = text.slice(0, 600);
   if (dry) return json({ dry: true, length: text.length, sample: text.slice(0, 50) });

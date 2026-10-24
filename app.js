@@ -43,7 +43,7 @@ const toastEl = document.getElementById("toast");
 const P = {
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
-  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l8.5-8.5M16 7l3 3M13.5 9.5l2 2"/>',
+  pass: '<rect x="3" y="7" width="18" height="10" rx="3"/><path d="M8 12h.01M12 12h.01M16 12h.01" stroke-width="2.6"/>',
   shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>',
   backup: '<path d="M7 18a4 4 0 0 1-.6-7.95A5.5 5.5 0 0 1 17 8.7 4.7 4.7 0 0 1 17.5 18z"/><path d="M12 15v-5M9.5 12l2.5-2.5 2.5 2.5"/>',
   eyeoff: '<defs><mask id="eom"><rect width="24" height="24" fill="#fff" stroke="none"/><path d="M20 4L4 20" stroke="#000" stroke-width="4"/></mask></defs><g mask="url(#eom)"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></g><path d="M20 4L4 20"/>',
@@ -139,7 +139,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.29";
+const APP_VERSION = "3.3.30";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1694,7 +1694,7 @@ function settingsV() {
     } catch (e) { if (sub) sub.textContent = "Could not check right now."; }
   })();
   main.append(h("div", { class: "group" },
-    row(ic("key", 22), "Change password", "Needs your current password.", () => changePassV()),
+    row(ic("pass", 22), "Change password", "Needs your current password.", () => changePassV()),
     row(ic("mail", 22), "Change email", "We send a link to the new address.", () => changeEmailV()),
     totpRow, keyRow));
   main.append(sec("Notifications"));
@@ -3812,7 +3812,7 @@ async function unlockModal() {
   const has = k => (rows || []).some(r => r.mode === k);
   const items = [{ icon: "userswap", label: "Approve on my other phone", fn: waitForApprovalModal }];
   if (has("login")) items.push({ icon: "lock", label: "Use my login password", fn: () => restoreKeysModal("login") });
-  if (has("recovery")) items.push({ icon: "key", label: "Use my recovery password", fn: () => restoreKeysModal("recovery") });
+  if (has("recovery")) items.push({ icon: "pass", label: "Use my recovery password", fn: () => restoreKeysModal("recovery") });
   items.push({ icon: "trash", label: "Start fresh", danger: true, fn: () => confirmSheet("Start fresh? Older messages will not open anymore, here or for the other person.", "Start fresh", async () => {
     try { await makeNewKey(); toast("New message key made"); setTimeout(() => location.reload(), 500); } catch (e) { toast("Could not do that. Try again"); }
   }) });

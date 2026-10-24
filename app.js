@@ -43,6 +43,10 @@ const toastEl = document.getElementById("toast");
 const P = {
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l8.5-8.5M16 7l3 3M13.5 9.5l2 2"/>',
+  shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>',
+  backup: '<path d="M7 18a4 4 0 0 1-.6-7.95A5.5 5.5 0 0 1 17 8.7 4.7 4.7 0 0 1 17.5 18z"/><path d="M12 15v-5M9.5 12l2.5-2.5 2.5 2.5"/>',
+  eyeoff: '<defs><mask id="eom"><rect width="24" height="24" fill="#fff" stroke="none"/><path d="M20 4L4 20" stroke="#000" stroke-width="4"/></mask></defs><g mask="url(#eom)"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></g><path d="M20 4L4 20"/>',
   mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
   home: '<path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
   chat: '<path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l1-4.5A8 8 0 1 1 21 12z"/>',
@@ -135,7 +139,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.27";
+const APP_VERSION = "3.3.28";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1649,7 +1653,7 @@ function settingsV() {
   const swRow = row(ic("userswap", 22), "Switch account", "Add or switch account", openAccounts);
   main.append(h("div", { class: "group" }, row(avatar(36), "Edit profile", "@" + S.profile.handle, editProfile), swRow, row(ic("usercut", 22), "Sign out", "Log out of this device.", async () => { await pushDetach().catch(() => {}); await leaveThisAccount(); })));
   main.append(sec("Login"));
-  const totpRow = row(ic("lock", 22), "Authenticator app", "Checking...", async () => {
+  const totpRow = row(ic("shield", 22), "Authenticator app", "Checking...", async () => {
     if (totpOn === null) { toast("One moment..."); return; }
     if (totpOn) sheet([{ icon: "close", label: "Turn off authenticator", danger: true, fn: authenticatorOff }], "Authenticator is on");
     else { await authenticatorSetup(); render(); }
@@ -1660,7 +1664,7 @@ function settingsV() {
     if (sub) sub.textContent = !r.ok ? "Could not check right now." : totpOn ? "On" : "Off";
   }).catch(() => { const sub = totpRow.querySelector(".sub"); if (sub) sub.textContent = "Could not check right now."; });
   let keyState = null, keyRows = [];
-  const keyRow = row(ic("lock", 22), "Message key backup", "Checking...", () => {
+  const keyRow = row(ic("backup", 22), "Message key backup", "Checking...", () => {
     if (keyState === null) { toast("One moment..."); return; }
     if (keyState === "locked") { unlockModal(); return; }
     const hasRec = keyRows.some(r => r.mode === "recovery"), hasLogin = keyRows.some(r => r.mode === "login");
@@ -1685,11 +1689,11 @@ function settingsV() {
       keyRows = (bk.data || []).filter(r => r.mode !== "off");
       keyState = !keyRows.length ? "off" : !loc || !keyRows.some(r => r.pub === loc.pub) ? "locked" : "on";
       const modes = keyRows.map(r => r.mode);
-      if (sub) sub.textContent = keyState === "locked" ? "Locked on this phone. Tap to unlock." : keyState === "off" ? "Off. Your messages cannot be recovered if you lose this phone." : modes.includes("login") && modes.includes("recovery") ? "On with your login password and a recovery password." : modes.includes("login") ? "On with your login password." : "On with a recovery password.";
+      if (sub) sub.textContent = keyState === "locked" ? "Locked. Tap to unlock." : keyState === "off" ? "Off" : modes.includes("login") ? "On" : "On with a recovery password";
     } catch (e) { if (sub) sub.textContent = "Could not check right now."; }
   })();
   main.append(h("div", { class: "group" },
-    row(ic("lock", 22), "Change password", "Needs your current password.", () => changePassV()),
+    row(ic("key", 22), "Change password", "Needs your current password.", () => changePassV()),
     row(ic("mail", 22), "Change email", "We send a link to the new address.", () => changeEmailV()),
     totpRow, keyRow));
   main.append(sec("Notifications"));
@@ -1733,7 +1737,7 @@ function settingsV() {
   main.append(h("div", { class: "group" }, row(ic("check", 22), "Check for updates", "You are on version " + APP_VERSION, () => (window.nookCheckUpdate ? window.nookCheckUpdate() : toast("Not available right now")))));
   main.append(sec("Legal"));
   main.append(h("div", { class: "group" },
-    row(ic("lock", 22), "Privacy Policy", "What we keep and why.", () => go({ r: "privacy" })),
+    row(ic("eyeoff", 22), "Privacy Policy", "What we keep and why.", () => go({ r: "privacy" })),
     row(ic("check", 22), "Terms of Use", "The rules for using Nook.", () => go({ r: "terms" }))));
   main.append(sec("Danger zone"));
   main.append(h("div", { class: "group" }, row(ic("trash", 22), "Delete all data", "Removes every post, chat and list.", () => confirmSheet("Delete every post on the server and every chat, list and setting on this device?", "Delete everything", () => wipeAll()), "dng")));
@@ -3266,7 +3270,7 @@ const LEGAL = {
   privacy: { title: "Privacy Policy", body: [
     ["Information we keep", "We keep your account details, profile, posts and messages. We do not sell your data and we do not show ads."],
     ["Messages", "Messages are end to end encrypted: only you and the recipient can read them, with a key that lives on your devices."],
-    ["Message key backup", "So you do not lose your messages when you clear your browser or change phones, Nook saves a copy of your message key, locked with your login password, and keeps it with your account. This is on by default. Your password reaches our server when you sign in, so someone who controls our server could in theory unlock that copy and read your messages. You can turn this off in Settings, Message key backup. There you can also add a separate recovery password that we never see, and you can approve a new phone from a phone that already has your key. Without any of these, clearing your browser data makes older messages unreadable."],
+    ["Message key backup", "Nook keeps a copy of your message key, locked with your login password, so a new phone can open your messages. Our server sees your password when you sign in, so it could in theory unlock the copy. You can turn this off in Settings."],
     ["Posts", "Posts and photos are checked by an automated system for content that violates our terms. Photos remain hidden until the check is complete."],
     ["Service providers", "We use Supabase, GitHub Pages and an AI service to operate Nook. They receive only the data needed to provide their service."],
     ["Retention and deletion", "We keep your data until you delete it or your account. You may delete your account at any time in Settings."],

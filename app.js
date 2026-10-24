@@ -155,7 +155,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.5";
+const APP_VERSION = "3.4.6";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1668,7 +1668,15 @@ const zenRefresh = () => {
   const sig = S.posts.length + ":" + S.posts.filter(p => p.zenLike).length;
   if (sig === zenSig) return;
   zenSig = sig;
-  if (layer.childElementCount || stack[stack.length - 1].r === "conv") return;
+  const cur = stack[stack.length - 1];
+  if (layer.childElementCount || cur.r === "conv") return;
+  // on a post only the replies below are redrawn, so nothing above them can move
+  const rb = cur.r === "thread" ? main.querySelector(".rb") : null;
+  if (rb && byId(cur.id)) {
+    while (rb.nextSibling) rb.nextSibling.remove();
+    flat(cur.id, 0, []).forEach(x => main.append(postCard(x.p, { rep: true, d: x.d })));
+    return;
+  }
   const top = main.scrollTop;
   render();
   main.scrollTop = top;
@@ -1806,15 +1814,21 @@ function zenV() {
   av.style.height = "";
   const mine = S.posts.filter(p => p.ai && !p.parent).sort((a, b) => b.t - a.t);
   main.append(h("div", { class: "banner" }), h("div", { class: "pinfo" },
-    h("div", { class: "arow" }, av),
+    h("div", { class: "arow" }, av,
+      h("div", { class: "btns" },
+        h("label", { class: "ghost" }, "Edit picture", h("input", { type: "file", accept: "image/*", class: "vh", "aria-label": "Edit picture", onchange: async e => {
+          const f = e.target.files && e.target.files[0];
+          e.target.value = "";
+          if (!f) return;
+          if (isVideo(f)) { toast("Videos are not supported"); return; }
+          try {
+            const out = isGif(f) ? await intake(f) : await openCropper(f, { w: 320, h: 320, gw: 240, gh: 240, round: true, title: "Crop picture" });
+            if (out) { S.zen.pfp = out; S.zen.pfpAt = Date.now(); persist(); render(); }
+          } catch (er) { toast("Could not use that picture"); }
+        } })),
+        S.zen.pfp ? ibtn("dots", "More", () => sheet([{ icon: "close", label: "Use default picture", fn: () => { delete S.zen.pfp; S.zen.pfpAt = Date.now(); persist(); render(); } }])) : null)),
     h("h1", { class: "pname" }, "Zenith"),
     h("p", { class: "phand" }, "@zenith"),
-    h("div", { class: "zpfp" }, h("label", { class: "ghost" }, "Change picture", h("input", { type: "file", accept: "image/*", class: "vh", "aria-label": "Change picture", onchange: async e => {
-      const f = e.target.files && e.target.files[0];
-      e.target.value = "";
-      if (!f) return;
-      try { S.zen.pfp = await shrink(f, { w: 256, h: 256, q: 0.85 }); S.zen.pfpAt = Date.now(); persist(); render("root"); toast("Picture changed"); } catch (er) { toast("Could not use that picture"); }
-    } })), S.zen.pfp ? h("button", { class: "ghost", onclick: () => { delete S.zen.pfp; S.zen.pfpAt = Date.now(); persist(); render("root"); } }, "Use default") : null),
     h("div", { class: "pstat" }, h("span", {}, h("b", {}, mine.length), mine.length === 1 ? " post" : " posts"))));
   const zt = S.ui.zenTab || "posts";
   const tabs = [["posts", "Posts"], ["replies", "Replies"], ["likes", "Likes"]];

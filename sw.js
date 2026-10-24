@@ -1,4 +1,4 @@
-const VERSION = "nook-3.2.34";
+const VERSION = "nook-3.2.35";
 const SHARE_CACHE = "nook-share";
 const SHELL = ["./", "index.html", "app.js", "update.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => {
@@ -80,6 +80,8 @@ self.addEventListener("push", e => {
     }
     const opts = {
       body,
+      // a fully see through picture: with none at all the phone draws a letter tile, with a coloured one it draws a coloured square
+      icon: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=",
       tag,
       renotify: true,
       vibrate: [120, 60, 120],

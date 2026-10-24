@@ -155,7 +155,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.9";
+const APP_VERSION = "3.4.10";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1380,17 +1380,6 @@ async function wipeServerExtras() {
   ];
   for (const r of await Promise.all(steps)) if (r.error) throw r.error;
 }
-async function wipeAll() {
-  clearTimeout(timer);
-  try { await chain; } catch (e) {}
-  try { await deleteRemote(S.posts); } catch (e) { toast("Could not delete posts on server: " + ((e && e.message) || "error")); return; }
-  try { await wipeServerExtras(); } catch (e) { toast("Could not delete everything on the server: " + ((e && e.message) || "error")); return; }
-  try {
-    if (db) await new Promise((res, rej) => { const t = db.transaction(["kv", "img"], "readwrite"); t.objectStore("kv").clear(); t.objectStore("img").clear(); t.oncomplete = res; t.onerror = () => rej(t.error); t.onabort = () => rej(t.error); });
-  } catch (e) {}
-  try { localStorage.removeItem("tiny-posts-v3"); sessionStorage.removeItem("nook-route"); } catch (e) {}
-  location.reload();
-}
 const CRCT = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
 function crc32(u8) { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRCT[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
 function makeZip(files) {
@@ -1791,7 +1780,7 @@ async function zenPull() {
       z.since = Math.min(z.since || Date.now(), sz.since || Date.now());
       z.log = Array.from(new Set((z.log || []).concat(sz.log || [])));
       if (typeof sz.pics === "boolean") z.pics = sz.pics;
-      if ((sz.pfpAt || 0) > (z.pfpAt || 0)) { if (sz.pfp) z.pfp = sz.pfp; else delete z.pfp; z.pfpAt = sz.pfpAt; }
+      if ((sz.pfpAt || 0) > (z.pfpAt || 0)) { if (sz.pfp) z.pfp = sz.pfp; else delete z.pfp; if (sz.bn) z.bn = sz.bn; else delete z.bn; z.pfpAt = sz.pfpAt; }
       changed = true;
     }
   });
@@ -1814,7 +1803,7 @@ function zenV() {
   av.style.height = "";
   const mine = S.posts.filter(p => p.ai && !p.parent).sort((a, b) => b.t - a.t);
   const zbn = h("div", { class: "banner" });
-  if (S.zen.pfp) zbn.append(mkImg(S.zen.pfp, "pic blur"));
+  if (S.zen.pfp && S.zen.bn === "avatar") zbn.append(mkImg(S.zen.pfp, "pic blur"));
   main.append(zbn, h("div", { class: "pinfo" },
     h("div", { class: "arow" }, av,
       h("div", { class: "btns" },
@@ -1828,7 +1817,10 @@ function zenV() {
             if (out) { S.zen.pfp = out; S.zen.pfpAt = Date.now(); persist(); render(); }
           } catch (er) { toast("Could not use that picture"); }
         } })),
-        S.zen.pfp ? ibtn("dots", "More", () => sheet([{ icon: "close", label: "Use default picture", fn: () => { delete S.zen.pfp; S.zen.pfpAt = Date.now(); persist(); render(); } }])) : null)),
+        S.zen.pfp ? ibtn("dots", "More", () => sheet([].concat(
+          [{ icon: "image", label: S.zen.bn === "avatar" ? "Default banner" : "Blurred photo banner", fn: () => { if (S.zen.bn === "avatar") delete S.zen.bn; else S.zen.bn = "avatar"; S.zen.pfpAt = Date.now(); persist(); render(); } }],
+          [{ icon: "close", label: "Use default picture", fn: () => { delete S.zen.pfp; delete S.zen.bn; S.zen.pfpAt = Date.now(); persist(); render(); } }],
+          [{ label: "Cancel", cancel: true }]), "Zenith")) : null)),
     h("h1", { class: "pname" }, "Zenith"),
     h("p", { class: "phand" }, "@zenith"),
     h("div", { class: "pstat" }, h("span", {}, h("b", {}, mine.length), mine.length === 1 ? " post" : " posts"))));
@@ -1937,7 +1929,6 @@ function settingsV() {
     row(ic("eyeoff", 22), "Privacy Policy", "What we keep and why.", () => go({ r: "privacy" })),
     row(ic("check", 22), "Terms of Use", "The rules for using Nook.", () => go({ r: "terms" }))));
   main.append(sec("Danger zone"));
-  main.append(h("div", { class: "group" }, row(ic("trash", 22), "Delete all data", "Removes every post, chat and list.", () => confirmLogin("Delete all data", "Deletes every post on the server and every chat, list and setting on this device.", "Delete", () => wipeAll()), "dng")));
   main.append(h("div", { class: "group" }, row(ic("trash", 22), "Delete account", "Deletes your account and its data", () => confirmLogin("Delete account", "Deletes your account, posts and messages for good.", "Delete", async () => {
     const r = await callFn("delete-account");
     if (!r.ok) { toast(r.body.error || "Could not delete account"); return; }
@@ -4190,23 +4181,29 @@ function confirmLogin(title, warn, label, fn) {
   const em = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "off", autocapitalize: "off", "aria-label": "Email" });
   const pw = pwField("Password");
   const msg = h("p", { class: "note", role: "alert" });
+  const say = t => { msg.textContent = t; if (t) toast(t); };
+  const go1 = h("button", { class: "pri", style: "background:var(--danger)" }, label);
   const m = modal({
-    title,
+    title: "",
     action: label,
-    body: [h("p", { class: "note" }, warn), h("div", { class: "fld" }, em), pw.wrap, msg],
-    onAction: async close => {
-      msg.textContent = "";
-      if (!em.value.trim() || !pw.input.value) { msg.textContent = "Type your email and password"; return; }
-      if (em.value.trim().toLowerCase() !== ((sbUser && sbUser.email) || "").toLowerCase()) { msg.textContent = "That is not the email of this account"; return; }
-      m.act.disabled = true;
-      try {
-        const v = await verifyPassword(pw.input.value);
-        if (!v.ok) { msg.textContent = v.msg.replace("Current password", "Password"); return; }
-        close();
-        await fn();
-      } catch (e) { msg.textContent = "Something went wrong. Try again"; } finally { m.act.disabled = false; }
-    }
+    body: [h("div", { class: "auth", style: "padding-top:max(4vh,16px)" }, h("h1", {}, title), h("p", { class: "sub" }, warn), em, pw.wrap, msg, go1)],
+    onAction: close => run(close)
   });
+  m.act.hidden = true;
+  go1.addEventListener("click", () => run(m.close));
+  pw.input.addEventListener("keydown", e => { if (e.key === "Enter") go1.click(); });
+  const run = async close => {
+    msg.textContent = "";
+    if (!em.value.trim() || !pw.input.value) { say("Type your email and password"); return; }
+    if (em.value.trim().toLowerCase() !== ((sbUser && sbUser.email) || "").toLowerCase()) { say("That is not the email of this account"); return; }
+    go1.disabled = true;
+    try {
+      const v = await verifyPassword(pw.input.value);
+      if (!v.ok) { say(v.msg.replace("Current password", "Password")); return; }
+      close();
+      await fn();
+    } catch (e) { say("Something went wrong. Try again"); } finally { go1.disabled = false; }
+  };
 }
 function pwField(ph) {
   const input = h("input", { class: "in", type: "password", placeholder: ph, autocomplete: "off", "aria-label": ph, style: "padding-right:60px" });

@@ -155,7 +155,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.44";
+const APP_VERSION = "3.3.45";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1561,7 +1561,7 @@ const zOn = () => isOwner();
 async function zFetch(body) {
   const { data } = await sb.auth.getSession();
   const tok = data && data.session ? data.session.access_token : null;
-  return fetch(SB_URL + "/functions/v1/zenith", { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: JSON.stringify(body) , signal: AbortSignal.timeout ? AbortSignal.timeout(60000) : undefined });
+  return fetch(SB_URL + "/functions/v1/zenith", { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: JSON.stringify(body) , signal: AbortSignal.timeout ? AbortSignal.timeout(30000) : undefined });
 }
 const zNow = s => s + " Never use line breaks. Write everything as one paragraph. Current local time: " + new Date().toLocaleString([], { dateStyle: "full", timeStyle: "short" }) + ". Only use it when the time or date is really needed, never bring it up on your own.";
 async function zStream(history, onText) {
@@ -1659,27 +1659,22 @@ function zenPost(text, parent) {
   return p;
 }
 const zenRefresh = () => { if (!layer.childElementCount && stack[stack.length - 1].r !== "conv") render(); };
-let zenBusy = false;
+let zenBusy = false, zenAgain = false;
 async function zenTick() {
+  if (zenBusy && S && zOn()) zenAgain = true;
   if (zenBusy || !S || !zOn() || !zenSyncOn || document.visibilityState !== "visible") return;
   zenBusy = true;
   try {
     const z = S.zen, now = Date.now();
     z.log = z.log.filter(t => now - t < 864e5);
-    if (z.log.length < 2 && now >= z.next) {
-      const text = await zGen(ZSYS_POST, "Write your next post.");
-      if (text) { zenPost(text); z.log.push(Date.now()); z.next = Date.now() + (2 + Math.random() * 4) * 36e5; persist(); zenRefresh(); }
-    }
     const fresh = p => p.t > z.since;
-    const todo = S.posts.find(p => !p.ai && !p.ra && !p.parent && (p.text || p.imgs.length) && !p.zenReplied && fresh(p));
-    if (todo) {
+    for (let todo; (todo = S.posts.find(p => !p.ai && !p.ra && !p.parent && (p.text || p.imgs.length) && !p.zenReplied && fresh(p)));) {
       todo.zenReplied = true;
       const text = await zGen(ZSYS_REPLY, "Post: " + (todo.text || "(photo only)"), todo.imgs);
       if (text) zenPost(text, todo.id);
       persist(); zenRefresh();
     }
-    const rr = S.posts.find(p => !p.ai && !p.ra && p.parent && !p.zenAnswered && fresh(p) && (byId(p.parent) || {}).ai);
-    if (rr) {
+    for (let rr; (rr = S.posts.find(p => !p.ai && !p.ra && p.parent && !p.zenAnswered && fresh(p) && (byId(p.parent) || {}).ai));) {
       rr.zenAnswered = true;
       const par = byId(rr.parent);
       const text = await zGen(ZSYS_REPLY, "Your post: " + par.text + "\nReply to you: " + rr.text);
@@ -1693,7 +1688,11 @@ async function zenTick() {
       if (/^yes/i.test(a)) p.zenLike = true;
     }
     if (cand.length) { persist(); zenRefresh(); }
-  } catch (e) {} finally { zenBusy = false; }
+    if (z.log.length < 2 && now >= z.next) {
+      const text = await zGen(ZSYS_POST, "Write your next post.");
+      if (text) { zenPost(text); z.log.push(Date.now()); z.next = Date.now() + (2 + Math.random() * 4) * 36e5; persist(); zenRefresh(); }
+    }
+  } catch (e) {} finally { zenBusy = false; if (zenAgain) { zenAgain = false; setTimeout(zenTick, 300); } }
 }
 // Zenith's posts, replies, likes and chats are mirrored into a table that only the owner can read,
 // so they follow the owner to every device and nobody else can see or touch them.
@@ -2561,6 +2560,7 @@ function openCompose(o) {
         const np = { id: uid(), text, t: Date.now(), imgs: imgs.slice(), parent: parent ? parent.id : null, liked: false, reposted: false, saved: false, pinned: false };
         S.posts.push(np);
         pushPost(np);
+        setTimeout(zenTick, 400);
         if (!parent) S.draft = null;
         fresh = np.id;
       }
@@ -5607,6 +5607,6 @@ if (window.visualViewport) {
 window.addEventListener("pagehide", flush);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flush(); });
 boot();
-setInterval(zenTick, 60000);
+setInterval(zenTick, 10000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") zenTick(); });
 window.addEventListener("load", () => setTimeout(zenTick, 1500));

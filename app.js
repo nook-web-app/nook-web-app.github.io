@@ -133,7 +133,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.2.31";
+const APP_VERSION = "3.2.32";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -3778,7 +3778,7 @@ function paintTyping(from, on) {
 function dmMenu(cv, inChat) {
   sheet([
     { icon: "edit", label: "Nickname", fn: () => nicknameModal(cv) },
-    { icon: "trash", label: "Delete chat", danger: true, fn: () => confirmSheet("Delete this chat for both of you?", "Delete chat", () => deleteChat(cv, inChat)) }
+    { icon: "trash", label: "Delete chat", danger: true, fn: () => confirmSheet("Delete this chat for you? The other person keeps theirs.", "Delete chat", () => deleteChat(cv, inChat)) }
   ], nickOf(cv.other) || cv.name);
 }
 function nicknameModal(cv) {
@@ -3803,7 +3803,8 @@ function nicknameModal(cv) {
   });
 }
 async function deleteChat(cv, inChat) {
-  const { error } = await sb.rpc("delete_chat", { p_other: cv.other });
+  // only this person's view is cleared: the messages stay for the other person
+  const { error } = await sb.rpc("clear_chat", { p_other: cv.other });
   if (error) { toast("Could not delete chat"); return; }
   socialAt = 0;
   await loadSocial(true);

@@ -1172,3 +1172,23 @@ begin
 end $$;
 revoke all on function public.nook_ban_check(text, text, text) from public, anon, authenticated;
 grant execute on function public.nook_ban_check(text, text, text) to service_role;
+
+-- v3.2.32 deleting a chat only clears it for the person who deleted it (clear_chat), so the delete for both is no longer reachable
+revoke execute on function public.delete_chat(uuid) from public, anon, authenticated;
+-- v3.2.32 when a ban ends the backup goes at once (the chats and the profile were never removed)
+create or replace function public.nook_on_user_banned() returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.banned_until is not null and new.banned_until > now() and (old.banned_until is null or old.banned_until <= now()) then
+    insert into public.bans (user_id, email) values (new.id, new.email)
+      on conflict (user_id) do update set banned_at = now(), email = excluded.email;
+    perform public.nook_archive_user(new.id);
+    perform set_config('nook.keep_media', '1', true);
+    perform public.nook_archive_storage(new.id);
+    perform public.nook_purge_banned_rows(new.id);
+  elsif (new.banned_until is null or new.banned_until <= now()) and old.banned_until is not null and old.banned_until > now() then
+    perform public.nook_drop_ban_row(new.id);
+    delete from public.ban_archive where user_id = new.id;
+    perform public.nook_archive_storage(new.id, true);
+  end if;
+  return new;
+end $$;

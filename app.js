@@ -49,7 +49,7 @@ const P = {
   bookmark: '<path d="M6 3h12v18l-6-4-6 4z"/>',
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>',
   usercut: '<defs><mask id="ucm"><rect width="24" height="24" fill="#fff" stroke="none"/><path d="M21 3L3 21" stroke="#000" stroke-width="4"/></mask></defs><g mask="url(#ucm)"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></g><path d="M21 3L3 21"/>',
-  swap: '<path d="M4 7h16M16 3l4 4-4 4M20 17H4M8 13l-4 4 4 4"/>',
+  userswap: '<defs><mask id="usm"><rect width="24" height="24" fill="#fff" stroke="none"/><rect x="11.5" y="11.5" width="13" height="13" rx="4" fill="#000" stroke="none"/></mask></defs><g mask="url(#usm)"><circle cx="9" cy="7.5" r="3.5"/><path d="M2.5 20c0-3.5 3-5.5 6.5-5.5s6.5 2 6.5 5.5"/></g><g stroke-width="1.8"><path d="M14.2 15.4h7.3M19.5 13.4l2 2-2 2M21.8 20.6h-7.3M16.5 18.6l-2 2 2 2"/></g>',
   back: '<path d="M15 5l-7 7 7 7"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
@@ -135,7 +135,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.12";
+const APP_VERSION = "3.3.13";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1646,8 +1646,7 @@ function settingsV() {
   main.append(sec("Appearance"));
   main.append(h("div", { class: "seg" }, [["system", "System"], ["dark", "Dark"], ["light", "Light"]].map(t => h("button", { class: S.ui.theme === t[0] ? "on" : "", onclick: () => { S.ui.theme = t[0]; applyTheme(); persist(); render(); } }, t[1]))));
   main.append(sec("Account"));
-  const swRow = row(ic("user", 22), "Switch account", "Add or switch account", openAccounts);
-  swRow.append(ic("swap", 20));
+  const swRow = row(ic("userswap", 22), "Switch account", "Add or switch account", openAccounts);
   main.append(h("div", { class: "group" }, row(avatar(36), "Edit profile", "@" + S.profile.handle, editProfile), swRow, row(ic("usercut", 22), "Sign out", "Log out of this device.", async () => { await pushDetach().catch(() => {}); await leaveThisAccount(); })));
   main.append(sec("Login"));
   const totpRow = row(ic("lock", 22), "Authenticator app", "Checking...", async () => {

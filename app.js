@@ -155,7 +155,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.11";
+const APP_VERSION = "3.4.12";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -627,7 +627,7 @@ function modal(o) {
   const act = h("button", { class: "pri", onclick: () => o.onAction(close) }, o.action || "Save");
   const cancel = h("button", { class: "tbtn", onclick: () => (o.onCancel ? o.onCancel(close) : close()) }, "Cancel");
   // the main button sits under the fields; only a screen with its own footer (writing a post) keeps it at the top
-  const top = !!o.foot;
+  const top = !!o.foot || !!o.top;
   const body = h("div", { class: "mbody" }, o.body);
   if (!top) body.append(h("div", { class: "mact" }, act));
   ov.append(h("div", { class: "bar mbar" }, cancel, h("div", { class: "ttl" }, o.title || ""), top ? act : h("span")), body);
@@ -1799,6 +1799,45 @@ async function zenStart() {
   const top = stack[stack.length - 1].r;
   if (!layer.childElementCount && (top === "zen" || (stack.length === 1 && top === "home"))) render();
 }
+// his picture and banner style only: no name and no bio
+function zenEdit() {
+  let pfp = S.zen.pfp || null, bnVal = S.zen.bn === "avatar" ? "avatar" : "default";
+  const bn = h("div", { class: "ebanner" });
+  const av = h("div", { class: "av zenav" });
+  const paint = () => {
+    bn.querySelectorAll(":scope > img.pic").forEach(i => i.remove());
+    if (bnVal === "avatar" && pfp) bn.prepend(mkImg(pfp, "pic blur"));
+    av.textContent = "";
+    if (pfp) { const im = h("img", { alt: "", decoding: "async" }); im.src = pfp; av.append(im); } else av.innerHTML = ZEN_SVG;
+  };
+  const inp = h("input", { type: "file", accept: "image/*", class: "vh", "aria-label": "Change picture" });
+  inp.addEventListener("change", async () => {
+    const f = inp.files && inp.files[0];
+    inp.value = "";
+    if (!f) return;
+    if (isVideo(f)) { toast("Videos are not supported"); return; }
+    try {
+      const out = isGif(f) ? await intake(f) : await openCropper(f, { w: 320, h: 320, gw: 240, gh: 240, round: true, title: "Crop picture" });
+      if (out) { pfp = out; paint(); drawSeg(); }
+    } catch (e) { toast("Could not use that picture"); }
+  });
+  const eav = h("div", { class: "eav" }, av, h("label", { class: "pick", title: "Change picture" }, ic("camera", 16), inp));
+  const seg = h("div", { class: "seg" });
+  const drawSeg = () => { seg.textContent = ""; [["default", "Default"], ["avatar", "Blurred photo"]].forEach(([v, t]) => seg.append(h("button", { class: v === bnVal ? "on" : "", onclick: () => { if (v === "avatar" && !pfp) { toast("Pick a picture first"); return; } bnVal = v; paint(); drawSeg(); } }, t))); };
+  drawSeg();
+  paint();
+  modal({
+    top: true,
+    title: "Edit Zenith",
+    body: [bn, eav, h("div", { class: "fld" }, h("label", {}, "Banner style"), seg), pfp ? h("button", { class: "tbtn", style: "color:var(--danger)", onclick: () => { pfp = null; bnVal = "default"; paint(); drawSeg(); } }, "Use default picture") : null],
+    onAction: close => {
+      if (pfp) S.zen.pfp = pfp; else delete S.zen.pfp;
+      if (bnVal === "avatar" && pfp) S.zen.bn = "avatar"; else delete S.zen.bn;
+      S.zen.pfpAt = Date.now();
+      persist(); close(); render();
+    }
+  });
+}
 function zenV() {
   topEl.append(bar(menuBtn(), ttl("Zenith")));
   const av = zenAv(88);
@@ -1810,21 +1849,7 @@ function zenV() {
   if (S.zen.pfp && S.zen.bn === "avatar") zbn.append(mkImg(S.zen.pfp, "pic blur"));
   main.append(zbn, h("div", { class: "pinfo" },
     h("div", { class: "arow" }, av,
-      h("div", { class: "btns" },
-        h("label", { class: "ghost" }, "Edit picture", h("input", { type: "file", accept: "image/*", class: "vh", "aria-label": "Edit picture", onchange: async e => {
-          const f = e.target.files && e.target.files[0];
-          e.target.value = "";
-          if (!f) return;
-          if (isVideo(f)) { toast("Videos are not supported"); return; }
-          try {
-            const out = isGif(f) ? await intake(f) : await openCropper(f, { w: 320, h: 320, gw: 240, gh: 240, round: true, title: "Crop picture" });
-            if (out) { S.zen.pfp = out; S.zen.pfpAt = Date.now(); persist(); render(); }
-          } catch (er) { toast("Could not use that picture"); }
-        } })),
-        S.zen.pfp ? ibtn("dots", "More", () => sheet([].concat(
-          [{ icon: "image", label: S.zen.bn === "avatar" ? "Default banner" : "Blurred photo banner", fn: () => { if (S.zen.bn === "avatar") delete S.zen.bn; else S.zen.bn = "avatar"; S.zen.pfpAt = Date.now(); persist(); render(); } }],
-          [{ icon: "close", label: "Use default picture", fn: () => { delete S.zen.pfp; delete S.zen.bn; S.zen.pfpAt = Date.now(); persist(); render(); } }],
-          [{ label: "Cancel", cancel: true }]), "Zenith")) : null)),
+      h("div", { class: "btns" }, h("button", { class: "ghost", onclick: zenEdit }, "Edit Profile"))),
     h("h1", { class: "pname" }, "Zenith"),
     h("p", { class: "phand" }, "@zenith"),
     h("div", { class: "pstat" }, h("span", {}, h("b", {}, mine.length), mine.length === 1 ? " post" : " posts"))));
@@ -2789,6 +2814,7 @@ function editProfile() {
     return "Could not save the handle";
   };
   const m = modal({
+    top: true,
     title: "Edit profile",
     body: [bn, eav, h("div", { class: "fld" }, h("label", {}, "Banner style"), seg),
       h("div", { class: "fld" }, h("label", { for: "en" }, "Display name"), name),

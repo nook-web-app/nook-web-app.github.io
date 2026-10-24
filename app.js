@@ -155,7 +155,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.1";
+const APP_VERSION = "3.4.2";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1558,7 +1558,7 @@ function mediaBytes() {
   add(S.profile.avatar); add(S.profile.banner);
   return b;
 }
-const ZSYS = "You are an ai model named zenith. Your age is 19 and your age rating is 18+. You are a gay guy and your personality is not dark. Never use emojis. Never use capital letters. Never use line breaks. Never write a message longer than 35 words. Never use punctuation. Never mention the time or the date unless the person asks about it or it is really needed. Never say your own name unless the person asks for it. Never call the person cutie or any pet name. Talk like a real friend texting: relaxed, specific to what was just said, with your own opinion or a small joke. Never use stock lines like hope you are having a nice day, how can i help or hello there, and never repeat the person's words back. ";
+const ZSYS = "You are an ai model named zenith. Your age is 19 and your age rating is 18+. You are a gay guy and your personality is not dark. Never use emojis. Never use capital letters. Never use line breaks. Never write a message longer than 35 words. Never use punctuation. Never mention the time or the date unless the person asks about it or it is really needed. Never say your own name unless the person asks for it. Never call the person cutie or any pet name. You are warm, easygoing and a little funny, like a close friend texting back. Assume the person is being friendly or playful, never assume flirting, and never scold or set boundaries unless someone is truly rude. Match their energy, answer what they actually said and keep the chat going. Say something specific instead of stock lines like hope you are having a nice day or how can i help, and never repeat their words back. A silly word like uwu is just a vibe so play along. ";
 // the password never reaches this device: the zenith function checks the owner and adds it on the server
 const zOn = () => isOwner();
 async function zFetch(body) {
@@ -3604,13 +3604,15 @@ async function openAccounts() {
   items.push({ icon: "plus", label: "Add account", fn: addAccountModal });
   // only an added account shows this, and only while it is the open one: the main account stays on the phone
   const cur = all.find(a => a.id === sbUser.id);
-  if (cur && cur.id !== mainAccountId(all)) items.push({ icon: "close", label: "Remove this account", danger: true, fn: () => confirmSheet("Remove @" + (cur.username || "this account") + " from this phone? You need its password to add it again.", "Remove", async () => { await pushDetach().catch(() => {}); await leaveThisAccount(); }) });
+  const risky = [];
+  if (cur && cur.id !== mainAccountId(all)) risky.push({ icon: "close", label: "Remove this account", danger: true, fn: () => confirmSheet("Remove @" + (cur.username || "this account") + " from this phone? You need its password to add it again.", "Remove", async () => { await pushDetach().catch(() => {}); await leaveThisAccount(); }) });
   // only an added account that is linked to the main one can be unlinked from it, the main account never shows this
-  if (cur && cur.id !== mainAccountId(all) && linkedIds.has(mainAccountId(all))) items.push({ icon: "close", label: "Unlink this account", danger: true, fn: () => confirmSheet("Unlink @" + S.profile.handle + " from your other accounts? They stop listing each other on other phones.", "Unlink", async () => {
+  if (cur && cur.id !== mainAccountId(all) && linkedIds.has(mainAccountId(all))) risky.push({ icon: "close", label: "Unlink this account", danger: true, fn: () => confirmSheet("Unlink @" + S.profile.handle + " from your other accounts? They stop listing each other on other phones.", "Unlink", async () => {
     const me = sbUser.id;
     const { error } = await sb.from("account_links").delete().or("a.eq." + me + ",b.eq." + me);
     toast(error ? "Could not unlink" : "Unlinked");
   }) });
+  if (risky.length) items.push({ icon: "close", label: "Remove or unlink", danger: true, fn: () => sheet([...risky, { label: "Cancel", cancel: true }], "@" + (cur.username || "account")) });
   items.push({ label: "Cancel", cancel: true });
   sheet(items, "Accounts on this phone");
 }
@@ -4649,8 +4651,7 @@ function dmBubble(m, mine, otherId) {
     if (msg.zpost) { const zc = zCard(msg.zpost); zc.addEventListener("click", e => { e.stopPropagation(); viewZPost(msg.zpost); }); row.append(zc); }
     const link = firstUrl(body);
     if (link) row.append(linkCard(link, true));
-    if (msg.ai && body) row.append(h("div", { class: "ztag" }, "Zenith"));
-    if (body) row.append(h("div", { class: "bub" }, rich(body)));
+    if (body) row.append(h("div", { class: "bub" }, msg.ai ? h("span", { class: "zin" }, "Zenith ") : null, rich(body)));
     row.classList.toggle("zdm", !!msg.ai);
     row.append(h("div", { class: "mmeta" }, h("div", { class: "mmi" }, h("span", {}, new Date(msg.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })))));
     row.classList.toggle("open", wasOpen);
@@ -4898,10 +4899,10 @@ function dmV(c) {
   const zenInDm = async () => {
     const hist = Array.from(list.querySelectorAll("[data-mid]")).map(r => r._m).filter(m => m && m.text).slice(-20)
       .map(m => (m.ai ? "Zenith: " : m.sender_id === me ? "Person A: " : "Person B: ") + m.text.replace(/@zenith/gi, "Zenith")).join("\n");
-    const ghost = h("div", { class: "mrow zdm tmpm" }, h("div", { class: "ztag" }, "Zenith"), h("div", { class: "bub typing" }, h("i"), h("i"), h("i")));
+    const ghost = h("div", { class: "mrow zdm tmpm" }, h("div", { class: "bub typing" }, h("i"), h("i"), h("i")));
     pushRow(ghost);
     try {
-      const reply = await zGen(ZSYS_REPLY + " This is a chat between two people, Person A and Person B, and Zenith is in it. Answer the last message that mentions Zenith.", hist);
+      const reply = await zGen(ZSYS_REPLY + " This is a chat between two people, Person A and Person B, and Zenith is in it. Answer the last message that mentions Zenith. In this chat you may ask a short question back, this overrides the earlier rule about questions.", hist);
       ghost.remove();
       if (!reply) return;
       const saved = await sendDm(c.id, ZMARK + reply, [], []);

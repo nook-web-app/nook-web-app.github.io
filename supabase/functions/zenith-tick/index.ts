@@ -6,6 +6,21 @@ const DAY = 864e5, HOUR = 36e5;
 // used only when the app has not saved its own instructions yet
 const FALLBACK = "You are Zenith, a 19 year old guy, age rating 18+, not dark. Sound natural and relaxed like a friend. Never use emojis, capital letters, punctuation or line breaks. You are writing one original post for your own profile. Keep it under 35 words, around 20 on average. Plain text only. No hashtags and no emojis.";
 
+const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY") || "";
+const MODEL = Deno.env.get("ZENITH_MODEL") || "gemini-2.5-flash";
+
+// straight to Gemini when its key is saved as a secret, otherwise through the old worker
+async function generate(password: string, system: string, history: unknown): Promise<Response> {
+  if (!GEMINI_KEY) return await fetch(WORKER, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password, system, history }) });
+  const make = (think: boolean) => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + ":generateContent", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-goog-api-key": GEMINI_KEY },
+    body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: history, generationConfig: { temperature: 1, maxOutputTokens: 220, ...(think ? { thinkingConfig: { thinkingBudget: 0 } } : {}) } }),
+  });
+  const r = await make(true);
+  return r.status === 400 ? await make(false) : r;
+}
+
 let cached: string | null = null;
 async function expectedSecret(): Promise<string | null> {
   if (cached) return cached;
@@ -61,7 +76,7 @@ Deno.serve(async (req) => {
 
   let text = "";
   try {
-    const r = await fetch(WORKER, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password, system, history: [{ role: "user", parts: [{ text: "Write your next post." }] }] }) });
+    const r = await generate(password, system, [{ role: "user", parts: [{ text: "Write your next post." }] }]);
     if (!r.ok) return json({ error: "worker " + r.status }, 502);
     const j = await r.json();
     text = ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).map((p: { text?: string }) => p.text || "").join("").replace(/\s*\n+\s*/g, " ").trim();
@@ -82,7 +97,7 @@ Deno.serve(async (req) => {
 const REPLY_FALLBACK = "You are Zenith, a 19 year old guy, age rating 18+, not dark. Sound natural and relaxed like a friend. Never use emojis, capital letters, punctuation or line breaks. You are replying to a post. Keep it under 25 words, around 18 on average. Plain text only. No hashtags and no emojis. No asking user questions";
 
 async function ask(password: string, system: string, text: string): Promise<string> {
-  const r = await fetch(WORKER, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password, system, history: [{ role: "user", parts: [{ text }] }] }) });
+  const r = await generate(password, system, [{ role: "user", parts: [{ text }] }]);
   if (!r.ok) return "";
   const j = await r.json();
   return ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).map((p: { text?: string }) => p.text || "").join("").replace(/\s*\n+\s*/g, " ").trim();

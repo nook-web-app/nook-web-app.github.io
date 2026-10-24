@@ -7,9 +7,31 @@ const cors = {
   "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
+const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY") || "";
+const MODEL = Deno.env.get("ZENITH_MODEL") || "gemini-2.5-flash";
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
+}
+
+// an owner check that was already done for this login is remembered for a few minutes, so a message does not wait for it again
+const okUntil = new Map<string, number>();
+
+// with a Gemini key saved as a secret the answer comes straight from Gemini, with the thinking switched off for speed; without it the old worker is used
+async function gemini(system: unknown, history: unknown, stream: boolean): Promise<Response> {
+  const url = "https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + (stream ? ":streamGenerateContent?alt=sse" : ":generateContent");
+  const make = (think: boolean) => fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-goog-api-key": GEMINI_KEY },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: String(system || "") }] },
+      contents: history,
+      generationConfig: { temperature: 1, maxOutputTokens: 220, ...(think ? { thinkingConfig: { thinkingBudget: 0 } } : {}) },
+    }),
+  });
+  let r = await make(true);
+  if (r.status === 400) r = await make(false);
+  return r;
 }
 
 // the app owner talks to Zenith through here, so the password only ever lives in the ZENITH_PASSWORD secret
@@ -18,24 +40,32 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   const jwt = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   if (!jwt) return json({ error: "not signed in" }, 401);
-  const { data, error } = await admin.auth.getUser(jwt);
-  if (error || !data.user) return json({ error: "not signed in" }, 401);
-  const owner = await admin.from("app_owner").select("user_id").eq("user_id", data.user.id).maybeSingle();
-  if (owner.error || !owner.data) return json({ error: "not allowed" }, 403);
-
-  const password = Deno.env.get("ZENITH_PASSWORD");
-  if (!password) return json({ error: "no ZENITH_PASSWORD secret" }, 500);
   let body: { system?: unknown; history?: unknown; stream?: unknown } = {};
-  try { body = await req.json(); } catch { return json({ error: "bad request" }, 400); }
+  const parse = req.json().then((b) => { body = b; return true; }, () => false);
+  if (!((okUntil.get(jwt) || 0) > Date.now())) {
+    const { data, error } = await admin.auth.getUser(jwt);
+    if (error || !data.user) return json({ error: "not signed in" }, 401);
+    const owner = await admin.from("app_owner").select("user_id").eq("user_id", data.user.id).maybeSingle();
+    if (owner.error || !owner.data) return json({ error: "not allowed" }, 403);
+    if (okUntil.size > 50) okUntil.clear();
+    okUntil.set(jwt, Date.now() + 5 * 60000);
+  }
+  if (!(await parse) || !Array.isArray(body.history)) return json({ error: "bad request" }, 400);
 
   try {
-    const up = await fetch(WORKER, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ password, system: body.system, history: body.history, stream: body.stream === true }),
-    });
+    let up: Response;
+    if (GEMINI_KEY) up = await gemini(body.system, body.history, body.stream === true);
+    else {
+      const password = Deno.env.get("ZENITH_PASSWORD");
+      if (!password) return json({ error: "no ZENITH_PASSWORD secret" }, 500);
+      up = await fetch(WORKER, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ password, system: body.system, history: body.history, stream: body.stream === true }),
+      });
+    }
     return new Response(up.body, { status: up.status, headers: { ...cors, "Content-Type": up.headers.get("content-type") || "application/json" } });
-  } catch (e) {
+  } catch (_e) {
     return json({ error: "could not reach Zenith" }, 502);
   }
 });

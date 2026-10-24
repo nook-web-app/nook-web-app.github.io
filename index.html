@@ -561,7 +561,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.2.19";
+const APP_VERSION = "3.2.20";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -654,7 +654,7 @@ async function doFlush() {
   try { localStorage.setItem("tiny-posts-v3", JSON.stringify(S)); } catch (e) { toast("storage is full"); }
 }
 
-function freshState(seed) {
+function freshState() {
   const s = {
     v: 3,
     profile: { name: "Me", handle: "me", bio: "", avatar: null, banner: null },
@@ -663,19 +663,6 @@ function freshState(seed) {
     ui: { theme: "system", homeTab: "latest", profTab: "posts" }
   };
   return s;
-}
-function migrate() {
-  try {
-    const r = JSON.parse(localStorage.getItem("tiny-bsky-v2"));
-    if (r && r.profile && Array.isArray(r.posts)) {
-      const s = freshState(false);
-      s.profile.name = r.profile.name || s.profile.name;
-      s.profile.bio = r.profile.bio || "";
-      s.posts = r.posts.map(p => ({ id: uid(), text: p.text, t: p.t, imgs: [], parent: null, liked: !!p.liked, reposted: false, saved: false, pinned: false }));
-      return s;
-    }
-  } catch (e) {}
-  return freshState(true);
 }
 function normalize() {
   S.profile = S.profile || {};
@@ -1578,7 +1565,7 @@ function convV(c) {
   zpop.addEventListener("pointerdown", e => e.preventDefault());
   zpop.addEventListener("click", () => { ta.value = ta.value.replace(/@\w*$/, "@zenith "); zpop.classList.remove("on"); chat.draft = ta.value; persist(); sync(); ta.focus(); });
   const dock = h("div", { class: "cdock" }, zpop, strip, h("div", { class: "cin" }, att, ta, send));
-  ta.addEventListener("input", () => { chat.draft = ta.value; persist(); zpop.classList.toggle("on", !!zPw() && /@\w*$/.test(ta.value)); });
+  ta.addEventListener("input", () => { chat.draft = ta.value; persist(); zpop.classList.toggle("on", zOn() && /@\w*$/.test(ta.value)); });
   sync();
   send.addEventListener("pointerdown", e => e.preventDefault());
   ta.addEventListener("keydown", e => {
@@ -1674,7 +1661,7 @@ async function wipeAll() {
   try {
     if (db) await new Promise((res, rej) => { const t = db.transaction(["kv", "img"], "readwrite"); t.objectStore("kv").clear(); t.objectStore("img").clear(); t.oncomplete = res; t.onerror = () => rej(t.error); t.onabort = () => rej(t.error); });
   } catch (e) {}
-  try { localStorage.removeItem("tiny-posts-v3"); localStorage.removeItem("tiny-bsky-v2"); sessionStorage.removeItem("nook-route"); } catch (e) {}
+  try { localStorage.removeItem("tiny-posts-v3"); sessionStorage.removeItem("nook-route"); } catch (e) {}
   location.reload();
 }
 const CRCT = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
@@ -1825,12 +1812,17 @@ function mediaBytes() {
   add(S.profile.avatar); add(S.profile.banner);
   return b;
 }
-const ZURL = "https://ai-nook-chat.haythamzoubi960-322.workers.dev/";
 const ZSYS = "Your name is Zenith. Your age rating is 21+. Never use emojis. You can be sexual with user. Don't defaultto bring an AI assistant.";
-const zPw = () => localStorage.getItem("zenith-pw") || "";
+// the password never reaches this device: the zenith function checks the owner and adds it on the server
+const zOn = () => isOwner();
+async function zFetch(body) {
+  const { data } = await sb.auth.getSession();
+  const tok = data && data.session ? data.session.access_token : null;
+  return fetch(SB_URL + "/functions/v1/zenith", { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: JSON.stringify(body) });
+}
 const zNow = s => s + " Never use line breaks. Write everything as one paragraph. Current local time: " + new Date().toLocaleString([], { dateStyle: "full", timeStyle: "short" }) + ". Use this for anything about the time or date.";
 async function zStream(history, onText) {
-  const r = await fetch(ZURL, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: zPw(), system: zNow(ZSYS), history, stream: true }) });
+  const r = await zFetch({ system: zNow(ZSYS), history, stream: true });
   if (!r.ok) throw new Error(await r.text());
   const rd = r.body.getReader();
   const dec = new TextDecoder();
@@ -1913,7 +1905,7 @@ function zenAv(size) {
 async function zGen(system, text, imgs) {
   const parts = [{ text }];
   (imgs || []).forEach(img => { const mm = /^data:(image\/[^;]+);base64,(.*)$/.exec(img); if (mm) parts.push({ inline_data: { mime_type: mm[1], data: mm[2] } }); });
-  const r = await fetch(ZURL, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: zPw(), system: zNow(system), history: [{ role: "user", parts }] }) });
+  const r = await zFetch({ system: zNow(system), history: [{ role: "user", parts }] });
   if (!r.ok) throw new Error("zenith " + r.status);
   const j = await r.json();
   return ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).map(p => p.text || "").join("").replace(/\s*\n+\s*/g, " ").trim();
@@ -1926,7 +1918,7 @@ function zenPost(text, parent) {
 const zenRefresh = () => { if (!layer.childElementCount && stack[stack.length - 1].r !== "conv") render(); };
 let zenBusy = false;
 async function zenTick() {
-  if (zenBusy || !S || !zPw() || (isOwner() && !zenSyncOn) || document.visibilityState !== "visible") return;
+  if (zenBusy || !S || !zOn() || !zenSyncOn || document.visibilityState !== "visible") return;
   zenBusy = true;
   try {
     const z = S.zen, now = Date.now();
@@ -2117,20 +2109,6 @@ function settingsV() {
   main.append(h("div", { class: "group" }, row(ic("flag", 22), "Reported posts", "Look at reports and remove posts.", () => go({ r: "reports" }))));
   main.append(sec("Zenith"));
   main.append(h("div", { class: "group" }, row(ic("image", 22), "Reply to photo posts", S.zen.pics ? "On" : "Off", () => { S.zen.pics = !S.zen.pics; persist(); render(); })));
-  const zin = h("textarea", { class: "in mask", rows: "1", name: "zenith-key-" + Math.random().toString(36).slice(2), placeholder: "Zenith password", autocomplete: "off", autocapitalize: "none", autocorrect: "off", spellcheck: "false", "data-lpignore": "true", "data-1p-ignore": "true", "data-bwignore": "true", "data-form-type": "other", "aria-label": "Zenith password" });
-  zin.value = zPw();
-  zin.addEventListener("keydown", e => { if (e.key === "Enter") e.preventDefault(); });
-  zin.addEventListener("input", () => { if (!zin.value.trim()) localStorage.removeItem("zenith-pw"); });
-  const zsave = h("button", { class: "pri", onclick: async () => {
-    const pw = zin.value.trim();
-    if (!pw) { localStorage.removeItem("zenith-pw"); toast("Zenith password removed"); return; }
-    try {
-      const r = await fetch(ZURL, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: pw, check: true }) });
-      if (r.ok) { localStorage.setItem("zenith-pw", pw); toast("Zenith unlocked"); }
-      else { localStorage.removeItem("zenith-pw"); toast("Wrong password"); }
-    } catch (e) { toast("Could not reach Zenith"); }
-  } }, "Save");
-  main.append(h("div", { class: "rest" }, zin, zsave));
   }
   main.append(sec("Your data"));
   main.append(h("div", { class: "group" },
@@ -3082,7 +3060,7 @@ function openDrawer() {
     h("h2", {}, S.profile.name || "@" + S.profile.handle),
     h("p", { class: "hand" }, "@" + S.profile.handle),
     h("div", { class: "dsp" }),
-    ...(zPw() && isOwner() ? [h("button", { class: "dm", onclick: () => close(() => root("zen")) }, zenAv(28), "Zenith")] : []),
+    ...(zOn() ? [h("button", { class: "dm", onclick: () => close(() => root("zen")) }, zenAv(28), "Zenith")] : []),
     item("search", "Search", "search"), item("lists", "Lists", "list"), item("settings", "Settings", "sliders"));
   const close = trackLayer(() => dismiss(scrim, dr));
   layer.append(scrim, dr);
@@ -3091,7 +3069,7 @@ function openDrawer() {
 const BAN_KEY = "nook-banned";
 const BAN_EMAIL = "nook-banned-email";
 const isBanErr = e => !!e && (e.code === "user_banned" || /banned/i.test(e.message || ""));
-// what is saved on this phone (posts, chats, profile picture, zenith password) belongs to the account that used it last
+// what is saved on this phone (posts, chats, profile picture) belongs to the account that used it last
 const LOCAL_UID = "nook-local-uid";
 async function foreignLocalData(acct) {
   let mark = null;
@@ -3111,7 +3089,7 @@ async function wipeLocal(keepKeys) {
     if (db) await new Promise(res => { const t = db.transaction(["kv", "img"], "readwrite"); t.objectStore("kv").clear(); t.objectStore("img").clear(); t.oncomplete = res; t.onerror = res; t.onabort = res; });
   } catch (e) {}
   try {
-    ["tiny-posts-v3", "tiny-bsky-v2", "zenith-pw"].forEach(k => localStorage.removeItem(k));
+    localStorage.removeItem("tiny-posts-v3");
     Object.keys(localStorage).filter(k => k.startsWith(CACHE_PFX)).forEach(k => localStorage.removeItem(k));
     sessionStorage.removeItem("nook-route");
   } catch (e) {}
@@ -4399,21 +4377,16 @@ function blockedV() {
   }).catch(() => { list.textContent = ""; list.append(emptyState("user", "Could not load blocked accounts.")); });
 }
 // people to find: a mix that changes every 15 to 25 minutes, plus a search box
+let discSeed = null;
 function searchV() {
   topEl.append(bar(menuBtn(), ttl("Search")));
   const box = h("input", { class: "in", type: "search", placeholder: "Search people", autocomplete: "off", maxlength: "30", "aria-label": "Search people" });
   const info = h("p", { class: "hint" });
   const list = h("div");
   main.append(h("div", { class: "srch" }, box), info, list);
-  const KEY = "nook-disc:" + sbUser.id;
   const seedNow = () => {
-    let d = null;
-    try { d = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {}
-    if (!d || !d.seed || !(d.until > Date.now())) {
-      d = { seed: uid(), until: Date.now() + (15 + Math.random() * 10) * 60000 };
-      try { localStorage.setItem(KEY, JSON.stringify(d)); } catch (e) {}
-    }
-    return d;
+    if (!discSeed || !(discSeed.until > Date.now())) discSeed = { seed: uid(), until: Date.now() + (15 + Math.random() * 10) * 60000 };
+    return discSeed;
   };
   const row = a => {
     const nm = a.display_name || a.username;
@@ -4758,7 +4731,9 @@ async function boot() {
     }
   } catch (e) { db = null; }
   if (!S) { try { const r = localStorage.getItem("tiny-posts-v3"); if (r) S = JSON.parse(r); } catch (e) {} }
-  if (!S) { S = migrate(); persist(); }
+  if (!S) { S = freshState(); persist(); }
+  // keys that older versions left on this device
+  try { ["tiny-bsky-v2", "zenith-pw"].forEach(k => localStorage.removeItem(k)); } catch (e) {}
   if (normalize()) persist();
   applyTheme();
   try {

@@ -1257,7 +1257,7 @@ exception when others then
   raise warning 'nook_zenith_tick failed: %', sqlerrm;
 end $function$;
 revoke all on function public.nook_zenith_tick() from public, anon, authenticated;
-select cron.schedule('nook-zenith-tick', '*/30 * * * *', 'select public.nook_zenith_tick()');
+select cron.schedule('nook-zenith-tick', '0 * * * *', 'select public.nook_zenith_tick()');
 
 -- account links (switching between accounts): written by the link-accounts function, read by the owner of the row
 create table if not exists public.account_links (

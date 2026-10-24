@@ -215,9 +215,14 @@ textarea{resize:none}
 .zpop b{display:block;font-size:var(--fs-base);font-weight:700}
 .zpop small{display:block;color:var(--muted);font-size:var(--fs-xs)}
 .zav{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,var(--b1),var(--accent));color:var(--on);display:flex;align-items:center;justify-content:center;font-weight:700;flex:none}
-.ztag{display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);font-weight:700;color:var(--muted);margin:0 4px 4px}
-.ztag .zav{width:18px;height:18px;font-size:10px}
-.mrow.zdm .bub{background:var(--bg2);color:var(--fg);border:1px solid var(--accent)}
+.ztag{font-size:var(--fs-xs);color:var(--muted);opacity:.75;margin:0 4px 3px}
+.mrow.zdm .bub{background:var(--bg2);color:var(--fg);border-radius:var(--r-bubble) var(--r-bubble) var(--r-bubble) var(--r-xs);border:1px solid var(--line)}
+.zcard{border:1px solid var(--line);background:var(--bg2);border-radius:var(--r-m);padding:12px 14px;max-width:min(320px,82%);cursor:pointer}
+.zcard.big{max-width:none;cursor:default}
+.zch{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.zch .nm b{display:block}.zch .nm span{color:var(--muted);font-size:var(--fs-xs)}
+.zct{overflow-wrap:anywhere}
+.zcd{color:var(--muted);font-size:var(--fs-xs);margin-top:8px}
 .mrow.zdm{align-items:flex-start}
 .mrow.zdm .mmi{text-align:left}
 .mrow.ai{align-items:flex-start}

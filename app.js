@@ -155,7 +155,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.0";
+const APP_VERSION = "3.4.1";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -893,7 +893,10 @@ async function sharePost(p) {
   const pic = async () => { toast("Making picture..."); try { return await postPic(p); } catch (e) { toast("Could not make picture"); return null; } };
   sheet([
     { icon: "edit", label: "Post", fn: async () => { const b = await pic(); if (b) openCompose({ files: [new File([b], "nook-post.png", { type: "image/png" })] }); } },
-    ...(targets.length ? [{ icon: "chat", label: "Message", fn: () => chooseTarget(targets, async t => { const b = await pic(); if (b) sendPicTo(t, b, true); }) }] : []),
+    ...(targets.length ? [{ icon: "chat", label: "Message", fn: () => chooseTarget(targets, async t => {
+      if (p.ai && t.kind === "user") { try { await sendDm(t.id, ZPOST + JSON.stringify({ x: p.text, t: p.t }), [], []); toast("Sent to " + t.name); } catch (e) { toast("Could not send"); } return; }
+      const b = await pic(); if (b) sendPicTo(t, b, true);
+    }) }] : []),
     { icon: "share", label: "Another app", fn: () => sharePic(p) },
     { label: "Cancel", cancel: true }], "Share post");
 }
@@ -1555,13 +1558,13 @@ function mediaBytes() {
   add(S.profile.avatar); add(S.profile.banner);
   return b;
 }
-const ZSYS = "You are an ai model named zenith. Your age is 19 and your age rating is 18+. You are a gay guy and your personality is not dark. Never use emojis. Never use capital letters. Never use line breaks. Never write a message longer than 35 words. Never use punctuation. Never mention the time or the date unless the person asks about it or it is really needed. Never say your own name unless the person asks for it. Never call the person cutie or any pet name. ";
+const ZSYS = "You are an ai model named zenith. Your age is 19 and your age rating is 18+. You are a gay guy and your personality is not dark. Never use emojis. Never use capital letters. Never use line breaks. Never write a message longer than 35 words. Never use punctuation. Never mention the time or the date unless the person asks about it or it is really needed. Never say your own name unless the person asks for it. Never call the person cutie or any pet name. Talk like a real friend texting: relaxed, specific to what was just said, with your own opinion or a small joke. Never use stock lines like hope you are having a nice day, how can i help or hello there, and never repeat the person's words back. ";
 // the password never reaches this device: the zenith function checks the owner and adds it on the server
 const zOn = () => isOwner();
 async function zFetch(body) {
   const { data } = await sb.auth.getSession();
   const tok = data && data.session ? data.session.access_token : null;
-  return fetch(SB_URL + "/functions/v1/zenith", { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: JSON.stringify(body) , signal: AbortSignal.timeout ? AbortSignal.timeout(30000) : undefined });
+  return fetch(SB_URL + "/functions/v1/zenith", { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: JSON.stringify(body) , signal: AbortSignal.timeout ? AbortSignal.timeout(45000) : undefined });
 }
 const zNow = s => s + " Never use line breaks. Write everything as one paragraph. Current local time: " + new Date().toLocaleString([], { dateStyle: "full", timeStyle: "short" }) + ". Only use it when the time or date is really needed, never bring it up on your own.";
 async function zStream(history, onText) {
@@ -1634,7 +1637,7 @@ function zAsk(chat, list, bubble, m) {
     .then(t => { full = (t || "(no reply)").replace(/\s*\n+\s*/g, " "); finished = true; })
     .catch(e => { full = /wrong password/.test(e.message) ? "wrong password, set it in settings" : "Zenith is not reachable right now"; finished = true; });
 }
-const ZMOOD = "Be neutral but not soulless";
+const ZMOOD = "Sound natural and a little witty, like a friend, not like an assistant.";
 const ZSYS_POST = ZSYS + ZMOOD + " You are writing one original post for your own profile. Keep it under 35 words, around 20 on average. Plain text only. No hashtags and no emojis.";
 const ZSYS_REPLY = ZSYS + ZMOOD + " You are replying to a post. Keep it under 25 words, around 18 on average. Plain text only. No hashtags and no emojis. No asking user questions";
 const ZSYS_LIKE = "Answer with only YES or NO. Answer YES only if you genuinely like this post.";
@@ -1660,28 +1663,34 @@ function zenPost(text, parent, id) {
 }
 const zenRefresh = () => { if (!layer.childElementCount && stack[stack.length - 1].r !== "conv") render(); };
 let zenBusy = false, zenAgain = false;
+let zenPulled = 0;
 async function zenTick() {
   if (zenBusy && S && zOn()) zenAgain = true;
   if (zenBusy || !S || !zOn() || !zenSyncOn || document.visibilityState !== "visible") return;
   zenBusy = true;
   try {
-    const z = S.zen, now = Date.now();
-    z.log = z.log.filter(t => now - t < 864e5);
+    const z = S.zen;
+    // his own posts are decided on the server every hour; this brings them in
+    if (Date.now() - zenPulled > 45000) { zenPulled = Date.now(); if (await zenPull()) zenRefresh(); }
     const fresh = p => p.t > z.since;
-    for (let todo; (todo = S.posts.find(p => !p.ai && !p.ra && !p.parent && (p.text || p.imgs.length) && !p.zenReplied && fresh(p)));) {
-      todo.zenReplied = true;
-      if (S.posts.some(x => x.ai && x.parent === todo.id)) continue;
-      const rid = todo.remote ? "zr" + todo.remote.replace(/-/g, "") : null;
-      const text = await zGen(ZSYS_REPLY, "Post: " + (todo.text || "(photo only)"), todo.imgs);
-      if (text && !S.posts.some(x => x.ai && x.parent === todo.id)) zenPost(text, todo.id, rid);
+    // a failed answer is tried again a few times instead of being lost
+    const answer = async (item, flag, make, parent) => {
+      item[flag] = true;
+      let text = "";
+      try { text = await make(); } catch (e) {}
+      if (text && !S.posts.some(x => x.ai && x.parent === parent.id)) { zenPost(text, parent.id, parent.remote ? "zr" + parent.remote.replace(/-/g, "") : null); }
+      else if (!text) { item.zenTries = (item.zenTries || 0) + 1; if (item.zenTries < 4) item[flag] = false; }
       persist(); zenRefresh();
+    };
+    for (let todo; (todo = S.posts.find(p => !p.ai && !p.ra && !p.parent && (p.text || p.imgs.length) && !p.zenReplied && fresh(p)));) {
+      if (S.posts.some(x => x.ai && x.parent === todo.id)) { todo.zenReplied = true; continue; }
+      await answer(todo, "zenReplied", () => zGen(ZSYS_REPLY, "Post: " + (todo.text || "(photo only)"), todo.imgs), todo);
+      if (!todo.zenReplied) break;
     }
     for (let rr; (rr = S.posts.find(p => !p.ai && !p.ra && p.parent && !p.zenAnswered && fresh(p) && (byId(p.parent) || {}).ai));) {
-      rr.zenAnswered = true;
       const par = byId(rr.parent);
-      const text = await zGen(ZSYS_REPLY, "Your post: " + par.text + "\nReply to you: " + rr.text);
-      if (text) zenPost(text, rr.id);
-      persist(); zenRefresh();
+      await answer(rr, "zenAnswered", () => zGen(ZSYS_REPLY, "Your post: " + par.text + "\nReply to you: " + rr.text), rr);
+      if (!rr.zenAnswered) break;
     }
     const cand = S.posts.filter(p => !p.ai && !p.ra && p.text && !p.zenLikeChecked && fresh(p)).slice(0, 2);
     for (const p of cand) {
@@ -1690,10 +1699,6 @@ async function zenTick() {
       if (/^yes/i.test(a)) p.zenLike = true;
     }
     if (cand.length) { persist(); zenRefresh(); }
-    if (z.log.length < 2 && now >= z.next) {
-      const text = await zGen(ZSYS_POST, "Write your next post.");
-      if (text) { zenPost(text); z.log.push(Date.now()); z.next = Date.now() + (2 + Math.random() * 4) * 36e5; persist(); zenRefresh(); }
-    }
   } catch (e) {} finally { zenBusy = false; if (zenAgain) { zenAgain = false; setTimeout(zenTick, 300); } }
 }
 // Zenith's posts, replies, likes and chats are mirrored into a table that only the owner can read,
@@ -1771,6 +1776,7 @@ async function zenPull() {
     }
   });
   if (changed) persist();
+  return changed;
 }
 async function zenStart() {
   if (zenSyncOn || !sbUser || !isOwner()) return;
@@ -4432,7 +4438,22 @@ async function sealText(otherId, text) {
   return "e2e1:" + toB64(iv) + "." + toB64(new Uint8Array(ct));
 }
 const ZMARK = "\u2063Z\u2063";
-const zUn = t => typeof t === "string" && t.startsWith(ZMARK) ? t.slice(ZMARK.length) : t;
+const ZPOST = "\u2063P\u2063";
+const zUn = t => typeof t === "string" ? (t.startsWith(ZMARK) ? t.slice(ZMARK.length) : t.startsWith(ZPOST) ? "a post" : t) : t;
+function zPostOf(t) {
+  if (typeof t !== "string" || !t.startsWith(ZPOST)) return null;
+  try { const j = JSON.parse(t.slice(ZPOST.length)); return j && typeof j.x === "string" ? { x: j.x.slice(0, 600), t: Number(j.t) || Date.now() } : null; } catch (e) { return null; }
+}
+function zCard(zp, big) {
+  return h("div", { class: "zcard" + (big ? " big" : "") }, h("div", { class: "zch" }, zenAv(big ? 44 : 34), h("div", { class: "nm" }, h("b", {}, "Zenith"), h("span", {}, "@zenith"))),
+    h("div", { class: "zct" }, rich(zp.x)), h("div", { class: "zcd" }, new Date(zp.t).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })));
+}
+function viewZPost(zp) {
+  const m = modal({ title: "Post", action: "Close", onAction: c => c(), body: [zCard(zp, true)] });
+  m.act.style.visibility = "hidden";
+  const cb = m.ov.querySelector(".tbtn");
+  if (cb) cb.textContent = "Close";
+}
 async function openText(otherId, raw) {
   if (!raw || raw.slice(0, 5) !== "e2e1:") return raw || "";
   try {
@@ -4460,7 +4481,8 @@ function loadEncMedia(md, otherId) {
 async function openRows(rows, otherId, waitFor) {
   const out = await Promise.all(rows.map(async m => {
     const t = await openText(otherId, m.body);
-    return Object.assign({}, m, { text: zUn(t) }, t.startsWith(ZMARK) ? { ai: true } : {});
+    const zp = zPostOf(t);
+    return Object.assign({}, m, { text: zp ? "" : zUn(t) }, t.startsWith(ZMARK) ? { ai: true } : {}, zp ? { zpost: zp } : {});
   }));
   // photos are opened before their bubbles show, so no grey box sits on the screen while they load (only the newest ones are waited for when there are many)
   const jobs = [];
@@ -4624,9 +4646,10 @@ function dmBubble(m, mine, otherId) {
     row.textContent = "";
     const body = msg.text !== undefined ? msg.text : msg.body;
     (msg.media || []).forEach((md, i) => row.append(dmMedia(md, otherId, () => openDmViewer(row, i))));
+    if (msg.zpost) { const zc = zCard(msg.zpost); zc.addEventListener("click", e => { e.stopPropagation(); viewZPost(msg.zpost); }); row.append(zc); }
     const link = firstUrl(body);
     if (link) row.append(linkCard(link, true));
-    if (msg.ai && body) row.append(h("div", { class: "ztag" }, h("span", { class: "zav" }, "Z"), "Zenith AI"));
+    if (msg.ai && body) row.append(h("div", { class: "ztag" }, "Zenith"));
     if (body) row.append(h("div", { class: "bub" }, rich(body)));
     row.classList.toggle("zdm", !!msg.ai);
     row.append(h("div", { class: "mmeta" }, h("div", { class: "mmi" }, h("span", {}, new Date(msg.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })))));
@@ -4875,7 +4898,7 @@ function dmV(c) {
   const zenInDm = async () => {
     const hist = Array.from(list.querySelectorAll("[data-mid]")).map(r => r._m).filter(m => m && m.text).slice(-20)
       .map(m => (m.ai ? "Zenith: " : m.sender_id === me ? "Person A: " : "Person B: ") + m.text.replace(/@zenith/gi, "Zenith")).join("\n");
-    const ghost = h("div", { class: "mrow zdm tmpm" }, h("div", { class: "ztag" }, h("span", { class: "zav" }, "Z"), "Zenith AI"), h("div", { class: "bub typing" }, h("i"), h("i"), h("i")));
+    const ghost = h("div", { class: "mrow zdm tmpm" }, h("div", { class: "ztag" }, "Zenith"), h("div", { class: "bub typing" }, h("i"), h("i"), h("i")));
     pushRow(ghost);
     try {
       const reply = await zGen(ZSYS_REPLY + " This is a chat between two people, Person A and Person B, and Zenith is in it. Answer the last message that mentions Zenith.", hist);

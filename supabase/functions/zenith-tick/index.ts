@@ -4,7 +4,7 @@ const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE
 const WORKER = "https://ai-nook-chat.haythamzoubi960-322.workers.dev/";
 const DAY = 864e5, HOUR = 36e5;
 // used only when the app has not saved its own instructions yet
-const FALLBACK = "You are Zenith. You are writing one original post for your own profile. Keep it under 35 words, around 20 on average. Plain text only. No hashtags and no emojis.";
+const FALLBACK = "You are Zenith, a 19 year old guy, age rating 18+, not dark. Sound natural and relaxed like a friend. Never use emojis, capital letters, punctuation or line breaks. You are writing one original post for your own profile. Keep it under 35 words, around 20 on average. Plain text only. No hashtags and no emojis.";
 
 let cached: string | null = null;
 async function expectedSecret(): Promise<string | null> {
@@ -24,7 +24,7 @@ function json(body: unknown, status = 200): Response {
 }
 
 // Zenith posts on his own while the app is closed: the app saves his instructions and his schedule in the owner-only table,
-// this reads them every half hour, writes a post when one is due and moves the schedule on, so the app and this never post twice in a row.
+// this runs every hour and writes a post when the roll lands in the top band.
 Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   const want = await expectedSecret();
@@ -42,10 +42,16 @@ Deno.serve(async (req) => {
   if (mode === "reply") return await replies(id, docs || [], password);
   const state = (docs || []).find((d) => d.doc_id === "main");
   const prompt = (docs || []).find((d) => d.doc_id === "prompt");
-  const z = ((state && state.data && state.data.z) || {}) as { log?: number[]; next?: number };
+  const z = ((state && state.data && state.data.z) || {}) as { log?: number[] };
   const now = Date.now();
   const log = (Array.isArray(z.log) ? z.log : []).filter((t) => now - t < DAY);
-  if (!dry && (log.length >= 2 || now < Number(z.next || 0))) return json({ skipped: "not due" });
+  // every hour a number from 0 to 100 is rolled and a post is written only when it lands in the top band (95 to 100 at the start);
+  // the more original posts he made in the last 30 days, the smaller that band gets, so it is super rare to land in it after a busy month
+  const { data: mine } = await admin.from("zenith_docs").select("data").eq("owner_id", id).eq("kind", "post").limit(5000);
+  const recent = (mine || []).filter((r) => r.data && r.data.ai && !r.data.parent && !r.data.parentRemote && now - Number(r.data.t || 0) < 30 * DAY).length;
+  const band = 5 * Math.pow(0.93, recent);
+  const roll = Math.random() * 100;
+  if (!dry && roll < 100 - band) return json({ skipped: "roll " + roll.toFixed(2) + " needs " + (100 - band).toFixed(2) });
 
   const base = prompt && prompt.data && typeof prompt.data.post === "string" && prompt.data.post.trim() ? String(prompt.data.post) : FALLBACK;
   const tz = prompt && prompt.data && typeof prompt.data.tz === "string" ? String(prompt.data.tz) : "Asia/Muscat";
@@ -68,12 +74,12 @@ Deno.serve(async (req) => {
   const post = { id: pid, text, t: now, parent: null, ai: true, liked: false, reposted: false, saved: false, pinned: false };
   const ins = await admin.from("zenith_docs").upsert({ owner_id: id, kind: "post", doc_id: pid, data: post, updated_at: new Date().toISOString() }, { onConflict: "owner_id,kind,doc_id" });
   if (ins.error) return json({ error: "save failed" }, 500);
-  const nextZ = Object.assign({}, state && state.data && state.data.z ? state.data.z : {}, { log: [...log, now], next: now + (2 + Math.random() * 4) * HOUR });
+  const nextZ = Object.assign({}, state && state.data && state.data.z ? state.data.z : {}, { log: [...log, now] });
   await admin.from("zenith_docs").upsert({ owner_id: id, kind: "state", doc_id: "main", data: Object.assign({}, state ? state.data : {}, { z: nextZ }), updated_at: new Date().toISOString() }, { onConflict: "owner_id,kind,doc_id" });
   return json({ ok: true, posted: pid });
 });
 
-const REPLY_FALLBACK = "You are Zenith. You are replying to a post. Keep it under 25 words, around 18 on average. Plain text only. No hashtags and no emojis. No asking user questions";
+const REPLY_FALLBACK = "You are Zenith, a 19 year old guy, age rating 18+, not dark. Sound natural and relaxed like a friend. Never use emojis, capital letters, punctuation or line breaks. You are replying to a post. Keep it under 25 words, around 18 on average. Plain text only. No hashtags and no emojis. No asking user questions";
 
 async function ask(password: string, system: string, text: string): Promise<string> {
   const r = await fetch(WORKER, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password, system, history: [{ role: "user", parts: [{ text }] }] }) });

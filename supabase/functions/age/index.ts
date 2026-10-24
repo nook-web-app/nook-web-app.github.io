@@ -11,19 +11,13 @@ const ADULT = 18;
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 }
-function ageOf(birth: string): number | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(birth);
-  if (!m) return null;
-  const y = +m[1], mo = +m[2], d = +m[3];
-  const dt = new Date(Date.UTC(y, mo - 1, d));
-  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
-  const now = new Date();
-  let age = now.getUTCFullYear() - y;
-  if (now.getUTCMonth() + 1 < mo || (now.getUTCMonth() + 1 === mo && now.getUTCDate() < d)) age--;
-  return age >= 0 && age <= 120 ? age : null;
+// the age somebody typed, or null when it is not a whole number between 1 and 120
+function ageOf(v: unknown): number | null {
+  const n = typeof v === "number" ? v : /^\d{1,3}$/.test(String(v ?? "").trim()) ? Number(String(v).trim()) : NaN;
+  return Number.isInteger(n) && n >= 1 && n <= 120 ? n : null;
 }
 
-// a locked account answers one question; an adult answer opens it, any other answer bans it (the data stays 30 days for download)
+// a locked account answers one question; an adult answer opens it, an answer under 18 bans it (the data stays 30 days for download)
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
   if (req.method !== "POST") return json({ error: "method" }, 405);
@@ -37,8 +31,8 @@ Deno.serve(async (req) => {
   if (!a) return json({ error: "no account" }, 404);
   if (String(body.action || "") !== "answer") return json({ hold: !!a.age_hold });
   if (!a.age_hold) return json({ state: "passed" });
-  const age = ageOf(String(body.birth || ""));
-  if (age === null) return json({ error: "Enter a real date." }, 400);
+  const age = ageOf(body.age);
+  if (age === null) return json({ error: "Enter your age as a number." }, 400);
   if (age >= ADULT) {
     await admin.from("accounts").update({ age_hold: false, age_verified: true }).eq("id", id).eq("age_hold", true);
     return json({ state: "passed" });

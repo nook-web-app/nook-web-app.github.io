@@ -1007,3 +1007,31 @@ drop policy if exists "signed in users read likes" on public.likes;
 drop policy if exists "reposts read all" on public.reposts;
 drop policy if exists "members read messages" on public.messages;
 drop policy if exists "media delete own" on storage.objects;
+
+-- v3.2.24 rate limits: likes 60 a minute, reposts 30 a minute, follows 30 a minute (the time is set by the server, not the client)
+alter table public.likes add column if not exists created_at timestamptz not null default now();
+alter table public.follows add column if not exists created_at timestamptz not null default now();
+create index if not exists likes_user_time on public.likes (user_id, created_at);
+create index if not exists follows_user_time on public.follows (follower_id, created_at);
+create index if not exists reposts_user_time on public.reposts (user_id, created_at);
+create or replace function public.nook_interact_guard() returns trigger language plpgsql security definer set search_path = public as $$
+declare v_target uuid;
+begin
+  if auth.uid() is null then return new; end if;
+  new.created_at := now();
+  if tg_table_name = 'follows' then
+    if (select count(*) from public.follows where follower_id = auth.uid() and created_at > now() - interval '1 minute') >= 30 then raise exception 'rate_limited' using errcode = 'P0001'; end if;
+    v_target := new.followee_id;
+  else
+    if tg_table_name = 'likes' then
+      if (select count(*) from public.likes where user_id = auth.uid() and created_at > now() - interval '1 minute') >= 60 then raise exception 'rate_limited' using errcode = 'P0001'; end if;
+    else
+      if (select count(*) from public.reposts where user_id = auth.uid() and created_at > now() - interval '1 minute') >= 30 then raise exception 'rate_limited' using errcode = 'P0001'; end if;
+    end if;
+    select user_id into v_target from public.posts where id = new.post_id;
+  end if;
+  if v_target is not null and exists (select 1 from public.blocks b where b.blocker_id = v_target and b.blocked_id = auth.uid()) then
+    raise exception 'blocked' using errcode = '42501';
+  end if;
+  return new;
+end $$;

@@ -133,7 +133,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.2.23";
+const APP_VERSION = "3.2.24";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2701,12 +2701,15 @@ function bannedV() {
 function ageV() {
   navEl.hidden = true;
   const msg = h("p", { class: "note", role: "alert" });
-  const day = h("input", { class: "in", type: "date", "aria-label": "Date of birth", max: new Date().toISOString().slice(0, 10) });
+  const day = h("input", { class: "in", type: "text", inputmode: "numeric", pattern: "[0-9]*", maxlength: "3", placeholder: "Your age", autocomplete: "off", "aria-label": "Your age" });
+  day.addEventListener("input", () => { day.value = day.value.replace(/\D/g, "").slice(0, 3); });
+  day.addEventListener("keydown", e => { if (e.key === "Enter") send(); });
   const go1 = h("button", { class: "pri", onclick: send }, "Continue");
   async function send() {
-    if (!day.value) { msg.textContent = "Pick your date of birth."; return; }
+    const years = Number(day.value);
+    if (!day.value || years < 1 || years > 120) { msg.textContent = "Type your age as a number."; return; }
     go1.disabled = true; msg.textContent = "";
-    const r = await callFn("age", { action: "answer", birth: day.value });
+    const r = await callFn("age", { action: "answer", age: years });
     go1.disabled = false;
     const s = r.body && r.body.state;
     if (s === "passed" || s === "banned") { location.reload(); return; }
@@ -2714,7 +2717,7 @@ function ageV() {
   }
   main.append(h("div", { class: "empty", style: "padding-top:14vh" },
     h("h1", { class: "pname", style: "margin:0;color:var(--fg)" }, "One quick question"),
-    h("p", {}, "When were you born?"),
+    h("p", {}, "How old are you?"),
     h("div", { class: "fld", style: "width:100%;max-width:320px" }, day),
     go1, msg));
 }

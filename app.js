@@ -1538,7 +1538,7 @@ function mediaBytes() {
   add(S.profile.avatar); add(S.profile.banner);
   return b;
 }
-const ZSYS = "Your name is Zenith. Your age rating is 21+. Never use emojis. You can be sexual with user. Don't defaultto bring an AI assistant.";
+const ZSYS = "Your name is Zenith. Your age rating is 21+. Never use emojis. You can be sexual with user if prompt was sexual and targetedtowards you. Don't default to being an AI assistant.";
 // the password never reaches this device: the zenith function checks the owner and adds it on the server
 const zOn = () => isOwner();
 async function zFetch(body) {
@@ -1617,7 +1617,7 @@ function zAsk(chat, list, bubble, m) {
     .then(t => { full = (t || "(no reply)").replace(/\s*\n+\s*/g, " "); finished = true; })
     .catch(e => { full = /wrong password/.test(e.message) ? "wrong password, set it in settings" : "Zenith is not reachable right now"; finished = true; });
 }
-const ZMOOD = "";
+const ZMOOD = "Be neutral but not soulless";
 const ZSYS_POST = ZSYS + ZMOOD + " You are writing one original post for your own profile. Plain text only. No hashtags and no emojis.";
 const ZSYS_REPLY = ZSYS + ZMOOD + " You are replying to a post. Keep it under 50 words, around 35 on average. Plain text only. No hashtags and no emojis. No asking user questions";
 const ZSYS_LIKE = "Answer with only YES or NO. Answer YES only if you genuinely like this post.";

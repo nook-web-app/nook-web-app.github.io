@@ -139,7 +139,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.34";
+const APP_VERSION = "3.3.35";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -289,32 +289,59 @@ function flat(id, d, out) {
 }
 // home feed order. Everything is worked out on this phone from things the person did on purpose
 // (who they follow, what they liked, saved or replied to, "less like this") and never from time spent or scrolling
-const SCRIPTS = [
-  ["latin", "English and other Latin letters", /[A-Za-z\u00C0-\u024F]/g],
-  ["arabic", "Arabic", /[\u0600-\u06FF\u0750-\u077F]/g],
-  ["cjk", "Chinese or Japanese", /[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF]/g],
-  ["hangul", "Korean", /[\uAC00-\uD7AF\u1100-\u11FF]/g],
-  ["cyrillic", "Russian and Cyrillic", /[\u0400-\u04FF]/g],
-  ["devanagari", "Hindi", /[\u0900-\u097F]/g],
-  ["thai", "Thai", /[\u0E00-\u0E7F]/g],
-  ["hebrew", "Hebrew", /[\u0590-\u05FF]/g],
-  ["greek", "Greek", /[\u0370-\u03FF]/g]
-];
-const LANG_SCRIPT = { ar: "arabic", fa: "arabic", ur: "arabic", zh: "cjk", ja: "cjk", ko: "hangul", ru: "cyrillic", uk: "cyrillic", bg: "cyrillic", sr: "cyrillic", hi: "devanagari", mr: "devanagari", ne: "devanagari", th: "thai", he: "hebrew", el: "greek" };
-// which writing a text is in; null when it has too few letters to tell (a photo with a short caption is for everybody)
-function scriptOf(text) {
+const LANGS = [["arabic", "Arabic"], ["chinese", "Chinese"], ["dutch", "Dutch"], ["english", "English"], ["french", "French"], ["german", "German"], ["greek", "Greek"], ["hebrew", "Hebrew"], ["hindi", "Hindi"], ["indonesian", "Indonesian"], ["italian", "Italian"], ["japanese", "Japanese"], ["korean", "Korean"], ["persian", "Persian"], ["polish", "Polish"], ["portuguese", "Portuguese"], ["russian", "Russian"], ["spanish", "Spanish"], ["thai", "Thai"], ["turkish", "Turkish"], ["ukrainian", "Ukrainian"], ["urdu", "Urdu"]];
+const PHONE_LANG = { ar: "arabic", zh: "chinese", nl: "dutch", en: "english", fr: "french", de: "german", el: "greek", he: "hebrew", hi: "hindi", id: "indonesian", it: "italian", ja: "japanese", ko: "korean", fa: "persian", pl: "polish", pt: "portuguese", ru: "russian", es: "spanish", th: "thai", tr: "turkish", uk: "ukrainian", ur: "urdu" };
+const WORDS = {
+  english: "the and is are of to in that it for you with this on was have not but they your we be at or by from my so his her its our what when will can all just there their about would".split(" "),
+  spanish: "el la los las de que en un una es por con para no se su al lo como más pero sus le ya este sí porque esta entre cuando muy sin sobre también me hasta hay donde quien desde todo nos".split(" "),
+  french: "le la les des est et en un une du de que qui dans pour pas sur au avec ce il elle je nous vous ils sont mais ou où plus par se ne comme tout cette très être".split(" "),
+  german: "der die das und ist nicht ein eine zu den dem des mit auf für von ich du er sie es wir ihr aber auch wie bei nach aus noch nur oder wenn dass sehr".split(" "),
+  portuguese: "os as do da em um uma para com não por mais na no dos das como mas foi ao ele ela seu sua ser quando muito já também só pelo você são".split(" "),
+  italian: "il lo gli di che un una per con non è sono ma come più anche se da del della dei delle nel nella al alla questo quello ho hai molto".split(" "),
+  dutch: "de het een en van ik te dat die niet op aan met voor zijn er maar om ook als dan nog wel naar bij uit heel".split(" "),
+  turkish: "ve bir bu da de için ile ben sen çok daha gibi ama ne mi mı var yok değil ki ya kadar".split(" "),
+  indonesian: "yang dan di ke dari ini itu dengan untuk tidak adalah saya kamu akan pada juga atau ada sudah bisa".split(" "),
+  polish: "nie na się że to jest do jak ale po co tak za od czy dla już tylko".split(" ")
+};
+const WORDSET = Object.fromEntries(Object.keys(WORDS).map(k => [k, new Set(WORDS[k])]));
+const MARKS = { spanish: /[ñ¿¡]/g, german: /[ßäöü]/g, portuguese: /[ãõ]/g, turkish: /[şğı]/g, polish: /[łąęśźż]/g, french: /[œêèùûîôâ]/g };
+const count = (t, re) => (t.match(re) || []).length;
+// which language a text is in; null when there is too little to tell (a photo with a short caption is for everybody)
+function langOf(text) {
   if (typeof text !== "string" || text.length < 3) return null;
-  let best = null, top = 2;
-  for (const s of SCRIPTS) { const n = (text.match(s[2]) || []).length; if (n > top) { top = n; best = s[0]; } }
-  return best;
+  const n = k => count(text, k);
+  const kana = n(/[\u3040-\u30FF]/g), han = n(/[\u3400-\u4DBF\u4E00-\u9FFF]/g), hangul = n(/[\uAC00-\uD7AF\u1100-\u11FF]/g);
+  const arab = n(/[\u0600-\u06FF\u0750-\u077F]/g), cyr = n(/[\u0400-\u04FF]/g), deva = n(/[\u0900-\u097F]/g), thai = n(/[\u0E00-\u0E7F]/g), heb = n(/[\u0590-\u05FF]/g), greek = n(/[\u0370-\u03FF]/g);
+  const lat = n(/[A-Za-z\u00C0-\u024F]/g);
+  const top = Math.max(kana + han, hangul, arab, cyr, deva, thai, heb, greek, lat);
+  if (top < 3) return null;
+  if (kana + han === top) return kana > 0 ? "japanese" : "chinese";
+  if (hangul === top) return "korean";
+  if (arab === top) return n(/[ٹڈڑںے]/g) ? "urdu" : n(/[پچژگ]/g) ? "persian" : "arabic";
+  if (cyr === top) return n(/[їєґ]/g) ? "ukrainian" : "russian";
+  if (deva === top) return "hindi";
+  if (thai === top) return "thai";
+  if (heb === top) return "hebrew";
+  if (greek === top) return "greek";
+  const words = text.toLowerCase().match(/[\p{L}]+/gu) || [];
+  let best = null, hi = 0, second = 0;
+  for (const k of Object.keys(WORDSET)) {
+    let sc = 0;
+    words.forEach(w => { if (WORDSET[k].has(w)) sc++; });
+    if (MARKS[k]) sc += 2 * count(text.toLowerCase(), MARKS[k]);
+    if (sc > hi) { second = hi; hi = sc; best = k; } else if (sc > second) second = sc;
+  }
+  return hi >= 2 && hi > second ? best : null;
 }
-// the writings this person reads: what they chose, or their phone's languages and what they wrote themselves
-function myScripts() {
+// the languages this person reads: what they chose, or their phone's languages and what they wrote themselves
+function myLangs() {
+  const ids = new Set(LANGS.map(l => l[0]));
+  const chosen = S && S.ui && Array.isArray(S.ui.langs) ? S.ui.langs.filter(x => ids.has(x)) : [];
+  if (chosen.length) return new Set(chosen);
   const set = new Set();
-  if (S && S.ui && Array.isArray(S.ui.langs) && S.ui.langs.length) { S.ui.langs.forEach(x => set.add(x)); return set; }
-  (navigator.languages || [navigator.language || "en"]).forEach(l => set.add(LANG_SCRIPT[String(l).slice(0, 2).toLowerCase()] || "latin"));
-  S.posts.filter(p => !p.ra && !p.ai).slice(0, 30).forEach(p => { const s = scriptOf(p.text); if (s) set.add(s); });
-  if (!set.size) set.add("latin");
+  (navigator.languages || [navigator.language || "en"]).forEach(l => { const k = PHONE_LANG[String(l).slice(0, 2).toLowerCase()]; if (k) set.add(k); });
+  S.posts.filter(p => !p.ra && !p.ai).slice(0, 30).forEach(p => { const k = langOf(p.text); if (k) set.add(k); });
+  if (!set.size) set.add("english");
   return set;
 }
 const STOP = new Set(["this", "that", "with", "have", "from", "they", "were", "what", "your", "about", "just", "will", "would", "there", "their", "been", "than", "then", "them", "into", "some", "when", "like", "more", "very", "also", "only", "over", "dont", "cant"]);
@@ -329,7 +356,7 @@ const rankCache = new Map();
 function rankFeed(arr, tab) {
   const less = (S.ui.less = S.ui.less || { a: {}, w: {} });
   const hidden = new Set(S.ui.hidden || []);
-  const langs = myScripts();
+  const langs = myLangs();
   const follows = getFollows();
   const maxT = arr.reduce((m, p) => Math.max(m, p.t), 0);
   const key = [tab, arr.length, maxT, hidden.size, Object.keys(less.a).length + ":" + Object.keys(less.w).length, [...langs].join(), follows.size].join("|");
@@ -351,7 +378,7 @@ function rankFeed(arr, tab) {
     let s;
     if (who === "me") s = rec * 1.4;
     else s = rec * (1 + 2 * a + fol) + (!fol && !a ? .12 * rec : 0);
-    const sc = scriptOf(p.text);
+    const sc = langOf(p.text);
     if (sc && !langs.has(sc)) s *= .12;
     if (less.a[who]) s *= Math.pow(.1, Math.min(2, less.a[who]));
     const hitN = wordsOf(p.text).filter(w => less.w[w]).length;
@@ -384,15 +411,16 @@ function lessLikeThis(p) {
   render();
 }
 function langSheet() {
-  const cur = myScripts();
-  const auto = !(Array.isArray(S.ui.langs) && S.ui.langs.length);
+  const ids = new Set(LANGS.map(l => l[0]));
+  const auto = !(Array.isArray(S.ui.langs) && S.ui.langs.some(x => ids.has(x)));
+  const cur = myLangs();
   const set = list => { S.ui.langs = list && list.length ? list : null; persist(); render(); setTimeout(langSheet, 150); };
   const items = [{ label: "Automatic", on: auto, fn: () => set(null) }];
-  SCRIPTS.forEach(s => items.push({ label: s[1], on: !auto && cur.has(s[0]), fn: () => { const next = new Set(auto ? [] : cur); if (next.has(s[0])) next.delete(s[0]); else next.add(s[0]); set([...next]); } }));
+  LANGS.forEach(l => items.push({ label: l[1], on: !auto && cur.has(l[0]), fn: () => { const next = new Set(auto ? [] : cur); if (next.has(l[0])) next.delete(l[0]); else next.add(l[0]); set([...next]); } }));
   items.push({ label: "Done", cancel: true });
   sheet(items, "Languages I read");
 }
-const langText = () => { const auto = !(Array.isArray(S.ui.langs) && S.ui.langs.length); return auto ? "Automatic" : S.ui.langs.map(id => (SCRIPTS.find(s => s[0] === id) || [0, id])[1].split(" ")[0]).join(", "); };
+const langText = () => { const ids = new Set(LANGS.map(l => l[0])); const l = Array.isArray(S.ui.langs) ? S.ui.langs.filter(x => ids.has(x)) : []; return l.length ? l.map(id => LANGS.find(x => x[0] === id)[1]).sort().join(", ") : "Automatic"; };
 function feedPosts(f) {
   let a = S.posts.filter(p => !p.parent);
   if (f) {
@@ -868,7 +896,7 @@ function acts(p, big) {
     ab("like", "heart", p.lc || 0, p.liked, () => toggleRemoteLike(p, big), "Like", true),
     ab("bm", "bookmark", 0, p.saved, () => { p.saved = !p.saved; bump = p.id + "bm"; persist(); refresh(p, big); toast(p.saved ? "Saved" : "Removed from saved"); }, "Save", true),
     ab("sh", "share", 0, false, () => sharePost(p), "Share post"),
-    ab("mo", "dots", 0, false, () => sheet([...(typeof p.text === "string" && p.text ? [{ icon: "copy", label: "Copy post text", fn: () => copy(p.text || "") }] : []), { icon: "eyeoff", label: "Less like this", fn: () => lessLikeThis(p) }, { icon: "flag", label: "Report post", danger: true, fn: () => reportPost(p) }]), "More"));
+    ab("mo", "dots", 0, false, () => sheet([...(typeof p.text === "string" && p.text ? [{ icon: "copy", label: "Copy post text", fn: () => copy(p.text || "") }] : []), { icon: "eyeoff", label: "Not interested", danger: true, fn: () => lessLikeThis(p) }, { icon: "flag", label: "Report post", danger: true, fn: () => reportPost(p) }]), "More"));
   return h("div", { class: "acts" + (big ? " big" : ""), "data-pid": p.id },
     ab("rl", "reply", n, false, () => openCompose({ parent: p.id }), "Reply"),
     ab("rp", "repost", p.ai ? 0 : p.rpc || 0, p.reposted, () => (p.remote ? toggleRemoteRepost(p, big) : (p.reposted = !p.reposted, bump = p.id + "rp", persist(), refresh(p, big))), "Repost"),

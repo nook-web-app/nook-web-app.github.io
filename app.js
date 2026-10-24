@@ -155,7 +155,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.36";
+const APP_VERSION = "3.3.37";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -739,7 +739,7 @@ async function postPic(p) {
   const cw = W - pad * 2;
   const lines = p.text ? wrapLines(m, cleanText(p.text), cw) : [];
   const src = p.imgs && p.imgs.length ? p.imgs[0] : null;
-  const pic = src ? await loadPicImg(view(src)) : null;
+  const pic = src ? await loadPicImg(view(src), /^https?:/.test(view(src))) : null;
   const lurl = !pic ? firstUrl(p.text) : null;
   let card = null;
   if (lurl) {
@@ -752,7 +752,7 @@ async function postPic(p) {
     card = { th, thH, tl, dl, host: hostOf(lurl), h: thH + 24 + tl.length * 44 + dl.length * 40 + 64 };
   }
   const who = p.ai ? null : p.ra ? { name: p.ra.name, handle: p.ra.handle, avatar: p.ra.avatar } : { name: S.profile.name, handle: S.profile.handle, avatar: S.profile.avatar };
-  const me = who && who.avatar ? await loadPicImg(view(who.avatar)) : null;
+  const me = who && who.avatar ? await loadPicImg(view(who.avatar), /^https?:/.test(view(who.avatar))) : null;
   const picH = pic ? Math.min(Math.round(cw * pic.height / pic.width), 900) : 0;
   const H = pad + av + 32 + lines.length * lh + (pic ? picH + 32 : 0) + (card ? card.h + 32 : 0) + 60 + pad;
   const s = Math.sqrt(2000000 / (W * H));
@@ -926,7 +926,7 @@ function postCard(p, o) {
   if (o.pin && p.pinned) col.append(h("div", { class: "rt" }, ic("pin", 14), "Pinned post"));
   const pname = p.ai ? "Zenith" : p.ra ? p.ra.name : S.profile.name, phand = p.ai ? "@zenith" : "@" + (p.ra ? p.ra.handle : S.profile.handle);
   col.append(h("div", { class: "ph2" }, pname ? h("span", { class: "pn" }, pname) : null, h("span", { class: "pu" }, phand), h("span", { class: "pt" }, ago(p.t))));
-  if (o.replyTo && p.parent) { const par = byId(p.parent); col.append(h("div", { class: "rt" }, ic("reply", 14), "Replying to " + (par && par.ai ? "@zenith" : "@" + (par && par.ra ? par.ra.handle : S.profile.handle)))); }
+  if (o.replyTo && p.parent) { const par = byId(p.parent); col.append(h("div", { class: "rt" }, ic("reply", 14), "Replying to " + (!par ? "a post" : par.ai ? "@zenith" : "@" + (par.ra ? par.ra.handle : S.profile.handle)))); }
   if (p.text) col.append(h("div", { class: "tx" }, rich(p.text)));
   if (p.imgs.length) col.append(imgGrid(p.imgs));
   else if (firstUrl(p.text)) col.append(linkCard(firstUrl(p.text)));
@@ -2271,7 +2271,15 @@ async function loadFeed() {
     liked: liked.has(p.id), reposted: reposted.has(p.id), saved: false, lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, rp: replyTally.get(p.id) || 0,
     pinned: !!meRow && meRow.pinned_post_id === p.id
   }));
-  S.posts = S.posts.filter(p => !p.ra).concat(back, remote);
+  // what this person saved or liked stays, even when the post is older than the newest 300
+  const seen = new Set(remote.map(r => r.remote));
+  let kept = S.posts.filter(p => p.ra && (p.saved || p.liked) && !seen.has(p.remote) && !hidden.has(p.ra.id)).slice(0, 100);
+  if (kept.length) {
+    // only the ones the server still has (the author may have deleted them)
+    const { data: still, error: se } = await sb.from("posts").select("id").in("id", kept.map(p => p.remote));
+    kept = se ? [] : kept.filter(p => (still || []).some(r => r.id === p.remote));
+  }
+  S.posts = S.posts.filter(p => !p.ra).concat(back, remote, kept);
   persist();
   if (stack.length === 1 && stack[0].r === "home") render();
 }
@@ -2411,7 +2419,11 @@ function userV(cur) {
     sb.from("follows").select("follower_id").eq("follower_id", cur.id).eq("followee_id", sbUser.id),
     sb.from("blocks").select("blocked_id").eq("blocker_id", sbUser.id).eq("blocked_id", cur.id),
     sb.from("blocks").select("blocker_id").eq("blocker_id", cur.id).eq("blocked_id", sbUser.id)
-  ]).then(([{ data: acc }, { data: fol }, { data: folMe }, { data: blk }, { data: theyBlock }]) => {
+  ]).then(results => {
+    const [{ data: acc }, { data: fol }, { data: folMe }, { data: blk }, { data: theyBlock }] = results;
+    // a page the person has already left is not touched, and a failed call is not shown as a block
+    if (stack[stack.length - 1] !== cur) return;
+    if (results.some(r => r && r.error)) return;
     if (!acc || (theyBlock && theyBlock.length)) {
       main.textContent = "";
       main.append(h("div", { class: "rest" }, h("b", {}, who.name), h("p", { class: "note" }, "This account blocked you")));
@@ -2494,6 +2506,8 @@ async function pushPost(np) {
   }
   if (par) row.parent_id = par.remote;
   const { data, error } = await sb.from("posts").insert(row).select("id").single();
+  // deleted on this phone while it was still uploading: it goes from the server again
+  if (!error && data && !S.posts.includes(np)) { S.pendDel = (S.pendDel || []).concat(data.id); persist(); serverDelete([{ remote: data.id, media: urls || [] }]); return; }
   if (!error && data) { np.remote = data.id; np.media = urls || []; persist(); }
   else {
     if (urls && urls.length) sb.storage.from("media").remove(urls.map(u => storagePath(u, "media")).filter(Boolean)).then(() => {}, () => {});
@@ -2509,6 +2523,7 @@ function bannedHit(text) {
 function openCompose(o) {
   o = o || {};
   const parent = o.parent ? byId(o.parent) : null;
+  if (parent && !parent.remote && !parent.ai && !parent.ra) { toast("Wait for the post to finish uploading"); return; }
   const ed = o.edit ? byId(o.edit) : null;
   let imgs = ed ? ed.imgs.slice() : [];
   const jobs = [];
@@ -4351,6 +4366,8 @@ async function openRows(rows, otherId, waitFor) {
   return out;
 }
 async function sendDm(otherId, text, srcs, dims) {
+  // the key of this phone must be known to the other person before a message is sealed with it
+  await ensureE2E().catch(() => {});
   const media = [];
   const paths = [];
   const key = srcs.length ? await sharedKey(otherId) : null;
@@ -4766,6 +4783,7 @@ function dmV(c) {
       threadPush(c.id, saved);
       // keep the bubble that is already on screen: no re-render, no flash
       row.dataset.mid = String(saved.id);
+      list.querySelectorAll('[data-mid="' + saved.id + '"]').forEach(d => { if (d !== row) d.remove(); });
       row.classList.remove("tmpm");
       row._sig = dmSig(saved);
       row._m = Object.assign({}, saved, { text });

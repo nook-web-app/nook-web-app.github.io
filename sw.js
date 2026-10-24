@@ -1,6 +1,6 @@
-const VERSION = "nook-3.2.22";
+const VERSION = "nook-3.2.23";
 const SHARE_CACHE = "nook-share";
-const SHELL = ["./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
+const SHELL = ["./", "index.html", "app.js", "update.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).catch(() => {}));
 });

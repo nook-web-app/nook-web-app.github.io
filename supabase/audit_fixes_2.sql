@@ -64,15 +64,13 @@ begin
   return n;
 end $function$;
 
--- 3. upload limits per person (the app never gets close to these)
-alter policy "media upload own" on storage.objects with check (
-  bucket_id = 'media' and (storage.foldername(name))[1] = (auth.uid())::text
-  and (select count(*) from storage.objects o where o.bucket_id = 'media' and (storage.foldername(o.name))[1] = (auth.uid())::text) < 300
-);
-alter policy "dm media upload own folder" on storage.objects with check (
-  bucket_id = 'dm-media' and (storage.foldername(name))[1] = (auth.uid())::text
-  and (select count(*) from storage.objects o where o.bucket_id = 'dm-media' and (storage.foldername(o.name))[1] = (auth.uid())::text) < 600
-);
+-- 3. upload limits per person (the app never gets close to these); the count runs in a function, a policy that reads its own table breaks uploads
+create or replace function public.nook_upload_count(p_bucket text) returns int language sql stable security definer set search_path to 'public' as $$
+  select count(*)::int from storage.objects o where o.bucket_id = p_bucket and (storage.foldername(o.name))[1] = (select auth.uid())::text
+$$;
+grant execute on function public.nook_upload_count(text) to authenticated;
+alter policy "media upload own" on storage.objects with check (bucket_id = 'media' and (storage.foldername(name))[1] = (auth.uid())::text and public.nook_upload_count('media') < 300);
+alter policy "dm media upload own folder" on storage.objects with check (bucket_id = 'dm-media' and (storage.foldername(name))[1] = (auth.uid())::text and public.nook_upload_count('dm-media') < 600);
 update storage.buckets set file_size_limit = 10485760 where id = 'media';
 
 -- 4. a report can only hide a photo post when two different, older accounts reported it

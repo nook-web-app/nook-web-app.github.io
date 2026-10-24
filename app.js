@@ -134,7 +134,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.8";
+const APP_VERSION = "3.3.10";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -3369,7 +3369,7 @@ function cacheWrite(k, v) {
     } catch (e2) {}
   }
 }
-// the pictures people see first are loaded before the app opens, so they never pop in later (waits 3 seconds at most)
+// the pictures people see first are loaded before the app opens, so they never pop in later (waits 1.5 seconds at most)
 async function preloadAvatars(own) {
   const urls = new Set();
   const add = u => { if (typeof u === "string" && u) urls.add(u); };
@@ -3386,7 +3386,7 @@ async function preloadAvatars(own) {
     i.src = view(u);
     if (i.decode) i.decode().then(res, res);
   });
-  await Promise.race([Promise.all([...urls].slice(0, 40).map(load)), new Promise(r => setTimeout(r, 3000))]);
+  await Promise.race([Promise.all([...urls].slice(0, 40).map(load)), new Promise(r => setTimeout(r, 1500))]);
 }
 function cacheFresh(k, ttl) {
   const r = cacheRead(k);
@@ -4619,6 +4619,9 @@ function renderRail() {
     rowBtn(ic("sliders", 20), "Settings", () => root("settings"))]);
 }
 function render(anim) {
+  // the logo that covers the page while it starts goes away when the first screen is ready
+  const sp = document.getElementById("splash");
+  if (sp) { sp.classList.add("out"); setTimeout(() => sp.remove(), 220); }
   let cur = stack[stack.length - 1];
   while (stack.length > 1 && ((cur.r === "thread" && !byId(cur.id)) || (cur.r === "conv" && !S.chats.some(x => x.id === cur.id)) || (cur.r === "list" && !S.lists.some(x => x.id === cur.id)))) {
     stack.pop(); scrolls.pop(); cur = stack[stack.length - 1];
@@ -4677,11 +4680,15 @@ async function boot() {
   sbUser = sess && sess.session ? sess.session.user : null;
   let ageHeld = false, ownAvatar = null;
   if (sbUser) {
-    const { data: ban } = await sb.from("bans").select("user_id").eq("user_id", sbUser.id).maybeSingle();
+    // the three checks run side by side, so the first screen waits for one round trip instead of three
+    const [{ data: ban }, { data: acct, error: aerr }, { data: held }] = await Promise.all([
+      sb.from("bans").select("user_id").eq("user_id", sbUser.id).maybeSingle(),
+      sb.from("accounts").select("id, deactivated, username, avatar, display_name").eq("id", sbUser.id).maybeSingle(),
+      sb.rpc("my_age_hold")
+    ]);
     if (ban) { hist(true); showBanned(); return; }
-    const { data: acct, error: aerr } = await sb.from("accounts").select("id, deactivated, username, avatar, display_name").eq("id", sbUser.id).maybeSingle();
     if (acct) ownAvatar = acct.avatar || null;
-    if (acct) { const { data: held } = await sb.rpc("my_age_hold"); acct.age_hold = held === true; }
+    if (acct) acct.age_hold = held === true;
     ageHeld = !!(acct && acct.age_hold);
     if (!aerr && (!acct || acct.deactivated)) { await sb.auth.signOut(); sbUser = null; }
     else if (sbUser && await foreignLocalData(acct)) { await wipeLocal(true); try { localStorage.setItem(LOCAL_UID, sbUser.id); } catch (e) {} location.reload(); return; }
@@ -4837,6 +4844,7 @@ if (window.visualViewport) {
 window.addEventListener("pagehide", flush);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flush(); });
 boot();
+setTimeout(() => { const sp = document.getElementById("splash"); if (sp) sp.remove(); }, 8000);
 setInterval(zenTick, 60000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") zenTick(); });
 window.addEventListener("load", () => setTimeout(zenTick, 1500));

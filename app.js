@@ -135,7 +135,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.26";
+const APP_VERSION = "3.3.27";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -3802,7 +3802,7 @@ async function unlockModal() {
     title: "Open your messages",
     action: "Later",
     body: [
-      h("p", { class: "note" }, "Your messages are locked so only you can read them. The key lives on your other phone."),
+      h("p", { class: "note" }, "Your messages are locked. Open them on this phone."),
       h("button", { class: "pri", style: "width:100%;margin-top:6px", onclick: () => m.close(waitForApprovalModal) }, "Approve on my other phone"),
       bk ? h("button", { class: "ghost", style: "width:100%;margin-top:10px", onclick: () => m.close(restoreKeysModal) }, "Use my recovery password") : null,
       h("button", { class: "tbtn dng", style: "margin-top:14px", onclick: () => confirmSheet("Start fresh? Older messages will not open anymore, here or for the other person.", "Start fresh", async () => {
@@ -3810,6 +3810,7 @@ async function unlockModal() {
       }) }, "Start fresh")],
     onAction: close => close()
   });
+  m.act.hidden = true;
 }
 // this phone asks, the other one answers
 async function waitForApprovalModal() {
@@ -3820,7 +3821,7 @@ async function waitForApprovalModal() {
   const m = modal({
     title: "Approve on your other phone",
     action: "Done",
-    body: [h("p", { class: "note" }, "Open Nook on your other phone. It asks you to approve this one. Tap Approve only if it shows the same code as below."), box, msg],
+    body: [h("p", { class: "note" }, "On your other phone tap Approve. The code must match."), box, msg],
     onCancel: close => { stop = true; if (linkId) sb.from("key_links").delete().eq("id", linkId).then(() => {}); close(unlockModal); },
     onAction: close => { stop = true; if (linkId) sb.from("key_links").delete().eq("id", linkId).then(() => {}); close(); }
   });
@@ -3886,11 +3887,11 @@ async function approveLinkModal(req) {
   const m = modal({
     title: "New phone",
     action: "Approve",
-    body: [h("p", { class: "note" }, "A new phone wants to open your messages. Approve only if you just asked for it and it shows this same code."), codeBox(code), legacy ? h("p", { class: "note", style: "color:var(--danger)" }, "This phone has to make a new message key to share it. Older messages stop opening, here and for the other person. New ones work everywhere.") : null, msg],
+    body: [h("p", { class: "note" }, "A new phone wants your messages. Approve only if the code matches."), codeBox(code), legacy ? h("p", { class: "note", style: "color:var(--danger)" }, "Makes a new key. Older messages stop opening.") : null, msg],
     onCancel: close => { deny(); close(); },
     onAction: async close => {
       msg.textContent = "";
-      m.act.disabled = true; m.act.textContent = "Working...";
+      m.act.disabled = true;
       try {
         let rec = await myKeys();
         if (!rec.priv.extractable) {
@@ -3911,33 +3912,35 @@ async function approveLinkModal(req) {
         if (up.error) throw up.error;
         close();
         toast("Approved");
-      } catch (e) { msg.textContent = "Something went wrong. Try again"; } finally { m.act.disabled = false; m.act.textContent = "Approve"; }
+      } catch (e) { msg.textContent = "Something went wrong. Try again"; } finally { m.act.disabled = false; }
     }
   });
 }
 // turn the login password copy back on: the password is checked first
-function loginBackupModal() {
+async function loginBackupModal() {
+  const k0 = await peekKeys().catch(() => null);
+  const legacy = !!k0 && !k0.priv.extractable;
   const pw = pwField("Your login password");
   const msg = h("p", { class: "note", role: "alert" });
   const m = modal({
     title: "Save with login password",
     action: "Save",
-    body: [h("p", { class: "note" }, "Your message key is saved locked with your login password, so signing in on a new phone opens your messages. Your password reaches Nook when you sign in, so this is less private than a recovery password."), pw.wrap, msg],
+    body: [h("p", { class: "note" }, "A new phone opens your messages when you sign in. Less private than a recovery password."), legacy ? h("p", { class: "note", style: "color:var(--danger)" }, "Makes a new key. Older messages stop opening.") : null, pw.wrap, msg],
     onAction: async close => {
       msg.textContent = "";
       if (!pw.input.value) { msg.textContent = "Type your login password"; return; }
-      m.act.disabled = true; m.act.textContent = "Working...";
+      m.act.disabled = true;
       try {
         const chk = await callFn("signin", { action: "check", password: pw.input.value }).catch(() => null);
         if (!chk) { msg.textContent = "Could not reach Nook. Check your connection"; return; }
         if (!chk.ok) { msg.textContent = signinMsg(chk); return; }
+        if (legacy) { await makeNewKey(); resetKeyCaches(); }
         const r = await loginBackup(pw.input.value, { enable: true, reseal: true });
-        if (r === "legacy") { msg.textContent = "This phone's key cannot be saved. Add a recovery password first, it makes a new key"; return; }
         if (r !== "saved") { msg.textContent = "Could not save it. Try again"; return; }
         close();
         toast("Saved with your login password");
-        render();
-      } finally { m.act.disabled = false; m.act.textContent = "Save"; }
+        if (legacy) setTimeout(() => location.reload(), 400); else render();
+      } catch (e) { msg.textContent = "Something went wrong. Try again"; } finally { m.act.disabled = false; }
     }
   });
 }
@@ -3949,7 +3952,7 @@ async function restoreKeysModal() {
   const m = modal({
     title: "Unlock messages",
     action: "Unlock",
-    body: [h("p", { class: "note" }, "This account has a saved message key. Type your recovery password to open your old messages on this phone."), pw.wrap, msg,
+    body: [h("p", { class: "note" }, "Type your recovery password."), pw.wrap, msg,
       h("button", { class: "tbtn dng", onclick: () => confirmSheet("Make a new message key? Older messages will not open anymore, here or for the other person.", "Make new key", async () => {
         try {
           await makeNewKey();
@@ -3961,7 +3964,7 @@ async function restoreKeysModal() {
     onAction: async close => {
       msg.textContent = "";
       if (!pw.input.value) { msg.textContent = "Type your recovery password"; return; }
-      m.act.disabled = true; m.act.textContent = "Working...";
+      m.act.disabled = true;
       try {
         const { data: row, error } = await sb.from("key_backups").select("salt, iv, ct, iters, pub").eq("user_id", sbUser.id).eq("mode", "recovery").maybeSingle();
         if (error || !row) { msg.textContent = "Could not load the saved key. Try again"; return; }
@@ -3974,7 +3977,7 @@ async function restoreKeysModal() {
         close();
         toast("Messages unlocked");
         setTimeout(() => location.reload(), 500);
-      } finally { m.act.disabled = false; m.act.textContent = "Unlock"; }
+      } finally { m.act.disabled = false; }
     }
   });
 }
@@ -3989,16 +3992,15 @@ async function backupSetupModal(changing) {
     title: changing ? "New recovery password" : "Message key backup",
     action: "Save",
     body: [
-      h("p", { class: "note" }, "Your messages are locked with a key that lives on this phone. A new phone can already be approved from your other phone. A recovery password saves a sealed copy for the day you lose every phone. Nook never sees the password or the key."),
-      legacy ? h("p", { class: "note", style: "color:var(--danger)" }, "Your current key cannot be saved. A new one is made, so older messages stop opening, here and for the other person. New ones work everywhere.") : null,
-      h("p", { class: "note" }, "Write the password down. If you lose it and every phone, your messages cannot be recovered."),
+      h("p", { class: "note" }, "A password only you know. Nook never sees it. Write it down, nobody can recover it."),
+      legacy ? h("p", { class: "note", style: "color:var(--danger)" }, "Makes a new key. Older messages stop opening.") : null,
       p1.wrap, p2.wrap, msg],
     onAction: async close => {
       msg.textContent = "";
       const a = p1.input.value;
       if (a.length < 10) { msg.textContent = "Use at least 10 characters. Three random words work well"; return; }
       if (a !== p2.input.value) { msg.textContent = "The two passwords do not match"; return; }
-      m.act.disabled = true; m.act.textContent = "Working...";
+      m.act.disabled = true;
       try {
         const rec = legacy ? await makeKeyPair() : cur;
         const row = await sealKeyBackup(rec.priv, rec.pub, a, "recovery");
@@ -4016,7 +4018,7 @@ async function backupSetupModal(changing) {
         close();
         toast(changing ? "Recovery password changed" : "Backup is on");
         setTimeout(() => { if (legacy) location.reload(); else render(); }, legacy ? 500 : 0);
-      } catch (e) { msg.textContent = "Something went wrong. Try again"; } finally { m.act.disabled = false; m.act.textContent = "Save"; }
+      } catch (e) { msg.textContent = "Something went wrong. Try again"; } finally { m.act.disabled = false; }
     }
   });
 }

@@ -936,8 +936,8 @@ alter table public.posts add constraint posts_mod_status_chk check (mod_status i
 -- reports: one row per reporter and post; two reports send a post back to the AI check
 -- functions nook_posts_guard (forces pending on media posts), nook_moderate_kick, nook_moderate_sweep (cron every minute),
 -- nook_report_guard, nook_report_after; policy "anyone can read posts" only shows mod_status = 'safe' to other people
--- edge function: supabase/functions/moderate (needs the secret ZENITH_PASSWORD, the same password as in Settings > Zenith)
--- edge function: supabase/functions/zenith (owner only, adds ZENITH_PASSWORD on the server so the password never sits on a device)
+-- edge function: supabase/functions/moderate (reads the Gemini key from the vault, secret name gemini_api_key)
+-- edge function: supabase/functions/zenith (owner only, calls Gemini with the vault key so the key never sits on a device)
 
 -- v2.13.2: delete a chat for both people
 -- create function public.delete_chat(p_other uuid): deletes every message between the caller and p_other (media is purged by trigger); execute granted to authenticated only

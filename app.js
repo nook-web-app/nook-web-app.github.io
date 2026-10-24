@@ -155,7 +155,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.7";
+const APP_VERSION = "3.4.8";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -3517,20 +3517,31 @@ function newAccountModal() {
 }
 function addAccountModal() {
   const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "email", "aria-label": "Email" });
-  const pass = h("input", { class: "in", type: "password", placeholder: "Password", autocomplete: "current-password", "aria-label": "Password", style: "padding-right:60px" });
-  const eye = h("button", { type: "button", class: "tbtn", "aria-label": "Show password", style: "position:absolute;right:14px;top:50%;transform:translateY(-50%);padding:6px 0;color:var(--muted);font-size:var(--fs-md);font-weight:600", onclick: () => { const show = pass.type === "password"; pass.type = show ? "text" : "password"; eye.textContent = show ? "Hide" : "Show"; eye.setAttribute("aria-label", show ? "Hide password" : "Show password"); } }, "Show");
+  const pw = pwField("Password");
+  const pass = pw.input;
   const msg = h("p", { class: "note", role: "alert" });
   // the message also shows as a toast, because the keyboard can cover the line under the fields
   const say = t => { msg.textContent = t; if (t) toast(t); };
+  const go1 = h("button", { class: "pri" }, "Sign in");
   const m = modal({
-    title: "Add account",
+    title: "",
     action: "Add",
-    body: [h("p", { class: "note" }, "Sign in to the other account. Its login stays on this phone only."), h("div", { class: "fld" }, email), h("div", { class: "fld", style: "position:relative" }, pass, eye), msg, h("button", { class: "ghost", style: "width:100%;margin-top:10px", onclick: () => m.close(newAccountModal) }, "Create a new account")],
-    onAction: async close => {
+    body: [h("div", { class: "auth", style: "padding-top:max(4vh,16px)" },
+      h("h1", {}, "Nook"),
+      h("p", { class: "sub" }, "Sign in to continue"),
+      email, pw.wrap, msg, go1,
+      h("button", { class: "tbtn", onclick: () => recoverModal(email.value.trim()) }, "Forgot password?"),
+      h("button", { class: "ghost", onclick: () => m.close(newAccountModal) }, "Make an account"))],
+    onAction: close => add(close)
+  });
+  m.act.hidden = true;
+  go1.addEventListener("click", () => add(m.close));
+  pass.addEventListener("keydown", e => { if (e.key === "Enter") go1.click(); });
+  const add = async close => {
       msg.textContent = "";
       const e = email.value.trim();
       if (!e || !pass.value) { say("Enter the email and password"); return; }
-      m.act.disabled = true;
+      go1.disabled = true;
       try {
         const r = await callFn("signin", { email: e, password: pass.value }).catch(() => null);
         if (!r) { say("Could not reach Nook. Check your connection"); return; }
@@ -3548,9 +3559,8 @@ function addAccountModal() {
         close();
         toast("Account added");
         setTimeout(openAccounts, 350);
-      } finally { m.act.disabled = false; }
-    }
-  });
+      } finally { go1.disabled = false; }
+  };
 }
 // the name, handle and picture of every account on this phone, read fresh so a changed picture shows at once
 async function refreshAcctEntries(list) {

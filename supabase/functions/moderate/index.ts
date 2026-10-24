@@ -1,7 +1,15 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
-const WORKER = "https://ai-nook-chat.haythamzoubi960-322.workers.dev/";
+// the Gemini key is saved in the database vault (secret name gemini_api_key); it is looked up once a minute at most
+let keyCache = { v: "", at: 0 };
+async function geminiKey(): Promise<string> {
+  if (Date.now() - keyCache.at < 60000) return keyCache.v;
+  const { data } = await admin.rpc("nook_gemini_key");
+  keyCache = { v: typeof data === "string" ? data : "", at: Date.now() };
+  return keyCache.v;
+}
+const MODEL = Deno.env.get("ZENITH_MODEL") || "gemini-3.5-flash-lite";
 const MAX_IMG = 12 * 1024 * 1024;
 const PER_SWEEP = 5;
 
@@ -82,10 +90,12 @@ let lastNote = "";
 
 // why the last "sexual" answer was given, saved with the warning so a wrong call can be understood
 let why = "";
+// deno-lint-ignore no-explicit-any
 function readVerdict(j: any): Verdict {
   if (j && j.promptFeedback && j.promptFeedback.blockReason) { why = "blocked by the AI service: " + j.promptFeedback.blockReason; return "sexual"; }
   const c = j && j.candidates && j.candidates[0];
   if (!c) return null;
+  // deno-lint-ignore no-explicit-any
   const t = ((c.content && c.content.parts) || []).map((p: any) => p.text || "").join(" ").trim();
   const first = (t.split(/\s+/)[0] || "").replace(/[^A-Za-z]/g, "").toUpperCase();
   if (first === "SEXUAL" || first === "UNSAFE") { why = "the AI said: " + t.slice(0, 200); return "sexual"; }
@@ -97,11 +107,15 @@ function readVerdict(j: any): Verdict {
 }
 
 async function ask(parts: unknown[], system = SYSTEM): Promise<Verdict> {
-  const password = Deno.env.get("ZENITH_PASSWORD");
-  if (!password) { lastNote = "no ZENITH_PASSWORD secret"; return null; }
+  const key = await geminiKey();
+  if (!key) { lastNote = "no gemini key in the vault"; return null; }
   try {
-    const r = await fetch(WORKER, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password, system, history: [{ role: "user", parts }] }) });
-    if (!r.ok) { lastNote = "worker " + r.status + " " + (await r.text()).slice(0, 120); return null; }
+    const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + ":generateContent", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: [{ role: "user", parts }], generationConfig: { temperature: 0, maxOutputTokens: 400, thinkingConfig: { thinkingLevel: "low" } } }),
+    });
+    if (!r.ok) { lastNote = "gemini " + r.status + " " + (await r.text()).slice(0, 120); return null; }
     const j = await r.json();
     const v = readVerdict(j);
     if (v === null) lastNote = "unreadable answer " + JSON.stringify(j).slice(0, 200);
@@ -283,6 +297,7 @@ async function runAccount(id: string) {
 }
 
 // only acts on the media that was really checked; a post edited meanwhile stays pending and is looked at again
+// deno-lint-ignore no-explicit-any
 const sameMedia = (q: any, checked: string | null) => (checked == null ? q.is("media_url", null) : q.eq("media_url", checked));
 async function finish(id: string, v: Verdict, checked: string | null) {
   if (v === "safe") {

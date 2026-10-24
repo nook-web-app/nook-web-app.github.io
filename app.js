@@ -155,7 +155,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.14";
+const APP_VERSION = "3.4.15";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1983,7 +1983,11 @@ function settingsV() {
   main.append(h("div", { class: "group" },
     row(ic("copy", 22), "Download backup", "Posts, messages and media in a zip", () => downloadBackup())));
   main.append(sec("Updates"));
-  main.append(h("div", { class: "group" }, row(ic("check", 22), "Check for updates", "You are on version " + APP_VERSION, () => (window.nookCheckUpdate ? window.nookCheckUpdate() : toast("Not available right now")))));
+  main.append(h("div", { class: "group" }, row(ic("check", 22), "Check for updates", "You are on version " + APP_VERSION, () => {
+    if (!window.nookCheckUpdate) { toast("Not available right now"); return; }
+    if (window.nookPtr) window.nookPtr.spin();
+    Promise.resolve(window.nookCheckUpdate()).catch(() => {}).then(() => { if (window.nookPtr) window.nookPtr.stop(); });
+  })));
   main.append(sec("Legal"));
   main.append(h("div", { class: "group" },
     row(ic("eyeoff", 22), "Privacy Policy", "What we keep and why.", () => go({ r: "privacy" })),
@@ -5755,6 +5759,24 @@ if (window.visualViewport) {
     ptr.classList.add("snap");
     ptr.style.opacity = "0";
     ptr.style.transform = "translateY(" + (ty - 44) + "px)";
+  };
+  // the same round spinner is shown while "Check for updates" works
+  window.nookPtr = {
+    spin() {
+      if (busy) return;
+      busy = true;
+      ty = main.getBoundingClientRect().top;
+      ptr.classList.add("snap", "spin");
+      ptr.firstChild.style.transform = "";
+      ptr.style.opacity = "1";
+      ptr.style.transform = "translateY(" + (ty - 8) + "px)";
+    },
+    stop() {
+      if (!busy) return;
+      busy = false;
+      ptr.classList.remove("spin");
+      reset();
+    }
   };
   async function run() {
     busy = true;

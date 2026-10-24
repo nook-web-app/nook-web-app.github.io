@@ -133,7 +133,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.2.35";
+const APP_VERSION = "3.2.36";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -3041,19 +3041,34 @@ async function pushOn() {
     catch (e) { throw new Error("Could not connect to the push service on this device"); }
   }
   if (!(await pushSave(sub))) throw new Error("Could not save this device");
+  try { localStorage.removeItem("nook-push-off"); localStorage.setItem("nook-push-ep", sub.endpoint); } catch (e) {}
 }
 async function pushOff() {
   const sub = await pushSub();
   if (!sub) return;
   const ep = sub.endpoint;
+  try { localStorage.setItem("nook-push-off", "1"); localStorage.removeItem("nook-push-ep"); } catch (e) {}
   try { await sub.unsubscribe(); } catch (e) {}
   if (sbUser) await sb.from("push_subs").delete().eq("endpoint", ep);
 }
 // keep this device's subscription fresh, and make sure it belongs to whoever is signed in
 async function pushSync() {
   if (!pushOk() || Notification.permission !== "granted") return;
-  const sub = await pushSub();
-  if (sub) await pushSave(sub).catch(() => {});
+  let off = false, saved = "";
+  try { off = localStorage.getItem("nook-push-off") === "1"; saved = localStorage.getItem("nook-push-ep") || ""; } catch (e) {}
+  if (off) return;
+  let sub = await pushSub();
+  try {
+    const reg = await swReady(5000);
+    if (sub && sub.endpoint === saved) {
+      // the server drops a push address that the phone no longer answers to: when this one is gone from the list, start a new one
+      const { data } = await sb.from("push_subs").select("endpoint").eq("endpoint", sub.endpoint).maybeSingle();
+      if (!data) { try { await sub.unsubscribe(); } catch (e) {} sub = null; }
+    }
+    // permission is still allowed but the phone lost its push address (storage was cleared): make a new one
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToU8(VAPID_PUBLIC) });
+  } catch (e) { return; }
+  if (sub && (await pushSave(sub).catch(() => false))) { try { localStorage.setItem("nook-push-ep", sub.endpoint); } catch (e) {} }
 }
 async function pushDetach() {
   const sub = await pushSub();
@@ -3528,7 +3543,7 @@ async function openText(otherId, raw) {
     const key = await sharedKey(otherId);
     const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(parts[0]) }, key, fromB64(parts[1]));
     return new TextDecoder().decode(pt);
-  } catch (e) { return "[can't open this message]"; }
+  } catch (e) { return "Can't open this one (the chat key changed)"; }
 }
 function loadEncMedia(md, otherId) {
   if (!e2eEnc.has(md.url)) {

@@ -155,7 +155,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.38";
+const APP_VERSION = "3.3.39";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -512,7 +512,7 @@ function copy(text) {
 
 function sheet(items, title) {
   const scrim = h("div", { class: "scrim", onclick: close });
-  const row = i => h("button", { class: "si" + (i.danger ? " danger" : "") + (i.on ? " on" : "") + (i.icon || i.av ? "" : " plain"), onclick: () => { close(); if (i.fn) i.fn(); } }, i.av ? h("span", { class: "sic" }, rAv(i.av, 32)) : i.icon ? h("span", { class: "sic" }, ic(i.icon, 20)) : null, h("span", {}, i.label));
+  const row = i => h("button", { class: "si" + (i.danger ? " danger" : "") + (i.on ? " on" : "") + (i.icon || i.av ? "" : " plain"), onclick: () => { close(); if (i.fn) i.fn(); } }, i.av ? h("span", { class: "sic" }, rAv(i.av, 32)) : i.icon ? h("span", { class: "sic" }, ic(i.icon, 20)) : null, h("span", {}, i.label), i.trail ? h("span", { class: "trail" }, i.trail) : null);
   const grab = h("div", { class: "grab" }, h("i"));
   const sh = h("div", { class: "sheet", role: "dialog", "aria-label": title || "Options" }, grab, title ? h("div", { class: "st" }, title) : null,
     h("div", { class: "sg" }, items.filter(i => !i.cancel).map(row)),
@@ -1804,7 +1804,7 @@ function settingsV() {
   main.append(h("div", { class: "seg" }, [["system", "System"], ["dark", "Dark"], ["light", "Light"]].map(t => h("button", { class: S.ui.theme === t[0] ? "on" : "", onclick: e => { S.ui.theme = t[0]; applyTheme(); persist(); e.currentTarget.parentNode.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === e.currentTarget)); } }, t[1]))));
   main.append(sec("Account"));
   const swRow = row(ic("userswap", 22), "Switch account", "Add or switch account", openAccounts);
-  main.append(h("div", { class: "group" }, row(avatar(36), "Edit profile", "@" + S.profile.handle, editProfile), swRow, row(ic("usercut", 22), "Sign out", "Log out of this device.", async () => { await pushDetach().catch(() => {}); await leaveThisAccount(); })));
+  main.append(h("div", { class: "group" }, row(avatar(36), "Edit profile", "@" + S.profile.handle, editProfile), swRow, row(ic("usercut", 22), "Sign out", "Log out of this device.", () => confirmSheet("Sign out of @" + S.profile.handle + " on this phone?", "Sign out", signOutNow))));
   main.append(sec("Login"));
   const totpRow = row(ic("shield", 22), "Authenticator app", rowSubs.totp || "Checking...", async () => {
     if (totpOn === null) { toast("One moment..."); return; }
@@ -3384,6 +3384,13 @@ async function switchAccountNow(id) {
     addAccountModal();
   }
 }
+// a slow network never holds up leaving: the phone is cleared first, the server is told on the way out
+async function signOutNow() {
+  if (leaving) return;
+  toast("Signing out...");
+  await Promise.race([pushDetach().catch(() => {}), wait(2000)]);
+  await leaveThisAccount();
+}
 async function leaveThisAccount() {
   leaving = true;
   const me = sbUser.id;
@@ -3392,7 +3399,13 @@ async function leaveThisAccount() {
   try { Object.keys(localStorage).filter(k => k.startsWith(CACHE_PFX) && k.includes(me)).forEach(k => localStorage.removeItem(k)); } catch (e) {}
   const rest = await acctList();
   const next = rest.find(a => a.id === mainAccountId(rest)) || rest[0];
-  try { await sb.auth.signOut({ scope: "local" }); } catch (e) {}
+  // this phone's login is removed here and now; telling the server happens in the background and can fail without blocking anything
+  try {
+    const { data: cur } = await Promise.race([sb.auth.getSession(), wait(1500).then(() => ({ data: null }))]);
+    const tok = cur && cur.session ? cur.session.access_token : null;
+    if (tok) fetch(SB_URL + "/auth/v1/logout?scope=local", { method: "POST", headers: { apikey: SB_KEY, authorization: "Bearer " + tok }, keepalive: true }).catch(() => {});
+    Object.keys(localStorage).filter(k => /^sb-.*-auth-token$/.test(k)).forEach(k => localStorage.removeItem(k));
+  } catch (e) {}
   if (next && (await enterAccount(next))) return;
   location.reload();
 }
@@ -3450,6 +3463,7 @@ function newAccountModal() {
         } catch (x) {}
         const list = await acctList();
         await acctPut("list", list.filter(x => x.id !== id).concat({ id, rt: sr.body.session.refresh_token, username: u, name: n, avatar: null, main: false }));
+        await linkSavedAccounts(id, sr.body.session.access_token);
         close();
         toast("Account created");
         setTimeout(openAccounts, 350);
@@ -3483,6 +3497,7 @@ function addAccountModal() {
         if (!info || !info.username) { msg.textContent = "Could not load that account. Try again"; return; }
         const list = await acctList();
         await acctPut("list", list.filter(a => a.id !== info.id).concat({ id: info.id, rt: r.body.session.refresh_token, username: info.username, name: info.display_name || info.username, avatar: typeof info.avatar === "string" && info.avatar.length < 400000 ? info.avatar : null, main: false }));
+        await linkSavedAccounts(info.id, r.body.session.access_token);
         close();
         toast("Account added");
         setTimeout(openAccounts, 350);
@@ -3506,18 +3521,78 @@ async function refreshAcctEntries(list) {
   return list;
 }
 const wait = ms => new Promise(r => setTimeout(r, ms));
+// accounts linked to each other: the server remembers it, every phone then lists them, and each one still opens with its own password
+async function linkSavedAccounts(newId, newToken) {
+  try {
+    const { data } = await sb.auth.getSession();
+    const mine = data && data.session;
+    if (!mine) return;
+    const list = await acctList();
+    const tokens = newToken ? [newToken] : [];
+    const tmp = window.supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+    let changed = false;
+    for (const a of list) {
+      if (a.id === sbUser.id || a.id === newId || !a.rt) continue;
+      const r = await tmp.auth.refreshSession({ refresh_token: a.rt });
+      if (r.data && r.data.session) { tokens.push(r.data.session.access_token); a.rt = r.data.session.refresh_token; changed = true; }
+    }
+    if (changed) await acctPut("list", list);
+    await fetch(SB_URL + "/functions/v1/link-accounts", { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, authorization: "Bearer " + mine.access_token }, body: JSON.stringify({ tokens }) });
+  } catch (e) {}
+}
+// a linked account that is not on this phone yet: its password opens it here
+function linkedLoginModal(x) {
+  const pw = pwField("Password");
+  const msg = h("p", { class: "note", role: "alert" });
+  const m = modal({
+    title: "@" + x.username,
+    action: "Switch",
+    body: [pw.wrap, msg],
+    onAction: async close => {
+      msg.textContent = "";
+      if (!pw.input.value) { msg.textContent = "Enter the password"; return; }
+      m.act.disabled = true;
+      try {
+        const r = await callFn("signin", { action: "linked", target: x.id, password: pw.input.value }).catch(() => null);
+        if (!r) { msg.textContent = "Could not reach Nook. Check your connection"; return; }
+        if (r.body && r.body.error === "banned") { msg.textContent = "That account is banned"; return; }
+        if (!r.ok) { msg.textContent = r.body && r.body.error === "not_linked" ? "That account is not linked anymore" : signinMsg(r); return; }
+        const list = await acctList();
+        await acctPut("list", list.filter(a => a.id !== x.id).concat({ id: x.id, rt: r.body.session.refresh_token, username: x.username, name: x.name, avatar: x.avatar, main: false }));
+        close(() => switchAccount(x.id));
+      } finally { m.act.disabled = false; }
+    }
+  });
+}
 async function openAccounts() {
   const all0 = await acctList();
   const all = await Promise.race([refreshAcctEntries(all0).catch(() => all0), wait(700).then(() => all0)]);
+  // the linked accounts that are not on this phone yet
+  let others = [], linkedIds = new Set();
+  try {
+    const { data: ls } = await Promise.race([sb.from("account_links").select("b").eq("a", sbUser.id), wait(1200).then(() => ({ data: null }))]);
+    linkedIds = new Set((ls || []).map(r => r.b));
+    const missing = [...linkedIds].filter(id => !all.some(a => a.id === id));
+    if (missing.length) {
+      const m = await cachedAccounts(missing);
+      others = missing.map(id => { const x = m.get(id) || {}; return { id, username: x.username || "", name: x.display_name || x.username || "", avatar: typeof x.avatar === "string" && x.avatar.length < 400000 ? x.avatar : null }; }).filter(x => x.username);
+    }
+  } catch (e) {}
   // the pictures are loaded before the sheet opens, so no letter circle shows first
-  await Promise.race([Promise.all(all.map(a => a.avatar ? new Promise(res => { const i = new Image(); i.onload = i.onerror = () => res(); i.src = view(a.avatar); }) : null)), wait(600)]);
+  await Promise.race([Promise.all([...all, ...others].map(a => a.avatar ? new Promise(res => { const i = new Image(); i.onload = i.onerror = () => res(); i.src = view(a.avatar); }) : null)), wait(600)]);
   const list = all.filter(a => a.username);
   const nm = a => a.name || a.username || "Account";
   const items = list.map(a => ({ av: { name: nm(a), avatar: a.avatar || null }, label: a.username ? "@" + a.username : nm(a), on: a.id === sbUser.id, fn: a.id === sbUser.id ? null : () => switchAccount(a.id) }));
+  others.forEach(x => items.push({ av: { name: x.name, avatar: x.avatar }, label: "@" + x.username, trail: ic("lock", 18), fn: () => linkedLoginModal(x) }));
   items.push({ icon: "plus", label: "Add account", fn: addAccountModal });
   // only an added account shows this, and only while it is the open one: the main account stays on the phone
   const cur = all.find(a => a.id === sbUser.id);
   if (cur && cur.id !== mainAccountId(all)) items.push({ icon: "close", label: "Remove this account", danger: true, fn: () => confirmSheet("Remove @" + (cur.username || "this account") + " from this phone? You need its password to add it again.", "Remove", async () => { await pushDetach().catch(() => {}); await leaveThisAccount(); }) });
+  if (linkedIds.size) items.push({ icon: "close", label: "Unlink this account", danger: true, fn: () => confirmSheet("Unlink @" + S.profile.handle + " from your other accounts? They stop listing each other on other phones.", "Unlink", async () => {
+    const me = sbUser.id;
+    const { error } = await sb.from("account_links").delete().or("a.eq." + me + ",b.eq." + me);
+    toast(error ? "Could not unlink" : "Unlinked");
+  }) });
   items.push({ label: "Cancel", cancel: true });
   sheet(items, "Accounts on this phone");
 }

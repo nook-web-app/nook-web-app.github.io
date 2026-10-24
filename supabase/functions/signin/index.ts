@@ -32,7 +32,7 @@ const okEmail = (e: string) => e.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.t
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
   if (req.method !== "POST") return json({ error: "method" }, 405);
-  let body: { action?: unknown; email?: unknown; password?: unknown; current?: unknown; check?: unknown };
+  let body: { action?: unknown; email?: unknown; password?: unknown; current?: unknown; check?: unknown; target?: unknown };
   try { body = await req.json(); } catch { return json({ error: "bad_request" }, 400); }
   const ip = await ipTag(req);
   const action = typeof body.action === "string" ? body.action : body.check === true ? "check" : "login";
@@ -51,6 +51,20 @@ Deno.serve(async (req) => {
       if (error || !data || !data.user || !data.user.email) return json({ error: "not_signed_in" }, 401);
       user = data.user;
       email = data.user.email!.trim().toLowerCase();
+    }
+
+    // a linked account of the signed in person opens with its own password, checked with the same limits as a normal login
+    if (action === "linked") {
+      const target = typeof body.target === "string" && /^[0-9a-f-]{36}$/i.test(body.target) ? body.target : "";
+      if (!target || !password) return json({ error: "bad_request" }, 400);
+      const { data: link } = await admin.from("account_links").select("a").eq("a", user!.id).eq("b", target).maybeSingle();
+      if (!link) return json({ error: "not_linked" }, 403);
+      const { data: tu } = await admin.auth.admin.getUserById(target);
+      const tEmail = tu && tu.user && tu.user.email ? tu.user.email.trim().toLowerCase() : "";
+      if (!tEmail) return json({ error: "no_account" }, 404);
+      const got = await proveOld(tEmail, password, ip);
+      if (got instanceof Response) return got;
+      return json({ session: { access_token: got.access_token, refresh_token: got.refresh_token } });
     }
 
     if (action === "setpw") {

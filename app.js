@@ -135,7 +135,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.20";
+const APP_VERSION = "3.3.21";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -4692,6 +4692,20 @@ async function boot() {
       (rt.scrolls || []).slice(0, stack.length - 1).forEach(v => scrolls.push(v));
     }
   } catch (e) {}
+  // somebody who was signed in on this phone sees their own saved screen at once; the checks below still decide, and send them elsewhere if they fail
+  let early = false, earlySig = "";
+  try {
+    const mark = localStorage.getItem(LOCAL_UID);
+    const key = Object.keys(localStorage).find(k => /^sb-.*-auth-token$/.test(k));
+    const u = key ? JSON.parse(localStorage.getItem(key)).user : null;
+    if (u && u.id && mark === u.id && !stack.some(x => x.r === "auth" || x.r === "banned" || x.r === "age")) {
+      sbUser = u;
+      early = true;
+      hist(true);
+      render();
+      earlySig = [S.profile.handle, S.profile.name, S.profile.avatar].join("|");
+    }
+  } catch (e) { early = false; sbUser = null; }
   const { data: sess } = await Promise.race([sb.auth.getSession().catch(() => ({ data: { session: null } })), new Promise(r => setTimeout(() => r({ data: { session: null } }), 6000))]);
   sbUser = sess && sess.session ? sess.session.user : null;
   let ageHeld = false, ownAvatar = null;
@@ -4722,9 +4736,10 @@ async function boot() {
   if (!sbUser) { stack = [{ r: "auth" }]; scrolls.length = 0; }
   else if (ageHeld) { stack = [{ r: "age" }]; scrolls.length = 0; }
   else if (stack.some(x => x.r === "auth" || x.r === "banned")) { stack = [{ r: "home" }]; scrolls.length = 0; }
-  if (sbUser && !ageHeld) await preloadAvatars(ownAvatar);
+  if (sbUser && !ageHeld) { if (early) preloadAvatars(ownAvatar).catch(() => {}); else await preloadAvatars(ownAvatar); }
   hist(true);
-  render();
+  // the saved screen is already up: draw again only when the checks changed what it shows
+  if (!(early && sbUser && !ageHeld && earlySig === [S.profile.handle, S.profile.name, S.profile.avatar].join("|"))) render();
   if (RECOVERY && sbUser) newPasswordModal();
   else if (HASH_ERR && !sbUser) toast("That link did not work. Ask for a new one.");
   takeShared().catch(() => {});

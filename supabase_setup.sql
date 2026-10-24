@@ -997,3 +997,13 @@ alter table public.posts add constraint posts_mod_status_chk check (mod_status i
 -- Both skip yourself, blocked people either way, deactivated, locked and banned accounts; discover also skips people you already follow. Only signed-in users can call them.
 
 -- v3.2.0: no database change. Links lose their query part in the client (cleanUrl), sharing a post makes a picture (Post, Message or another app), there are no post links.
+
+-- v3.2.21 hardening: the app only writes these account columns, so created_at, age_*, *_mod, text_pending, handle_changed_at and deactivated are not writable from a signed-in client
+revoke insert, update on public.accounts from authenticated;
+grant insert (id, username, display_name, bio, avatar, banner, banner_theme, public_key, pinned_post_id) on public.accounts to authenticated;
+grant update (username, display_name, bio, avatar, banner, banner_theme, public_key, pinned_post_id) on public.accounts to authenticated;
+-- identical duplicate policies
+drop policy if exists "signed in users read likes" on public.likes;
+drop policy if exists "reposts read all" on public.reposts;
+drop policy if exists "members read messages" on public.messages;
+drop policy if exists "media delete own" on storage.objects;

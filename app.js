@@ -135,7 +135,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.25";
+const APP_VERSION = "3.3.26";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1659,24 +1659,33 @@ function settingsV() {
     const sub = totpRow.querySelector(".sub");
     if (sub) sub.textContent = !r.ok ? "Could not check right now." : totpOn ? "On" : "Off";
   }).catch(() => { const sub = totpRow.querySelector(".sub"); if (sub) sub.textContent = "Could not check right now."; });
-  let keyState = null;
+  let keyState = null, keyRows = [];
   const keyRow = row(ic("lock", 22), "Message key backup", "Checking...", () => {
     if (keyState === null) { toast("One moment..."); return; }
-    if (keyState === "off") backupSetupModal(false);
-    else if (keyState === "locked") unlockModal();
-    else sheet([{ icon: "lock", label: "Change recovery password", fn: () => backupSetupModal(true) }, { icon: "close", label: "Turn off backup", danger: true, fn: () => confirmSheet("Turn off the backup? A new phone will not be able to open your old messages.", "Turn off", async () => {
-      const { error } = await sb.from("key_backups").delete().eq("user_id", sbUser.id);
-      toast(error ? "Could not turn it off" : "Backup is off");
+    if (keyState === "locked") { unlockModal(); return; }
+    const hasRec = keyRows.some(r => r.mode === "recovery"), hasLogin = keyRows.some(r => r.mode === "login");
+    const items = [];
+    if (hasRec) items.push({ icon: "lock", label: "Change recovery password", fn: () => backupSetupModal(true) }, { icon: "close", label: "Remove recovery password", danger: true, fn: () => confirmSheet("Remove the recovery password?", "Remove", async () => { const { error } = await sb.from("key_backups").delete().eq("user_id", sbUser.id).eq("mode", "recovery"); toast(error ? "Could not remove it" : "Recovery password removed"); render(); }) });
+    else items.push({ icon: "lock", label: "Add a recovery password", fn: () => backupSetupModal(false) });
+    if (hasLogin) items.push({ icon: "close", label: "Stop saving with my login password", danger: true, fn: () => confirmSheet("Stop saving your message key with your login password? Signing in on a new phone will not open your messages by itself anymore.", "Stop saving", async () => {
+      const a = await sb.from("key_backups").delete().eq("user_id", sbUser.id).eq("mode", "login");
+      const b = await sb.from("key_backups").upsert({ user_id: sbUser.id, mode: "off", salt: "x", iv: "x", ct: "x", iters: 100000, pub: null }, { onConflict: "user_id,mode" });
+      toast(a.error || b.error ? "Could not do that" : "Stopped saving with your login password");
       render();
-    }) }], "Message key backup is on");
+    }) });
+    else items.push({ icon: "check", label: "Save with my login password", fn: () => loginBackupModal() });
+    items.push({ label: "Cancel", cancel: true });
+    sheet(items, "Message key backup");
   });
   (async () => {
     const sub = keyRow.querySelector(".sub");
     try {
-      const [bk, loc] = await Promise.all([sb.from("key_backups").select("pub").eq("user_id", sbUser.id).maybeSingle(), peekKeys()]);
+      const [bk, loc] = await Promise.all([sb.from("key_backups").select("mode, pub").eq("user_id", sbUser.id), peekKeys()]);
       if (bk.error) throw bk.error;
-      keyState = !bk.data ? "off" : !loc || loc.pub !== bk.data.pub ? "locked" : "on";
-      if (sub) sub.textContent = keyState === "off" ? "Off. Optional: lets you recover your messages if you lose every phone." : keyState === "locked" ? "Locked on this phone. Tap to unlock." : "On. You can recover your messages with your recovery password.";
+      keyRows = (bk.data || []).filter(r => r.mode !== "off");
+      keyState = !keyRows.length ? "off" : !loc || !keyRows.some(r => r.pub === loc.pub) ? "locked" : "on";
+      const modes = keyRows.map(r => r.mode);
+      if (sub) sub.textContent = keyState === "locked" ? "Locked on this phone. Tap to unlock." : keyState === "off" ? "Off. Your messages cannot be recovered if you lose this phone." : modes.includes("login") && modes.includes("recovery") ? "On with your login password and a recovery password." : modes.includes("login") ? "On with your login password." : "On with a recovery password.";
     } catch (e) { if (sub) sub.textContent = "Could not check right now."; }
   })();
   main.append(h("div", { class: "group" },
@@ -2634,6 +2643,7 @@ function changePassV() {
         if (!pr) { msg.textContent = "Could not reach Nook. Check your connection"; return; }
         if (!pr.ok) { msg.textContent = setpwMsg(pr); return; }
         await takeSession(pr);
+        await loginBackup(nw.value, { reseal: true });
         close();
         toast("Password changed");
       } finally { busy = false; }
@@ -3030,6 +3040,7 @@ function newPasswordModal() {
         if (!pr) { msg.textContent = "Could not reach Nook. Check your connection"; return; }
         if (!pr.ok) { msg.textContent = pr.body && pr.body.error === "no_password" ? "This link has run out. Ask for a new one" : setpwMsg(pr); return; }
         await takeSession(pr);
+        await loginBackup(pw.value, { reseal: true });
         close();
         toast("Password changed");
       } finally { m.act.disabled = false; }
@@ -3254,7 +3265,8 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("mess
 const LEGAL = {
   privacy: { title: "Privacy Policy", body: [
     ["Information we keep", "We keep your account details, profile, posts and messages. We do not sell your data and we do not show ads."],
-    ["Messages", "Messages are encrypted. Only you and the recipient can read them. If you clear your browser or change devices, older messages may become unreadable."],
+    ["Messages", "Messages are end to end encrypted: only you and the recipient can read them, with a key that lives on your devices."],
+    ["Message key backup", "So you do not lose your messages when you clear your browser or change phones, Nook saves a copy of your message key, locked with your login password, and keeps it with your account. This is on by default. Your password reaches our server when you sign in, so someone who controls our server could in theory unlock that copy and read your messages. You can turn this off in Settings, Message key backup. There you can also add a separate recovery password that we never see, and you can approve a new phone from a phone that already has your key. Without any of these, clearing your browser data makes older messages unreadable."],
     ["Posts", "Posts and photos are checked by an automated system for content that violates our terms. Photos remain hidden until the check is complete."],
     ["Service providers", "We use Supabase, GitHub Pages and an AI service to operate Nook. They receive only the data needed to provide their service."],
     ["Retention and deletion", "We keep your data until you delete it or your account. You may delete your account at any time in Settings."],
@@ -3343,15 +3355,18 @@ function authV() {
         }
         // the saved data on this phone may belong to someone else: the check at start-up clears it, so nothing is copied into the new account here
         sbUser = data.user;
+        await loginBackup(p);
         await new Promise(r => setTimeout(r, 400));
       } else {
         const r = await callFn("signin", { email: e, password: p }).catch(() => ({ ok: false, body: {} }));
         if (r.body && r.body.error === "banned") { showBanned(e); return; }
         if (!r.ok) { msg.textContent = signinMsg(r); return; }
-        const { error } = await sb.auth.setSession({ access_token: r.body.session.access_token, refresh_token: r.body.session.refresh_token });
+        const { data: sd, error } = await sb.auth.setSession({ access_token: r.body.session.access_token, refresh_token: r.body.session.refresh_token });
         if (error) { msg.textContent = "Could not sign in. Try again"; return; }
         try { localStorage.removeItem(BAN_EMAIL); } catch (x) {}
         await sb.rpc("set_my_deactivated", { flag: false });
+        // the typed password opens the saved chat key on a new phone, and locks it for this account when none is saved yet
+        if (sd && sd.user) { sbUser = sd.user; await loginBackup(p); }
       }
       location.reload();
     } finally { btn.disabled = false; }
@@ -3676,9 +3691,9 @@ async function loadMyKeys(id) {
   const got = await readLocalKeys(db, id);
   if (got) { e2eLocked = false; return got; }
   // a new phone must never make a new key when the account already has one: that would lock the old messages for good
-  const [me, bk] = await Promise.all([sb.from("accounts").select("public_key").eq("id", id).maybeSingle(), sb.from("key_backups").select("user_id").eq("user_id", id).maybeSingle()]);
+  const [me, bk] = await Promise.all([sb.from("accounts").select("public_key").eq("id", id).maybeSingle(), sb.from("key_backups").select("user_id").eq("user_id", id).neq("mode", "off").limit(1)]);
   if (me.error || bk.error) throw new Error("Could not check your message key. Try again");
-  if ((me.data && me.data.public_key) || bk.data) {
+  if ((me.data && me.data.public_key) || (bk.data && bk.data.length)) {
     lockKeys();
     throw new Error(LOCKED_MSG);
   }
@@ -3697,13 +3712,13 @@ async function recoveryKey(pw, salt, iters) {
   return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: iters, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
 }
 // the key is sealed on this phone with the recovery password: the server only ever holds the sealed copy
-async function sealKeyBackup(priv, pub, pw) {
+async function sealKeyBackup(priv, pub, pw, mode) {
   const jwk = await crypto.subtle.exportKey("jwk", priv);
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await recoveryKey(pw, salt, KDF_ITERS);
   const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify(jwk)));
-  return { user_id: sbUser.id, salt: toB64(salt), iv: toB64(iv), ct: toB64(new Uint8Array(ct)), iters: KDF_ITERS, pub, updated_at: new Date().toISOString() };
+  return { user_id: sbUser.id, mode: mode || "recovery", salt: toB64(salt), iv: toB64(iv), ct: toB64(new Uint8Array(ct)), iters: KDF_ITERS, pub, updated_at: new Date().toISOString() };
 }
 async function openKeyBackup(row, pw) {
   const key = await recoveryKey(pw, fromB64(row.salt), row.iters);
@@ -3716,6 +3731,44 @@ async function openKeyBackup(row, pw) {
   return { priv, pub };
 }
 const peekKeys = async () => readLocalKeys(await keyDb(), sbUser.id);
+// the chat key is saved locked with the login password, so signing in on a new phone opens the messages by itself.
+// pw is the plain login password, only ever used on this phone to lock or unlock; reseal locks it again (after a password change), enable turns it back on after it was turned off
+async function loginBackup(pw, opt) {
+  opt = opt || {};
+  if (!sbUser || !crypto.subtle || !pw) return "fail";
+  try {
+    const [rowsQ, mine, meQ] = await Promise.all([sb.from("key_backups").select("mode, pub, salt, iv, ct, iters").eq("user_id", sbUser.id), peekKeys(), sb.from("accounts").select("public_key").eq("id", sbUser.id).maybeSingle()]);
+    if (rowsQ.error) return "fail";
+    const rows = rowsQ.data || [];
+    const me = meQ.data;
+    const login = rows.find(r => r.mode === "login");
+    const optedOut = rows.some(r => r.mode === "off");
+    if (!mine) {
+      // a new phone: the saved copy opens with the password that was just typed
+      if (login && me && me.public_key === login.pub) {
+        try { const rec = await openKeyBackup(login, pw); await saveLocalKeys(await keyDb(), sbUser.id, rec); resetKeyCaches(); return "restored"; } catch (e) { return "locked"; }
+      }
+      if (me && me.public_key) return "locked";
+      if (rows.some(r => r.mode !== "off")) return "locked";
+      // an account that has no key yet: this phone makes it and saves the locked copy
+      if (optedOut && !opt.enable) return "off";
+      resetKeyCaches();
+      const rec = await myKeys();
+      const up = await sb.from("key_backups").upsert(await sealKeyBackup(rec.priv, rec.pub, pw, "login"), { onConflict: "user_id,mode" });
+      return up.error ? "fail" : "saved";
+    }
+    if (me && me.public_key && me.public_key !== mine.pub) return "locked";
+    if (optedOut && !opt.enable) return "off";
+    if (!mine.priv.extractable) return "legacy";
+    if (login && login.pub === mine.pub && !opt.reseal) {
+      // already saved: only locked again when the saved copy no longer opens with this password
+      try { await openKeyBackup(login, pw); return "saved"; } catch (e) {}
+    }
+    const up = await sb.from("key_backups").upsert(await sealKeyBackup(mine.priv, mine.pub, pw, "login"), { onConflict: "user_id,mode" });
+    if (!up.error && opt.enable) await sb.from("key_backups").delete().eq("user_id", sbUser.id).eq("mode", "off");
+    return up.error ? "fail" : "saved";
+  } catch (e) { return "fail"; }
+}
 const resetKeyCaches = () => { e2eMine.delete(sbUser.id); e2eShared.clear(); e2eEnc.clear(); };
 function pwField(ph) {
   const input = h("input", { class: "in", type: "password", placeholder: ph, autocomplete: "off", "aria-label": ph, style: "padding-right:60px" });
@@ -3736,14 +3789,15 @@ async function makeNewKey() {
   await saveLocalKeys(await keyDb(), sbUser.id, rec);
   const { error } = await sb.from("accounts").update({ public_key: rec.pub }).eq("id", sbUser.id);
   if (error) throw error;
-  await sb.from("key_backups").delete().eq("user_id", sbUser.id);
+  await sb.from("key_backups").delete().eq("user_id", sbUser.id).neq("mode", "off");
   await sb.from("key_links").delete().eq("user_id", sbUser.id);
   return rec;
 }
 // the three ways to open the messages on a phone that does not have the key
 async function unlockModal() {
   if (!sbUser) return;
-  const { data: bk } = await sb.from("key_backups").select("user_id").eq("user_id", sbUser.id).maybeSingle();
+  const { data: bkRows } = await sb.from("key_backups").select("user_id").eq("user_id", sbUser.id).eq("mode", "recovery").limit(1);
+  const bk = bkRows && bkRows.length;
   const m = modal({
     title: "Open your messages",
     action: "Later",
@@ -3844,7 +3898,7 @@ async function approveLinkModal(req) {
           await saveLocalKeys(await keyDb(), sbUser.id, rec);
           const u = await sb.from("accounts").update({ public_key: rec.pub }).eq("id", sbUser.id);
           if (u.error) throw u.error;
-          await sb.from("key_backups").delete().eq("user_id", sbUser.id);
+          await sb.from("key_backups").delete().eq("user_id", sbUser.id).neq("mode", "off");
           resetKeyCaches();
         }
         const eph = await crypto.subtle.generateKey(E2E_ALG, false, ["deriveKey"]);
@@ -3858,6 +3912,32 @@ async function approveLinkModal(req) {
         close();
         toast("Approved");
       } catch (e) { msg.textContent = "Something went wrong. Try again"; } finally { m.act.disabled = false; m.act.textContent = "Approve"; }
+    }
+  });
+}
+// turn the login password copy back on: the password is checked first
+function loginBackupModal() {
+  const pw = pwField("Your login password");
+  const msg = h("p", { class: "note", role: "alert" });
+  const m = modal({
+    title: "Save with login password",
+    action: "Save",
+    body: [h("p", { class: "note" }, "Your message key is saved locked with your login password, so signing in on a new phone opens your messages. Your password reaches Nook when you sign in, so this is less private than a recovery password."), pw.wrap, msg],
+    onAction: async close => {
+      msg.textContent = "";
+      if (!pw.input.value) { msg.textContent = "Type your login password"; return; }
+      m.act.disabled = true; m.act.textContent = "Working...";
+      try {
+        const chk = await callFn("signin", { action: "check", password: pw.input.value }).catch(() => null);
+        if (!chk) { msg.textContent = "Could not reach Nook. Check your connection"; return; }
+        if (!chk.ok) { msg.textContent = signinMsg(chk); return; }
+        const r = await loginBackup(pw.input.value, { enable: true, reseal: true });
+        if (r === "legacy") { msg.textContent = "This phone's key cannot be saved. Add a recovery password first, it makes a new key"; return; }
+        if (r !== "saved") { msg.textContent = "Could not save it. Try again"; return; }
+        close();
+        toast("Saved with your login password");
+        render();
+      } finally { m.act.disabled = false; m.act.textContent = "Save"; }
     }
   });
 }
@@ -3883,7 +3963,7 @@ async function restoreKeysModal() {
       if (!pw.input.value) { msg.textContent = "Type your recovery password"; return; }
       m.act.disabled = true; m.act.textContent = "Working...";
       try {
-        const { data: row, error } = await sb.from("key_backups").select("salt, iv, ct, iters, pub").eq("user_id", sbUser.id).maybeSingle();
+        const { data: row, error } = await sb.from("key_backups").select("salt, iv, ct, iters, pub").eq("user_id", sbUser.id).eq("mode", "recovery").maybeSingle();
         if (error || !row) { msg.textContent = "Could not load the saved key. Try again"; return; }
         let rec;
         try { rec = await openKeyBackup(row, pw.input.value); } catch (e) { msg.textContent = "That is not the right recovery password"; return; }
@@ -3921,14 +4001,16 @@ async function backupSetupModal(changing) {
       m.act.disabled = true; m.act.textContent = "Working...";
       try {
         const rec = legacy ? await makeKeyPair() : cur;
-        const row = await sealKeyBackup(rec.priv, rec.pub, a);
+        const row = await sealKeyBackup(rec.priv, rec.pub, a, "recovery");
         // the sealed copy is saved first, so a failure can never leave a changed key without a backup
-        const up = await sb.from("key_backups").upsert(row);
+        const up = await sb.from("key_backups").upsert(row, { onConflict: "user_id,mode" });
         if (up.error) { msg.textContent = "Could not save the backup. Try again"; return; }
         if (legacy) {
           await saveLocalKeys(await keyDb(), sbUser.id, rec);
           const u = await sb.from("accounts").update({ public_key: rec.pub }).eq("id", sbUser.id);
           if (u.error) throw u.error;
+          // a copy locked with the login password belongs to the old key now
+          await sb.from("key_backups").delete().eq("user_id", sbUser.id).eq("mode", "login");
           resetKeyCaches();
         }
         close();

@@ -1231,3 +1231,11 @@ create policy key_links_insert on public.key_links for insert to authenticated w
 create policy key_links_update on public.key_links for update to authenticated using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
 create policy key_links_delete on public.key_links for delete to authenticated using (user_id = (select auth.uid()));
 select cron.schedule('nook_clean_key_links', '17 * * * *', $$delete from public.key_links where created_at < now() - interval '1 hour'$$);
+
+-- key_backups holds up to one row per kind: 'recovery' (sealed with a separate recovery password), 'login' (sealed with the login password, on by default) and 'off' (a marker that the person turned the login copy off)
+alter table public.key_backups add column if not exists mode text not null default 'recovery';
+alter table public.key_backups drop constraint if exists key_backups_mode_check;
+alter table public.key_backups add constraint key_backups_mode_check check (mode in ('recovery', 'login', 'off'));
+alter table public.key_backups drop constraint if exists key_backups_pkey;
+alter table public.key_backups add primary key (user_id, mode);
+alter table public.key_backups alter column pub drop not null;

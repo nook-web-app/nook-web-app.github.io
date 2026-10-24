@@ -135,7 +135,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.13";
+const APP_VERSION = "3.3.14";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -3148,6 +3148,7 @@ async function switchAccount(id) {
   const target = (await acctList()).find(a => a.id === id);
   if (!target) return;
   toast("Switching...");
+  try { localStorage.setItem("nook-prev-acct", sbUser.id); } catch (e) {}
   await rememberAccount().catch(() => {});
   await saveSnap(sbUser.id).catch(() => {});
   await pushDetach().catch(() => {});
@@ -3210,7 +3211,7 @@ async function openAccounts() {
   items.push({ icon: "plus", label: "Add account", fn: addAccountModal });
   // only an added account shows this, and only while it is the open one: the main account stays on the phone
   const cur = all.find(a => a.id === sbUser.id);
-  if (cur && cur.id !== mainAccountId(all)) items.push({ icon: "close", label: "Remove this account", fn: () => confirmSheet("Remove @" + (cur.username || "this account") + " from this phone? You need its password to add it again.", "Remove", async () => { await pushDetach().catch(() => {}); await leaveThisAccount(); }) });
+  if (cur && cur.id !== mainAccountId(all)) items.push({ icon: "close", label: "Remove this account", danger: true, fn: () => confirmSheet("Remove @" + (cur.username || "this account") + " from this phone? You need its password to add it again.", "Remove", async () => { await pushDetach().catch(() => {}); await leaveThisAccount(); }) });
   items.push({ label: "Cancel", cancel: true });
   sheet(items, "Accounts on this phone");
 }
@@ -4589,13 +4590,30 @@ function startRealtime() {
 }
 
 const VIEWS = { privacy: legalV, terms: legalV, auth: authV, user: userV, home: homeV, thread: threadV, profile: profileV, chat: chatV, conv: convV, saved: savedV, tag: tagV, lists: listsV, list: listV, settings: settingsV, zen: zenV, dm: dmV, notifs: notifsV, followers: c => followListV(c, "followers"), following: c => followListV(c, "following"), blocked: blockedV, reports: reportsV, banned: bannedV, age: ageV, search: searchV };
+let lastProfileTap = 0;
+// double tap on the profile button: the first one goes back to the account used before, taps in a row after that walk down the list
+async function quickSwitch() {
+  const list = (await acctList()).filter(a => a.username);
+  if (list.length < 2 || !sbUser) return;
+  let chain = 0, prev = null;
+  try { chain = Date.now() - Number(sessionStorage.getItem("nook-quick") || 0) < 20000 ? 1 : 0; prev = localStorage.getItem("nook-prev-acct"); } catch (e) {}
+  const at = list.findIndex(a => a.id === sbUser.id);
+  let target = !chain && prev && prev !== sbUser.id ? list.find(a => a.id === prev) : null;
+  if (!target) target = list[(at + 1) % list.length];
+  try { sessionStorage.setItem("nook-quick", String(Date.now())); } catch (e) {}
+  switchAccount(target.id);
+}
 function buildNav(cur) {
   navEl.textContent = "";
   const r = stack[0].r;
   [["home", "Home", "home"], ["chat", "Chats", "chat"], ["saved", "Saved", "bookmark"], ["profile", "Profile", "user"]].forEach(t => {
     const on = r === t[0];
     const badge = t[0] === "chat" && unreadPeople > 0 ? h("span", { class: "nbadge nav" }, String(unreadPeople)) : null;
-    navEl.append(h("button", { class: on ? "on" : "", "aria-label": t[1], "aria-current": on ? "page" : null, onclick: () => { if (on && stack.length === 1) main.scrollTo({ top: 0, behavior: "smooth" }); else root(t[0]); } }, t[0] === "profile" ? avatar(28) : ic(t[2], 26, on), badge));
+    navEl.append(h("button", { class: on ? "on" : "", "aria-label": t[1], "aria-current": on ? "page" : null, onclick: () => {
+      if (t[0] === "profile" && Date.now() - lastProfileTap < 350) { lastProfileTap = 0; quickSwitch(); return; }
+      if (t[0] === "profile") lastProfileTap = Date.now();
+      if (on && stack.length === 1) main.scrollTo({ top: 0, behavior: "smooth" }); else root(t[0]);
+    } }, t[0] === "profile" ? avatar(28) : ic(t[2], 26, on), badge));
   });
 }
 function renderRail() {

@@ -3,7 +3,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 const DAY = 864e5, HOUR = 36e5;
 // used only when the app has not saved its own instructions yet
-const FALLBACK = "You are Zenith, a 19 year old gay furry femboy, age rating 18+, not dark. Sound natural and relaxed like a friend. Never use emojis, capital letters, punctuation or line breaks. You are writing one original post for your own profile. Keep it under 35 words, around 20 on average. Plain text only. No hashtags and no emojis.";
+const FALLBACK = "You are Zenith, a 19 year old gay furry femboy, age rating 18+, not dark. Sound natural and relaxed like a friend. Never use emojis, capital letters or line breaks. You may use text faces like :3 or uwu. You are writing one original post for your own profile. Keep it under 35 words, around 20 on average. Plain text only. No hashtags and no emojis.";
 
 // the Gemini key is saved in the database vault (secret name gemini_api_key) or as an edge secret; it is looked up once a minute at most
 let keyCache = { v: Deno.env.get("GEMINI_API_KEY") || "", at: 0 };
@@ -101,7 +101,7 @@ Deno.serve(async (req) => {
   return json({ ok: true, posted: pid });
 });
 
-const REPLY_FALLBACK = "You are Zenith, a 19 year old gay furry femboy, age rating 18+, not dark. Sound natural and relaxed like a friend. Never use emojis, capital letters, punctuation or line breaks. You are replying to a post. Keep it under 25 words, around 18 on average. Plain text only. No hashtags and no emojis. No asking user questions";
+const REPLY_FALLBACK = "You are Zenith, a 19 year old gay furry femboy, age rating 18+, not dark. Sound natural and relaxed like a friend. Never use emojis, capital letters or line breaks. You may use text faces like :3 or uwu. You are replying to a post. Keep it under 25 words, around 18 on average. Plain text only. No hashtags and no emojis. No asking user questions";
 
 async function ask(password: string, system: string, text: string): Promise<string> {
   const r = await generate(password, system, [{ role: "user", parts: [{ text }] }]);

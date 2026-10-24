@@ -139,7 +139,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.28";
+const APP_VERSION = "3.3.29";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1026,6 +1026,7 @@ function profileV() {
 
 
 function chatV() {
+  if (e2eLocked) promptUnlock();
   topEl.append(bar(menuBtn(), ttl("Chats")));
   const dmBox = h("div");
   main.append(dmBox);
@@ -2721,7 +2722,8 @@ async function wipeLocal(keepKeys) {
     sessionStorage.removeItem("nook-route");
   } catch (e) {}
   // the chat key stays while a banned person can still download their backup, so old messages can be opened
-  if (!keepKeys) { try { indexedDB.deleteDatabase("nook-keys"); } catch (e) {} }
+  // only the key of the account being cleared goes; other accounts on this phone keep theirs
+  if (!keepKeys) { try { if (sbUser) { const kdb = await keyDb(); await new Promise(res => { const t = kdb.transaction("k", "readwrite"); t.objectStore("k").delete(sbUser.id); t.oncomplete = res; t.onerror = res; t.onabort = res; }); } else indexedDB.deleteDatabase("nook-keys"); } catch (e) {} }
 }
 let banShown = false;
 function showBanned(email) {
@@ -3686,9 +3688,15 @@ async function makeKeyPair() {
 }
 let e2eLocked = false, restoreAsked = false;
 const LOCKED_MSG = "Open your messages first (Settings, Message key backup)";
+// the choices only come up while the person is in the chats, never on the home screen
 function lockKeys() {
   e2eLocked = true;
-  if (!restoreAsked) { restoreAsked = true; setTimeout(unlockModal, 600); }
+  if (["chat", "dm"].includes(stack[stack.length - 1].r)) promptUnlock();
+}
+function promptUnlock() {
+  if (!e2eLocked || restoreAsked) return;
+  restoreAsked = true;
+  setTimeout(unlockModal, 400);
 }
 async function loadMyKeys(id) {
   const db = await keyDb();
@@ -3797,24 +3805,19 @@ async function makeNewKey() {
   await sb.from("key_links").delete().eq("user_id", sbUser.id);
   return rec;
 }
-// the three ways to open the messages on a phone that does not have the key
+// the ways to open the messages on a phone that does not have the key
 async function unlockModal() {
   if (!sbUser) return;
-  const { data: bkRows } = await sb.from("key_backups").select("user_id").eq("user_id", sbUser.id).eq("mode", "recovery").limit(1);
-  const bk = bkRows && bkRows.length;
-  const m = modal({
-    title: "Open your messages",
-    action: "Later",
-    body: [
-      h("p", { class: "note" }, "Your messages are locked. Open them on this phone."),
-      h("button", { class: "pri", style: "width:100%;margin-top:6px", onclick: () => m.close(waitForApprovalModal) }, "Approve on my other phone"),
-      bk ? h("button", { class: "ghost", style: "width:100%;margin-top:10px", onclick: () => m.close(restoreKeysModal) }, "Use my recovery password") : null,
-      h("button", { class: "tbtn dng", style: "margin-top:14px", onclick: () => confirmSheet("Start fresh? Older messages will not open anymore, here or for the other person.", "Start fresh", async () => {
-        try { await makeNewKey(); m.close(); toast("New message key made"); setTimeout(() => location.reload(), 500); } catch (e) { toast("Could not do that. Try again"); }
-      }) }, "Start fresh")],
-    onAction: close => close()
-  });
-  m.act.hidden = true;
+  const { data: rows } = await sb.from("key_backups").select("mode").eq("user_id", sbUser.id);
+  const has = k => (rows || []).some(r => r.mode === k);
+  const items = [{ icon: "userswap", label: "Approve on my other phone", fn: waitForApprovalModal }];
+  if (has("login")) items.push({ icon: "lock", label: "Use my login password", fn: () => restoreKeysModal("login") });
+  if (has("recovery")) items.push({ icon: "key", label: "Use my recovery password", fn: () => restoreKeysModal("recovery") });
+  items.push({ icon: "trash", label: "Start fresh", danger: true, fn: () => confirmSheet("Start fresh? Older messages will not open anymore, here or for the other person.", "Start fresh", async () => {
+    try { await makeNewKey(); toast("New message key made"); setTimeout(() => location.reload(), 500); } catch (e) { toast("Could not do that. Try again"); }
+  }) });
+  items.push({ label: "Cancel", cancel: true });
+  sheet(items, "Open your messages");
 }
 // this phone asks, the other one answers
 async function waitForApprovalModal() {
@@ -3949,31 +3952,24 @@ async function loginBackupModal() {
   });
 }
 // a new phone for an account that has a saved key: the recovery password opens it
-async function restoreKeysModal() {
+async function restoreKeysModal(mode) {
   if (!sbUser) return;
-  const pw = pwField("Recovery password");
+  const login = mode === "login";
+  const pw = pwField(login ? "Login password" : "Recovery password");
   const msg = h("p", { class: "note", role: "alert" });
   const m = modal({
-    title: "Unlock messages",
+    title: login ? "Login password" : "Recovery password",
     action: "Unlock",
-    body: [h("p", { class: "note" }, "Type your recovery password."), pw.wrap, msg,
-      h("button", { class: "tbtn dng", onclick: () => confirmSheet("Make a new message key? Older messages will not open anymore, here or for the other person.", "Make new key", async () => {
-        try {
-          await makeNewKey();
-          m.close();
-          toast("New message key made");
-          setTimeout(() => location.reload(), 500);
-        } catch (e) { toast("Could not do that. Try again"); }
-      }) }, "I forgot it, make a new key")],
+    body: [h("p", { class: "note" }, login ? "Type your login password." : "Type your recovery password."), pw.wrap, msg],
     onAction: async close => {
       msg.textContent = "";
-      if (!pw.input.value) { msg.textContent = "Type your recovery password"; return; }
+      if (!pw.input.value) { msg.textContent = "Type the password"; return; }
       m.act.disabled = true;
       try {
-        const { data: row, error } = await sb.from("key_backups").select("salt, iv, ct, iters, pub").eq("user_id", sbUser.id).eq("mode", "recovery").maybeSingle();
+        const { data: row, error } = await sb.from("key_backups").select("salt, iv, ct, iters, pub").eq("user_id", sbUser.id).eq("mode", login ? "login" : "recovery").maybeSingle();
         if (error || !row) { msg.textContent = "Could not load the saved key. Try again"; return; }
         let rec;
-        try { rec = await openKeyBackup(row, pw.input.value); } catch (e) { msg.textContent = "That is not the right recovery password"; return; }
+        try { rec = await openKeyBackup(row, pw.input.value); } catch (e) { msg.textContent = "That is not the right password"; return; }
         await saveLocalKeys(await keyDb(), sbUser.id, rec);
         const { data: me } = await sb.from("accounts").select("public_key").eq("id", sbUser.id).maybeSingle();
         if (!me || me.public_key !== rec.pub) await sb.from("accounts").update({ public_key: rec.pub }).eq("id", sbUser.id);
@@ -4383,6 +4379,7 @@ async function openDm(id) {
   go({ r: "dm", id });
 }
 function dmV(c) {
+  if (e2eLocked) promptUnlock();
   let busy = false, locked = "", tEl = null, tRaf = 0;
   const me = sbUser.id;
   const peer = { other: c.id, name: "user" };

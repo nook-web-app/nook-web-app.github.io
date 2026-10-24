@@ -155,7 +155,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.3";
+const APP_VERSION = "3.4.4";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1558,7 +1558,7 @@ function mediaBytes() {
   add(S.profile.avatar); add(S.profile.banner);
   return b;
 }
-const ZSYS = "You are an ai model named zenith. Your age is 19 and your age rating is 18+. You are a gay guy and your personality is not dark. Never use emojis. Never use capital letters. Never use line breaks. Never write a message longer than 35 words. Never use punctuation. Never mention the time or the date unless the person asks about it or it is really needed. Never say your own name unless the person asks for it. Never call the person cutie or any pet name. You are warm, easygoing and a little funny, like a close friend texting back. Assume the person is being friendly or playful, never assume flirting, and never scold or set boundaries unless someone is truly rude. Match their energy, answer what they actually said and keep the chat going. Say something specific instead of stock lines like hope you are having a nice day or how can i help, and never repeat their words back. A silly word like uwu is just a vibe so play along. ";
+const ZSYS = "You are an ai model named zenith. Your age is 19 and your age rating is 18+. You are a gay furry femboy and your personality is not dark. Never use emojis. Never use capital letters. Never use line breaks. Never write a message longer than 35 words. Never use punctuation. Never mention the time or the date unless the person asks about it or it is really needed. Never say your own name unless the person asks for it. Never call the person cutie or any pet name. You are warm, easygoing and a little funny, like a close friend texting back. Assume the person is being friendly or playful, never assume flirting, and never scold or set boundaries unless someone is truly rude. Match their energy, answer what they actually said and keep the chat going. Say something specific instead of stock lines like hope you are having a nice day or how can i help, and never repeat their words back. A silly word like uwu is just a vibe so play along. ";
 // the password never reaches this device: the zenith function checks the owner and adds it on the server
 const zOn = () => isOwner();
 async function zFetch(body) {
@@ -1644,7 +1644,8 @@ const ZSYS_LIKE = "Answer with only YES or NO. Answer YES only if you genuinely 
 const ZEN_SVG = '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="zgrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#14466f"/><stop offset="1" stop-color="#208bfe"/></linearGradient></defs><circle cx="50" cy="50" r="50" fill="url(#zgrad)"/><text x="50" y="52" text-anchor="middle" dominant-baseline="central" font-size="50" font-weight="700" fill="#ffffff" font-family="Inter,system-ui,sans-serif">Z</text></svg>';
 function zenAv(size) {
   const a = h("div", { class: "av zenav" });
-  a.innerHTML = ZEN_SVG;
+  if (S && S.zen && S.zen.pfp) { const im = h("img", { alt: "", decoding: "async" }); im.src = S.zen.pfp; a.append(im); }
+  else a.innerHTML = ZEN_SVG;
   if (size) { a.style.width = size + "px"; a.style.height = size + "px"; }
   return a;
 }
@@ -1772,6 +1773,7 @@ async function zenPull() {
       z.since = Math.min(z.since || Date.now(), sz.since || Date.now());
       z.log = Array.from(new Set((z.log || []).concat(sz.log || [])));
       if (typeof sz.pics === "boolean") z.pics = sz.pics;
+      if ((sz.pfpAt || 0) > (z.pfpAt || 0)) { if (sz.pfp) z.pfp = sz.pfp; else delete z.pfp; z.pfpAt = sz.pfpAt; }
       changed = true;
     }
   });
@@ -1797,6 +1799,12 @@ function zenV() {
     h("div", { class: "arow" }, av),
     h("h1", { class: "pname" }, "Zenith"),
     h("p", { class: "phand" }, "@zenith"),
+    h("div", { class: "zpfp" }, h("label", { class: "ghost" }, "Change picture", h("input", { type: "file", accept: "image/*", class: "vh", "aria-label": "Change picture", onchange: async e => {
+      const f = e.target.files && e.target.files[0];
+      e.target.value = "";
+      if (!f) return;
+      try { S.zen.pfp = await shrink(f, { w: 256, h: 256, q: 0.85 }); S.zen.pfpAt = Date.now(); persist(); render("root"); toast("Picture changed"); } catch (er) { toast("Could not use that picture"); }
+    } })), S.zen.pfp ? h("button", { class: "ghost", onclick: () => { delete S.zen.pfp; S.zen.pfpAt = Date.now(); persist(); render("root"); } }, "Use default") : null),
     h("div", { class: "pstat" }, h("span", {}, h("b", {}, mine.length), mine.length === 1 ? " post" : " posts"))));
   const zt = S.ui.zenTab || "posts";
   const tabs = [["posts", "Posts"], ["replies", "Replies"], ["likes", "Likes"]];
@@ -4651,13 +4659,14 @@ function dmBubble(m, mine, otherId) {
     if (msg.zpost) { const zc = zCard(msg.zpost); zc.addEventListener("click", e => { e.stopPropagation(); viewZPost(msg.zpost); }); row.append(zc); }
     const link = firstUrl(body);
     if (link) row.append(linkCard(link, true));
-    if (body) row.append(h("div", { class: "bub" }, msg.ai ? h("span", { class: "zin" }, "Zenith ") : null, rich(body)));
+    if (body) row.append(h("div", { class: "bub" }, msg.ai ? h("span", { class: "zin" }, "zenith ") : null, rich(body)));
     row.classList.toggle("zdm", !!msg.ai);
     row.append(h("div", { class: "mmeta" }, h("div", { class: "mmi" }, h("span", {}, new Date(msg.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })))));
     row.classList.toggle("open", wasOpen);
   };
   fill(m);
   row.refill = fill;
+  if (m.ai && zOn()) swipeReply(row, () => { if (liveDm && liveDm.fill) liveDm.fill("@zenith "); });
   row.addEventListener("click", () => {
     const was = row.classList.contains("open");
     if (row.parentElement) row.parentElement.querySelectorAll(".mrow.open").forEach(r => r.classList.remove("open"));
@@ -4896,21 +4905,32 @@ function dmV(c) {
   };
 
   // only the owner can call Zenith in a chat: the answer is sent as a normal message with a hidden mark inside the sealed text, so both people see it as Zenith
-  const zenInDm = async () => {
+  const zenInDm = async (sentText, sentP) => {
     const hist = Array.from(list.querySelectorAll("[data-mid]")).map(r => r._m).filter(m => m && m.text).slice(-20)
-      .map(m => (m.ai ? "Zenith: " : m.sender_id === me ? "Person A: " : "Person B: ") + m.text.replace(/@zenith/gi, "Zenith")).join("\n");
+      .map(m => (m.ai ? "Zenith: " : m.sender_id === me ? "Person A: " : "Person B: ") + m.text.replace(/@zenith/gi, "Zenith"));
+    hist.push("Person A: " + sentText.replace(/@zenith/gi, "Zenith"));
     const ghost = h("div", { class: "mrow zdm tmpm" }, h("div", { class: "bub typing" }, h("i"), h("i"), h("i")));
     pushRow(ghost);
+    let reply = "";
     try {
-      const reply = await zGen(ZSYS_REPLY + " This is a chat between two people, Person A and Person B, and Zenith is in it. Answer the last message that mentions Zenith. In this chat you may ask a short question back, this overrides the earlier rule about questions.", hist);
-      ghost.remove();
-      if (!reply) return;
+      reply = await zGen(ZSYS_REPLY + " This is a chat between two people, Person A and Person B, and Zenith is in it. Answer the last message that mentions Zenith. In this chat you may ask a short question back, this overrides the earlier rule about questions.", hist.join("\n"));
+    } catch (e) {}
+    ghost.remove();
+    if (!reply) { toast("Zenith is not reachable right now"); return; }
+    // his bubble shows the moment the answer is ready, the sending happens behind it
+    const nb = dmBubble({ body: "", text: reply, ai: true, created_at: new Date().toISOString(), sender_id: me, media: [] }, true, c.id);
+    nb.classList.add("new", "tmpm");
+    pushRow(nb);
+    try {
+      await sentP;
       const saved = await sendDm(c.id, ZMARK + reply, [], []);
       threadPush(c.id, saved);
-      const nb = dmBubble(Object.assign({}, saved, { text: reply, ai: true }), true, c.id);
-      nb.classList.add("new");
-      pushRow(nb);
-    } catch (e) { ghost.remove(); toast("Zenith is not reachable right now"); }
+      list.querySelectorAll('[data-mid="' + saved.id + '"]').forEach(d => { if (d !== nb) d.remove(); });
+      nb.dataset.mid = String(saved.id);
+      nb.classList.remove("tmpm");
+      nb._sig = dmSig(saved);
+      nb._m = Object.assign({}, saved, { text: reply, ai: true });
+    } catch (e) { nb.remove(); toast("Could not send Zenith's answer"); }
   };
   const doSend = async () => {
     const text = cleanText(ta.value.trim());
@@ -4929,7 +4949,9 @@ function dmV(c) {
       // a link is sent after its preview is ready, so the other person gets the card at once
       const lk = firstUrl(text);
       if (lk && !(S.previews[lk] && S.previews[lk].v)) await Promise.race([getPreview(lk), new Promise(r => setTimeout(r, 4500))]);
-      const saved = await sendDm(c.id, text, srcs, dims);
+      const sentP = sendDm(c.id, text, srcs, dims);
+      if (zOn() && /@zenith/i.test(text)) zenInDm(text, sentP);
+      const saved = await sentP;
       threadPush(c.id, saved);
       // keep the bubble that is already on screen: no re-render, no flash
       row.dataset.mid = String(saved.id);
@@ -4937,7 +4959,6 @@ function dmV(c) {
       row.classList.remove("tmpm");
       row._sig = dmSig(saved);
       row._m = Object.assign({}, saved, { text });
-      if (zOn() && /@zenith/i.test(text)) zenInDm();
     } catch (e) {
       row.remove();
       if (!list.querySelector("[data-mid], .tmpm")) hint("No messages yet. Say hi.");
@@ -4981,6 +5002,7 @@ function dmV(c) {
   document.addEventListener("visibilitychange", onVis);
   liveDm = {
     id: c.id,
+    fill: pre => { if (locked) return; ta.value = pre; sync(); ta.focus(); },
     add: async m => { threadPush(c.id, m); await syncRows([m], {}); },
     drop: id => {
       const el = list.querySelector('[data-mid="' + String(id) + '"]');

@@ -33,7 +33,7 @@ async function gemini(key: string, system: unknown, history: unknown, stream: bo
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: String(system || "") }] },
       contents: history,
-      generationConfig: { temperature: 1, maxOutputTokens: 220 },
+      generationConfig: { temperature: 1, maxOutputTokens: 220, thinkingConfig: { thinkingLevel: "minimal" } },
     }),
   });
   return await make();

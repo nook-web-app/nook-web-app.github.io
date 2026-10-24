@@ -209,7 +209,9 @@ textarea{resize:none}
 .cin .pri{width:42px;height:42px;padding:0;display:flex;align-items:center;justify-content:center}
 .cdock{position:sticky}
 .zenav{background:none}
-.zenav svg{width:100%;height:100%;display:block}
+.zenav svg,.zenav img{width:100%;height:100%;display:block}
+.zenav img{object-fit:cover;border-radius:50%}
+.zpfp{display:flex;gap:8px;margin:8px 0}.zpfp label{cursor:pointer}
 .zpop{position:absolute;left:16px;bottom:calc(100% + 6px);z-index:6;display:flex;align-items:center;gap:10px;background:var(--bg2);color:var(--fg);border:1px solid var(--line);border-radius:var(--r-m);padding:8px 14px 8px 8px;box-shadow:0 8px 24px rgba(0,0,0,.25);text-align:left;opacity:0;transform:translateY(8px) scale(.96);transform-origin:bottom left;pointer-events:none;transition:opacity .18s ease,transform .24s cubic-bezier(.2,.8,.2,1)}
 .zpop.on{opacity:1;transform:none;pointer-events:auto}
 .zpop b{display:block;font-size:var(--fs-base);font-weight:700}

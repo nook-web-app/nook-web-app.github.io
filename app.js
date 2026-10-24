@@ -155,7 +155,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.6";
+const APP_VERSION = "3.4.7";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1677,9 +1677,9 @@ const zenRefresh = () => {
     flat(cur.id, 0, []).forEach(x => main.append(postCard(x.p, { rep: true, d: x.d })));
     return;
   }
-  const top = main.scrollTop;
+  // a page the person has scrolled is left alone, it shows the news the next time it is drawn
+  if (main.scrollTop > 8) return;
   render();
-  main.scrollTop = top;
 };
 let zenBusy = false, zenAgain = false;
 let zenPulled = 0;
@@ -1935,8 +1935,8 @@ function settingsV() {
     row(ic("eyeoff", 22), "Privacy Policy", "What we keep and why.", () => go({ r: "privacy" })),
     row(ic("check", 22), "Terms of Use", "The rules for using Nook.", () => go({ r: "terms" }))));
   main.append(sec("Danger zone"));
-  main.append(h("div", { class: "group" }, row(ic("trash", 22), "Delete all data", "Removes every post, chat and list.", () => confirmSheet("Delete every post on the server and every chat, list and setting on this device?", "Delete everything", () => wipeAll()), "dng")));
-  main.append(h("div", { class: "group" }, row(ic("trash", 22), "Delete account", "Deletes your account and its data", () => confirmSheet("Delete your account, posts and messages for good?", "Delete account", async () => {
+  main.append(h("div", { class: "group" }, row(ic("trash", 22), "Delete all data", "Removes every post, chat and list.", () => confirmLogin("Delete all data", "Deletes every post on the server and every chat, list and setting on this device.", "Delete", () => wipeAll()), "dng")));
+  main.append(h("div", { class: "group" }, row(ic("trash", 22), "Delete account", "Deletes your account and its data", () => confirmLogin("Delete account", "Deletes your account, posts and messages for good.", "Delete", async () => {
     const r = await callFn("delete-account");
     if (!r.ok) { toast(r.body.error || "Could not delete account"); return; }
     await wipeLocal();
@@ -4173,6 +4173,29 @@ async function loginBackup(pw, opt) {
   } catch (e) { return "fail"; }
 }
 const resetKeyCaches = () => { e2eMine.delete(sbUser.id); e2eShared.clear(); e2eEnc.clear(); };
+// danger actions ask for the account email and the login password first
+function confirmLogin(title, warn, label, fn) {
+  const em = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "off", autocapitalize: "off", "aria-label": "Email" });
+  const pw = pwField("Password");
+  const msg = h("p", { class: "note", role: "alert" });
+  const m = modal({
+    title,
+    action: label,
+    body: [h("p", { class: "note" }, warn), h("div", { class: "fld" }, em), pw.wrap, msg],
+    onAction: async close => {
+      msg.textContent = "";
+      if (!em.value.trim() || !pw.input.value) { msg.textContent = "Type your email and password"; return; }
+      if (em.value.trim().toLowerCase() !== ((sbUser && sbUser.email) || "").toLowerCase()) { msg.textContent = "That is not the email of this account"; return; }
+      m.act.disabled = true;
+      try {
+        const v = await verifyPassword(pw.input.value);
+        if (!v.ok) { msg.textContent = v.msg.replace("Current password", "Password"); return; }
+        close();
+        await fn();
+      } catch (e) { msg.textContent = "Something went wrong. Try again"; } finally { m.act.disabled = false; }
+    }
+  });
+}
 function pwField(ph) {
   const input = h("input", { class: "in", type: "password", placeholder: ph, autocomplete: "off", "aria-label": ph, style: "padding-right:60px" });
   const eye = h("button", { type: "button", class: "tbtn", "aria-label": "Show password", style: "position:absolute;right:14px;top:50%;transform:translateY(-50%);padding:6px 0;color:var(--muted);font-size:var(--fs-md);font-weight:600", onclick: () => { const s = input.type === "password"; input.type = s ? "text" : "password"; eye.textContent = s ? "Hide" : "Show"; eye.setAttribute("aria-label", s ? "Hide password" : "Show password"); } }, "Show");
@@ -5669,9 +5692,11 @@ if (window.visualViewport) {
     ptr.firstChild.style.transform = "";
     ptr.style.opacity = "1";
     ptr.style.transform = "translateY(" + (ty - 8) + "px)";
+    // whatever stalls, the page reloads after a few seconds instead of hanging on the spinner
+    setTimeout(() => location.reload(), 5000);
     try {
-      await Promise.all([flush(), wait(600)]);
-      if ("serviceWorker" in navigator) await Promise.race([navigator.serviceWorker.getRegistrations().then(rs => Promise.all(rs.map(r => r.update()))), wait(1500)]);
+      await Promise.all([Promise.race([flush(), wait(2500)]), wait(600)]);
+      if ("serviceWorker" in navigator) await Promise.race([navigator.serviceWorker.getRegistrations().then(rs => Promise.all(rs.map(r => r.update()))), wait(1200)]);
     } catch (e) {}
     location.reload();
   }

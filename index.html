@@ -1,4 +1,4 @@
-<!doctype html><html><head><meta charset=utf8><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' data: blob: https://cimyolsipjdpibzaebmx.supabase.co; connect-src 'self' data: blob: https://cimyolsipjdpibzaebmx.supabase.co wss://cimyolsipjdpibzaebmx.supabase.co https://www.youtube.com https://api.microlink.io https://api.allorigins.win; worker-src 'self'; manifest-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><link rel="manifest" href="manifest.webmanifest"><meta name="theme-color" content="#161e27"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Nook"><meta name="apple-mobile-web-app-status-bar-style" content="black"><link rel="icon" href="icon-192.png" type="image/png"><link rel="apple-touch-icon" href="icon-192.png"><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content"><style>img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<!doctype html><html><head><meta charset=utf8><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' data: blob: https://cimyolsipjdpibzaebmx.supabase.co; connect-src 'self' data: blob: https://cimyolsipjdpibzaebmx.supabase.co wss://cimyolsipjdpibzaebmx.supabase.co https://www.youtube.com https://api.microlink.io https://api.allorigins.win https://api.pwnedpasswords.com; worker-src 'self'; manifest-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><link rel="manifest" href="manifest.webmanifest"><meta name="theme-color" content="#161e27"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Nook"><meta name="apple-mobile-web-app-status-bar-style" content="black"><link rel="icon" href="icon-192.png" type="image/png"><link rel="apple-touch-icon" href="icon-192.png"><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content"><style>img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
 <meta name="claude:viewport-fit-sides" content="cover">
 <title>Nook</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
@@ -561,7 +561,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.2.21";
+const APP_VERSION = "3.2.22";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -3018,6 +3018,7 @@ function changePassV() {
       busy = true;
       try {
         if (!(await verifyPassword(cur.value))) { msg.textContent = "Current password is wrong"; return; }
+        if (await pwnedPassword(nw.value)) { msg.textContent = PWNED_MSG; return; }
         const { error } = await sb.auth.updateUser({ password: nw.value });
         if (error) { msg.textContent = error.message; return; }
         close();
@@ -3374,6 +3375,7 @@ function recoverCodeModal(prefill) {
       if (pw.value !== pw2.value) { msg.textContent = "New passwords do not match"; return; }
       m.act.disabled = true;
       try {
+        if (await pwnedPassword(pw.value)) { msg.textContent = PWNED_MSG; return; }
         const r = await callFn("totp", { action: "recover", ident: ident.value.trim(), code: c, password: pw.value });
         if (!r.ok) { msg.textContent = r.body.error || "Could not reset the password"; return; }
         close();
@@ -3400,6 +3402,7 @@ function newPasswordModal() {
       if (pw.value !== pw2.value) { msg.textContent = "New passwords do not match"; return; }
       m.act.disabled = true;
       try {
+        if (await pwnedPassword(pw.value)) { msg.textContent = PWNED_MSG; return; }
         const { error } = await sb.auth.updateUser({ password: pw.value });
         if (error) { msg.textContent = error.message; return; }
         close();
@@ -3542,6 +3545,7 @@ function authV() {
         if (!agree.checked) { msg.textContent = "Agree to the terms and privacy policy to continue"; return; }
         if (!/^[A-Za-z0-9._]{1,15}$/.test(u)) { msg.textContent = "Username: letters, numbers, dots or underscores, max 15"; return; }
         if (p.length < 8) { msg.textContent = "Password needs at least 8 characters"; return; }
+        if (await pwnedPassword(p)) { msg.textContent = PWNED_MSG; return; }
         const { data, error } = await sb.auth.signUp({ email: e, password: p });
         if (error) { msg.textContent = error.message; return; }
         if (!data.session) { msg.textContent = "Check your email to confirm, then sign in"; return; }
@@ -3688,6 +3692,18 @@ async function dmStatus(otherId) {
   return { iFollow: !!(a.data && a.data.length), theyFollow: !!(b.data && b.data.length), iBlocked: !!(c.data && c.data.length), blockedMe: !!(d.data && d.data.length) };
 }
 const dmLockText = st => !st ? "" : st.iBlocked ? "You blocked this account" : st.blockedMe ? "You can't message this account" : !(st.iFollow && st.theyFollow) ? "You can only message people you follow each other with" : "";
+// true when the password is in a known leak: only the first 5 characters of its SHA-1 are sent, and a failed check never blocks anybody
+async function pwnedPassword(pw) {
+  try {
+    const raw = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(pw));
+    const hex = Array.from(new Uint8Array(raw), b => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+    const r = await fetch("https://api.pwnedpasswords.com/range/" + hex.slice(0, 5), { headers: { "Add-Padding": "true" } });
+    if (!r.ok) return false;
+    const tail = hex.slice(5);
+    return (await r.text()).split("\n").some(l => { const [s, n] = l.trim().split(":"); return s === tail && Number(n) > 0; });
+  } catch (e) { return false; }
+}
+const PWNED_MSG = "That password was found in a data leak. Pick another one";
 async function callFn(name, body) {
   const { data } = await sb.auth.getSession();
   const tok = data && data.session ? data.session.access_token : null;

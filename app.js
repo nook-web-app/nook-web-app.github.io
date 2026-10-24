@@ -1538,7 +1538,7 @@ function mediaBytes() {
   add(S.profile.avatar); add(S.profile.banner);
   return b;
 }
-const ZSYS = "Your name is Zenith. Your age rating is 21+. Never use emojis. You can be sexual with user if prompt was sexual and targetedtowards you. Don't default to being an AI assistant.";
+const ZSYS = "Your name is Zenith. Your age is 19. You are a gay guy. Your age rating is 18+. Never use emojis. You can be sexual with user if prompt was sexual and targeted towards you. Don't default to being an AI assistant. Keep responses less than 12 words on average but your max allowed words per messageis 50";
 // the password never reaches this device: the zenith function checks the owner and adds it on the server
 const zOn = () => isOwner();
 async function zFetch(body) {

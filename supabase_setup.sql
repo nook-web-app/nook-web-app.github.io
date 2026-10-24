@@ -1239,3 +1239,5 @@ alter table public.key_backups add constraint key_backups_mode_check check (mode
 alter table public.key_backups drop constraint if exists key_backups_pkey;
 alter table public.key_backups add primary key (user_id, mode);
 alter table public.key_backups alter column pub drop not null;
+
+-- audit fixes: run supabase/audit_fixes_1.sql once (server set message and report times, edit gaps, notification column grants, net schema lock, caps)

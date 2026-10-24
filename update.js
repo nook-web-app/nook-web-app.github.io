@@ -15,7 +15,6 @@
   };
   // a version written like "3.0.8 !" in the notes file is required: it is applied at once and cannot be skipped
   // a patch (same first two numbers) is applied quietly while the app is in the background, no question asked
-  // anything bigger asks first, like before
   const kindOf = ver => {
     const forced = /!\s*$/.test(ver || "");
     const a = String(ver || "").replace(/\s*!\s*$/, "").split("."), b = String(APP_VERSION).split(".");

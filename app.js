@@ -1,6 +1,5 @@
 // never run inside someone else's page: a hidden frame is how people trick you into tapping things
-if (window.top !== window.self) { try { window.top.location = window.self.location; } catch (e) { document.documentElement.style.display = "none"; } }
-// if the app can not start, say so instead of showing a blank page
+if (window.top !== window.self) { document.documentElement.style.display = "none"; try { window.top.location = window.self.location; } catch (e) {} }
 function startFail(why) {
   const m = document.getElementById("main");
   if (!m || m.childElementCount) return;
@@ -23,9 +22,26 @@ const SB_URL = "https://cimyolsipjdpibzaebmx.supabase.co";
 // only the public columns of a profile are read; the moderation flags are not visible to other people
 const ACC_COLS = "id, username, display_name, bio, avatar, banner, banner_theme, public_key, deactivated, handle_changed_at, pinned_post_id, created_at";
 const SB_KEY = "sb_publishable_BzsW9TXvMRjUQf5BZj3pLg_197wdNpq";
-// read before supabase-js clears the link from the address bar
-const RECOVERY = /type=recovery/.test(location.hash), HASH_ERR = /error_code=/.test(location.hash);
-const sb = window.supabase ? window.supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: true, autoRefreshToken: true } }) : null;
+const HASH_ERR = /error_code=/.test(location.hash);
+let RECOVERY = false;
+// the app reads the sign in link of a reset email itself, so a stranger's link cannot silently sign somebody in
+const sb = window.supabase ? window.supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } }) : null;
+async function takeHashLogin() {
+  const raw = location.hash;
+  if (!/access_token=/.test(raw)) return;
+  const p = new URLSearchParams(raw.replace(/^#/, ""));
+  history.replaceState(history.state, "", location.pathname + location.search);
+  let asked = 0, signedIn = false;
+  try {
+    asked = Number(localStorage.getItem("nook-reset-asked") || 0);
+    signedIn = Object.keys(localStorage).some(k => /^sb-.*-auth-token$/.test(k) && localStorage.getItem(k));
+  } catch (e) {}
+  const recent = asked && Date.now() - asked < 2 * 3600 * 1000;
+  // somebody who is already signed in only accepts the link when they asked for the reset on this phone
+  if (p.get("type") !== "recovery" || !p.get("access_token") || !p.get("refresh_token") || (signedIn && !recent)) { if (signedIn) setTimeout(() => toast("That link is for a reset requested on another device. Ask again here"), 800); return; }
+  const { error } = await sb.auth.setSession({ access_token: p.get("access_token"), refresh_token: p.get("refresh_token") });
+  if (!error) { RECOVERY = true; try { localStorage.removeItem("nook-reset-asked"); } catch (e) {} }
+}
 let sbUser = null;
 function isOwner() { return !!sbUser && sbUser.email === "haythamzoubi960@gmail.com"; }
 const NS = "http://www.w3.org/2000/svg";
@@ -139,7 +155,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.35";
+const APP_VERSION = "3.3.36";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -333,7 +349,6 @@ function langOf(text) {
   }
   return hi >= 2 && hi > second ? best : null;
 }
-// the languages this person reads: what they chose, or their phone's languages and what they wrote themselves
 function myLangs() {
   const ids = new Set(LANGS.map(l => l[0]));
   const chosen = S && S.ui && Array.isArray(S.ui.langs) ? S.ui.langs.filter(x => ids.has(x)) : [];
@@ -386,7 +401,6 @@ function rankFeed(arr, tab) {
     return { p, s, who };
   });
   scored.sort((x, y) => y.s - x.s);
-  // no more than two in a row from one person
   const out = [], rest = scored.slice();
   while (rest.length) {
     let i = 0;
@@ -522,16 +536,14 @@ function confirmSheet(msg, label, fn) {
   sheet([{ label, danger: true, fn }, { label: "Cancel", cancel: true }], msg);
 }
 // links lose what follows the ? so they do not carry tracking codes; a few sites need one part to find the page
-const KEEP_QS = { "youtube.com": ["v", "list", "t"], "m.youtube.com": ["v", "list", "t"], "music.youtube.com": ["v", "list"], "news.ycombinator.com": ["id"] };
+const TRACKING = new Set(["fbclid", "gclid", "gbraid", "wbraid", "dclid", "msclkid", "yclid", "twclid", "igshid", "igsh", "si", "feature", "pp", "mc_cid", "mc_eid", "ref_src", "ref_url", "_hsenc", "_hsmi", "mkt_tok", "vero_id", "s_cid", "spm"]);
+// only the tracking part of a link is dropped; the rest keeps the page the same
 function cleanUrl(u) {
   const i = u.indexOf("?");
   if (i < 0) return u;
-  let host = "";
-  try { host = new URL(u).host.replace(/^www\./, ""); } catch (e) { return u; }
   const hashAt = u.indexOf("#", i);
   const qs = u.slice(i + 1, hashAt < 0 ? undefined : hashAt), hash = hashAt < 0 ? "" : u.slice(hashAt);
-  const keep = KEEP_QS[host] || (/\.wikipedia\.org$/.test(host) ? ["title", "oldid"] : []);
-  const kept = qs.split("&").filter(kv => keep.includes(kv.split("=")[0]));
+  const kept = qs.split("&").filter(kv => { const k = kv.split("=")[0].toLowerCase(); return kv && !/^utm_/.test(k) && !TRACKING.has(k); });
   return u.slice(0, i) + (kept.length ? "?" + kept.join("&") : "") + hash;
 }
 const cleanText = t => String(t || "").replace(/https?:\/\/[^\s<>"]+/gi, m => { const tail = (/[.,!?)\]]+$/.exec(m) || [""])[0]; return cleanUrl(m.slice(0, m.length - tail.length)) + tail; });
@@ -581,7 +593,7 @@ function getPreview(url) {
         if (k.length > 150) delete S.previews[k[0]];
         persist();
       }
-      else pvMem.delete(url);
+      else setTimeout(() => pvMem.delete(url), 600000);
       return d;
     }));
   }
@@ -728,7 +740,6 @@ async function postPic(p) {
   const lines = p.text ? wrapLines(m, cleanText(p.text), cw) : [];
   const src = p.imgs && p.imgs.length ? p.imgs[0] : null;
   const pic = src ? await loadPicImg(view(src)) : null;
-  // a post with a link and no photo is drawn with the link's preview card, like in the feed
   const lurl = !pic ? firstUrl(p.text) : null;
   let card = null;
   if (lurl) {
@@ -877,7 +888,6 @@ async function sendPicTo(t, blob, isPost) {
   try { await sendDm(t.id, "", [src], [Object.assign(await srcDims(src), isPost ? { post: true } : {})]); toast("Sent to " + t.name); }
   catch (e) { toast("Could not send"); }
 }
-// where a post goes: always as a picture, into a new post, a message, or another app
 async function sharePost(p) {
   const targets = await messageTargets().catch(() => []);
   const pic = async () => { toast("Making picture..."); try { return await postPic(p); } catch (e) { toast("Could not make picture"); return null; } };
@@ -1006,7 +1016,6 @@ function deletePost(p) {
   } });
   setTimeout(() => { if (!undone) { serverDelete(removed); zenDrop(removed); } }, 6000);
 }
-// removes deleted Zenith posts (and the flags of deleted posts) from the owner-only table at once
 async function zenDrop(items) {
   if (!sbUser || !isOwner()) return;
   for (const x of items) {
@@ -1194,7 +1203,6 @@ function chatV() {
     const last = c.msgs[c.msgs.length - 1];
     return h("div", { class: "lrow", onclick: () => go({ r: "conv", id: c.id }) }, avatar(48), h("div", { class: "nm" }, h("b", {}, c.name), h("span", { class: "sub" }, last ? last.text || "Sent a photo" : "No messages yet")), last ? h("span", { class: "time" }, ago(last.t)) : null);
   });
-  // your own notes go in one folder so they do not fill the list
   if (mine.length > 1) main.append(folder("notes", h("div", { class: "lrow" }, avatar(48), h("div", { class: "nm" }, h("b", {}, "Notes to self"), h("span", { class: "sub" }, mine.length + " chats")), h("span", { class: "time" }, ago(Math.max(...S.chats.map(lastT))))), mine));
   else main.append(...mine);
   fab("plus", "New chat", newChat);
@@ -1355,7 +1363,6 @@ function listV(c) {
   main.append(postList(a, { replyTo: true, empty: emptyState("list", "Empty list. Use the three dots on a post and pick Add to list.") }));
 }
 
-// the rest of what this account has on the server: its messages, likes, reposts and nicknames
 async function wipeServerExtras() {
   if (!sbUser) return;
   const me = sbUser.id;
@@ -1407,14 +1414,20 @@ const extOf = src => { const m = /^data:([^;,]+)/.exec(src || ""); const t = m ?
 const safeName = s => (s || "").replace(/[\\/:*?"<>|\x00-\x1f]/g, "_").trim().slice(0, 40) || "chat";
 async function zipMedia(files, src, folder, name) {
   const path = folder + "/" + name + "." + extOf(src);
-  files.push({ name: path, data: new Uint8Array(await (await fetch(src)).arrayBuffer()) });
+  // a picture that is gone is left out instead of stopping the whole backup
+  try {
+    const res = await fetch(src);
+    if (!res.ok) return null;
+    files.push({ name: path, data: new Uint8Array(await res.arrayBuffer()) });
+  } catch (e) { return null; }
   return path;
 }
 async function downloadBackup() {
   toast("Preparing backup...");
   const files = [], enc = t => new TextEncoder().encode(t);
   const posts = [], replies = [];
-  for (const p of S.posts) {
+  // only what this person wrote: other people's posts are not theirs to export
+  for (const p of S.posts.filter(x => !x.ra && !x.ai)) {
     const rec = { id: p.id, text: p.text, t: p.t, edited: !!p.edited, liked: !!p.liked, saved: !!p.saved, pinned: !!p.pinned, parent: p.parent || null, media: [] };
     let i = 0;
     for (const src of p.imgs || []) rec.media.push(await zipMedia(files, src, "posts/images", p.id + "-" + (i++)));
@@ -1467,14 +1480,17 @@ async function readZip(buf) {
   if (e < 0) throw new Error("not a zip");
   const count = dv.getUint16(e + 10, true);
   let p = dv.getUint32(e + 16, true);
-  const out = {};
-  for (let k = 0; k < count; k++) {
+  const out = Object.create(null);
+  let total = 0;
+  for (let k = 0; k < count && k < 5000; k++) {
     if (dv.getUint32(p, true) !== 0x02014b50) break;
     const method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true), nlen = dv.getUint16(p + 28, true), xlen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true), loff = dv.getUint32(p + 42, true);
     const name = dec.decode(u8.subarray(p + 46, p + 46 + nlen));
     const start = loff + 30 + dv.getUint16(loff + 26, true) + dv.getUint16(loff + 28, true);
     const raw = u8.subarray(start, start + csize);
     out[name] = method === 0 ? raw : method === 8 ? await inflateRaw(raw) : null;
+    total += out[name] ? out[name].length : 0;
+    if (total > 400 * 1024 * 1024) throw new Error("too big");
     p += 46 + nlen + xlen + clen;
   }
   return out;
@@ -1490,9 +1506,9 @@ async function restoreBackup(file) {
     if (/\.json$/i.test(file.name)) {
       const d = JSON.parse(await file.text());
       if (!["tiny-posts", "nook"].includes(d.app)) throw new Error("x");
-      d.posts.forEach(p => { if (!byId(p.id)) { S.posts.push({ ...p, imgs: [] }); n++; } });
-      (d.chats || []).forEach(c => { if (!S.chats.some(x => x.id === c.id)) { S.chats.push(c); n++; } });
-      (d.lists || []).forEach(l => { if (!S.lists.some(x => x.id === l.id)) { S.lists.push(l); n++; } });
+      (Array.isArray(d.posts) ? d.posts : []).forEach(p => { if (p && typeof p.id === "string" && !byId(p.id)) { S.posts.push({ id: p.id, text: String(p.text || ""), t: Number(p.t) || Date.now(), imgs: [], parent: typeof p.parent === "string" ? p.parent : null, liked: !!p.liked, reposted: false, saved: !!p.saved, pinned: !!p.pinned, edited: !!p.edited }); n++; } });
+      (Array.isArray(d.chats) ? d.chats : []).forEach(c => { if (c && typeof c.id === "string" && !S.chats.some(x => x.id === c.id)) { S.chats.push({ id: c.id, name: String(c.name || "Notes"), t: Number(c.t) || Date.now(), msgs: (Array.isArray(c.msgs) ? c.msgs : []).filter(m => m && typeof m.id === "string").map(m => ({ id: m.id, text: String(m.text || ""), t: Number(m.t) || Date.now(), imgs: [] })) }); n++; } });
+      (Array.isArray(d.lists) ? d.lists : []).forEach(l => { if (l && typeof l.id === "string" && !S.lists.some(x => x.id === l.id)) { S.lists.push(l); n++; } });
     } else {
       const files = await readZip(await file.arrayBuffer());
       const text = path => (files[path] ? new TextDecoder().decode(files[path]) : null);
@@ -1501,13 +1517,14 @@ async function restoreBackup(file) {
       const all = [...(postsJ ? JSON.parse(postsJ) : []), ...(repJ ? JSON.parse(repJ) : [])];
       for (const r of all) {
         if (byId(r.id)) continue;
-        S.posts.push({ id: r.id, text: r.text || "", t: r.t, imgs: (r.media || []).map(media).filter(Boolean), parent: r.parent || null, liked: !!r.liked, reposted: false, saved: !!r.saved, pinned: !!r.pinned, edited: !!r.edited });
+        if (!r || typeof r.id !== "string") continue;
+        S.posts.push({ id: r.id, text: String(r.text || ""), t: Number(r.t) || Date.now(), imgs: (r.media || []).map(media).filter(Boolean), parent: r.parent || null, liked: !!r.liked, reposted: false, saved: !!r.saved, pinned: !!r.pinned, edited: !!r.edited });
         n++;
       }
       for (const cp of Object.keys(files).filter(k => /^messages\/[^/]+\/messages\.json$/.test(k))) {
         const c = JSON.parse(text(cp));
         if (S.chats.some(x => x.id === c.id)) continue;
-        S.chats.push({ id: c.id, name: c.name, t: c.t, msgs: (c.messages || []).map(m => ({ id: m.id, text: m.text || "", t: m.t, imgs: (m.media || []).map(media).filter(Boolean) })) });
+        S.chats.push({ id: String(c.id), name: String(c.name || "Notes"), t: Number(c.t) || Date.now(), msgs: (Array.isArray(c.messages) ? c.messages : []).filter(m => m && typeof m.id === "string").map(m => ({ id: m.id, text: String(m.text || ""), t: Number(m.t) || Date.now(), imgs: (m.media || []).map(media).filter(Boolean) })) });
         n++;
       }
       const st = text("profile/settings.json");
@@ -1544,7 +1561,7 @@ const zOn = () => isOwner();
 async function zFetch(body) {
   const { data } = await sb.auth.getSession();
   const tok = data && data.session ? data.session.access_token : null;
-  return fetch(SB_URL + "/functions/v1/zenith", { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: JSON.stringify(body) });
+  return fetch(SB_URL + "/functions/v1/zenith", { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: JSON.stringify(body) , signal: AbortSignal.timeout ? AbortSignal.timeout(60000) : undefined });
 }
 const zNow = s => s + " Never use line breaks. Write everything as one paragraph. Current local time: " + new Date().toLocaleString([], { dateStyle: "full", timeStyle: "short" }) + ". Use this for anything about the time or date.";
 async function zStream(history, onText) {
@@ -1571,7 +1588,7 @@ async function zStream(history, onText) {
   return out;
 }
 function zAsk(chat, list, bubble, m) {
-  if (!/@zenith/i.test(m.text)) return;
+  if (!zOn() || !/@zenith/i.test(m.text)) return;
   const hist = chat.msgs.filter(x => x.text || (x.imgs && x.imgs.some(s => /^data:image\//.test(s)))).slice(-30);
   const allowed = new Set();
   let budget = 6;
@@ -2166,11 +2183,10 @@ async function loadFeed() {
   if (pq.error) pq = await sb.from("posts").select("id, user_id, body, created_at").order("created_at", { ascending: false }).limit(300);
   const posts = pq.data;
   if (!posts) return;
-  // deletes that never reached the server (app closed, no connection) are sent again
   const pend = new Set(S.pendDel || []);
   if (S.pendDel && S.pendDel.length) { try { await deleteRemote(S.pendDel.map(r => ({ remote: r }))); } catch (e) {} }
   const ids = posts.filter(p => !p.parent_id).map(p => p.id);
-  const [{ data: myLikes }, { data: myReposts }, { data: blocksOut }, { data: blocksIn }, { data: likeRows }, { data: repostRows }, { data: meRow }, { data: myFollows }] = await Promise.all([
+  const feedRes = await Promise.all([
     sb.from("likes").select("post_id").eq("user_id", sbUser.id),
     sb.from("reposts").select("post_id").eq("user_id", sbUser.id),
     sb.from("blocks").select("blocked_id").eq("blocker_id", sbUser.id),
@@ -2180,6 +2196,9 @@ async function loadFeed() {
     sb.from("accounts").select(ACC_COLS).eq("id", sbUser.id).maybeSingle(),
     sb.from("follows").select("followee_id").eq("follower_id", sbUser.id).limit(1000)
   ]);
+  // a failed answer is not an empty one: nothing is changed (a blocked person must not come back because a call failed)
+  if ([0, 1, 2, 3].some(i => !feedRes[i] || feedRes[i].error)) return;
+  const [{ data: myLikes }, { data: myReposts }, { data: blocksOut }, { data: blocksIn }, { data: likeRows }, { data: repostRows }, { data: meRow }, { data: myFollows }] = feedRes;
   if (myFollows) { followSet = new Set(myFollows.map(r => r.followee_id)); cacheWrite("follows:" + sbUser.id, [...followSet]); }
   if (meRow) {
     let changed = false;
@@ -2265,25 +2284,34 @@ function rAv(ra, size) {
   if (size) { a.style.width = size + "px"; a.style.height = size + "px"; a.style.fontSize = Math.round(size * 0.4) + "px"; }
   return a;
 }
+const busyTaps = new Set();
 async function toggleRemoteLike(p, big) {
-  if (!sbUser) return;
+  if (!sbUser || busyTaps.has("l" + p.id)) return;
+  busyTaps.add("l" + p.id);
+  try { await toggleRemoteLikeNow(p, big); } finally { busyTaps.delete("l" + p.id); }
+}
+async function toggleRemoteLikeNow(p, big) {
   const on = !p.liked;
   p.liked = on; p.lc = Math.max(0, (p.lc || 0) + (on ? 1 : -1));
   bump = p.id + "like"; persist(); refresh(p, big);
   const { error } = on
     ? await sb.from("likes").insert({ user_id: sbUser.id, post_id: p.remote })
     : await sb.from("likes").delete().eq("user_id", sbUser.id).eq("post_id", p.remote);
-  if (error) { p.liked = !on; p.lc = Math.max(0, (p.lc || 0) + (on ? -1 : 1)); persist(); refresh(p, big); toast("Could not update like"); }
+  if (error && !(on && error.code === "23505")) { p.liked = !on; p.lc = Math.max(0, (p.lc || 0) + (on ? -1 : 1)); persist(); refresh(p, big); toast("Could not update like"); }
 }
 async function toggleRemoteRepost(p, big) {
-  if (!sbUser) return;
+  if (!sbUser || busyTaps.has("r" + p.id)) return;
+  busyTaps.add("r" + p.id);
+  try { await toggleRemoteRepostNow(p, big); } finally { busyTaps.delete("r" + p.id); }
+}
+async function toggleRemoteRepostNow(p, big) {
   const on = !p.reposted;
   p.reposted = on; p.rpc = Math.max(0, (p.rpc || 0) + (on ? 1 : -1));
   bump = p.id + "rp"; persist(); refresh(p, big);
   const { error } = on
     ? await sb.from("reposts").insert({ user_id: sbUser.id, post_id: p.remote })
     : await sb.from("reposts").delete().eq("user_id", sbUser.id).eq("post_id", p.remote);
-  if (error) { p.reposted = !on; p.rpc = Math.max(0, (p.rpc || 0) + (on ? -1 : 1)); persist(); refresh(p, big); toast("Could not update repost"); }
+  if (error && !(on && error.code === "23505")) { p.reposted = !on; p.rpc = Math.max(0, (p.rpc || 0) + (on ? -1 : 1)); persist(); refresh(p, big); toast("Could not update repost"); }
 }
 function userV(cur) {
   const found = S.posts.find(p => p.ra && p.ra.id === cur.id);
@@ -2486,7 +2514,7 @@ function openCompose(o) {
   const jobs = [];
   const draftText = !ed && !parent && S.draft && Date.now() - S.draft.t < 120000 ? S.draft.text : "";
   const startText = ed ? ed.text : o.prefix ? o.prefix : draftText;
-  const ta = h("textarea", { class: "cta", id: "ctext", placeholder: parent ? "Write your reply" : PH[Math.floor(Math.random() * PH.length)], "aria-label": "Post text" });
+  const ta = h("textarea", { class: "cta", id: "ctext", maxlength: "5000", placeholder: parent ? "Write your reply" : PH[Math.floor(Math.random() * PH.length)], "aria-label": "Post text" });
   ta.value = startText;
   const grid = h("div", { class: "cimgs" });
   const bCam = pickBtn("camera", "Take a photo", true, files => addFiles(files));
@@ -2530,12 +2558,12 @@ function openCompose(o) {
   }
   function sync() {
     m.act.disabled = jobs.length > 0 || (!ta.value.trim() && !imgs.length);
-    const full = imgs.length + jobs.length >= 20;
+    const full = imgs.length + jobs.length >= 4;
     [bCam, bImg].forEach(b => { b.classList.toggle("off", full); b.querySelector("input").disabled = full; });
     ta.style.height = "auto";
     ta.style.height = Math.max(130, ta.scrollHeight) + "px";
   }
-  function addFiles(files) { return addMedia(files, imgs, jobs, 20, () => { drawImgs(); sync(); }); }
+  function addFiles(files) { return addMedia(files, imgs, jobs, 4, () => { drawImgs(); sync(); }); }
   ta.addEventListener("input", sync);
   drawImgs();
   sync();
@@ -2658,7 +2686,7 @@ function editProfile() {
   let avatarData = pr.avatar, bannerData = pr.banner, themeVal = pr.bannerTheme === "avatar" ? "avatar" : "default";
   const name = h("input", { class: "in", id: "en", maxlength: "15" });
   const handle = h("input", { class: "in", id: "eh", autocapitalize: "none", autocomplete: "off" });
-  const bio = h("textarea", { class: "in", id: "eb", rows: 3 });
+  const bio = h("textarea", { class: "in", id: "eb", rows: 3, maxlength: "500" });
   name.value = pr.name; handle.value = pr.handle; bio.value = pr.bio || "";
   const bn = h("div", { class: "ebanner" });
   const avl = h("span", {}, (pr.name || pr.handle || "?").charAt(0).toUpperCase());
@@ -2785,9 +2813,9 @@ function changePassV() {
         if (!pr) { msg.textContent = "Could not reach Nook. Check your connection"; return; }
         if (!pr.ok) { msg.textContent = setpwMsg(pr); return; }
         await takeSession(pr);
-        await loginBackup(nw.value, { reseal: true });
+        const kr = await loginBackup(nw.value, { reseal: true });
         close();
-        toast("Password changed");
+        toast(kr === "fail" ? "Password changed. Your message key could not be saved with it" : "Password changed");
       } finally { busy = false; }
     }
   });
@@ -2859,6 +2887,7 @@ async function wipeLocal(keepKeys) {
     sessionStorage.removeItem("nook-route");
   } catch (e) {}
   // the chat key stays while a banned person can still download their backup, so old messages can be opened
+  try { if ("caches" in window) caches.delete("nook-share"); } catch (e) {}
   // only the key of the account being cleared goes; other accounts on this phone keep theirs
   if (!keepKeys) { try { if (sbUser) { const kdb = await keyDb(); await new Promise(res => { const t = kdb.transaction("k", "readwrite"); t.objectStore("k").delete(sbUser.id); t.oncomplete = res; t.onerror = res; t.onabort = res; }); } else indexedDB.deleteDatabase("nook-keys"); } catch (e) {} }
 }
@@ -2930,7 +2959,6 @@ async function buildBanZip(j, say) {
   const uid = d.account && d.account.id;
   const enc = t => new TextEncoder().encode(t);
   const files = [];
-  // a file only exists when it has something in it
   const put = (name, data) => { files.push({ name, data: typeof data === "string" ? enc(data) : data }); };
   const putText = (name, lines) => { if (lines.length) put(name, lines.join("\n") + "\n"); };
   const when = t => { const x = new Date(t); return isNaN(x) ? "" : x.toISOString().slice(0, 16).replace("T", " ") + " UTC"; };
@@ -3033,7 +3061,6 @@ async function checkBan() {
 }
 
 const codeInput = label => h("input", { class: "in", inputmode: "numeric", autocomplete: "one-time-code", maxlength: "7", placeholder: "6 digit code", "aria-label": label || "6 digit code" });
-// resolves true when the authenticator ends up turned on
 function authenticatorSetup() {
   return new Promise(resolve => {
     const box = h("div", { class: "fld ctr" }, h("p", { class: "note" }, "Getting your key..."));
@@ -3097,7 +3124,6 @@ function authenticatorOff() {
   });
 }
 let totpOn = null;
-// default way back in: a reset link in the account email
 function recoverModal(prefill) {
   const ident = h("input", { class: "in", placeholder: "Email or username", autocomplete: "username", "aria-label": "Email or username", autocapitalize: "none" });
   ident.value = prefill || "";
@@ -3113,6 +3139,7 @@ function recoverModal(prefill) {
       if (!id) { msg.textContent = "Type your email or username"; return; }
       m.act.disabled = true;
       try {
+        try { localStorage.setItem("nook-reset-asked", String(Date.now())); } catch (e) {}
         const r = await callFn("totp", { action: "reset", ident: id, redirectTo: location.origin + location.pathname });
         if (!r.ok) { msg.textContent = "Could not send the link. Try again later."; return; }
         close();
@@ -3121,7 +3148,6 @@ function recoverModal(prefill) {
       finally { m.act.disabled = false; }
     }
   });
-  // only offer the authenticator when this account really has it on
   let tmr = 0, seq = 0;
   const probe = () => {
     const id = ident.value.trim(), n = ++seq;
@@ -3131,7 +3157,6 @@ function recoverModal(prefill) {
   ident.addEventListener("input", () => { alt.hidden = true; clearTimeout(tmr); tmr = setTimeout(probe, 500); });
   if (ident.value) probe();
 }
-// second way: the 6 digit code from the authenticator app
 function recoverCodeModal(prefill) {
   const ident = h("input", { class: "in", placeholder: "Email or username", autocomplete: "username", "aria-label": "Email or username", autocapitalize: "none" });
   ident.value = prefill || "";
@@ -3183,9 +3208,9 @@ function newPasswordModal() {
         if (!pr) { msg.textContent = "Could not reach Nook. Check your connection"; return; }
         if (!pr.ok) { msg.textContent = pr.body && pr.body.error === "no_password" ? "This link has run out. Ask for a new one" : setpwMsg(pr); return; }
         await takeSession(pr);
-        await loginBackup(pw.value, { reseal: true });
+        const kr = await loginBackup(pw.value, { reseal: true });
         close();
-        toast("Password changed");
+        toast(kr === "fail" ? "Password changed. Your message key could not be saved with it" : "Password changed");
       } finally { m.act.disabled = false; }
     }
   });
@@ -3249,9 +3274,8 @@ async function pushDetach() {
   const sub = await pushSub();
   if (sub && sbUser) await sb.from("push_subs").delete().eq("endpoint", sub.endpoint).then(() => {}, () => {});
 }
-// ---- accounts on this phone ----
 // each saved account keeps its own login (the refresh token) and its own local data (lists, notes, settings); a password is only asked when an account is added
-let switching = false;
+let switching = false, leaving = false;
 function acctDb() {
   return new Promise((res, rej) => {
     const r = indexedDB.open("nook-accts", 1);
@@ -3275,7 +3299,6 @@ async function acctDel(k) {
 async function acctList() {
   try { const l = await acctGet("list"); return Array.isArray(l) ? l : []; } catch (e) { return []; }
 }
-// keeps the newest login and the name and picture of the account that is open
 async function rememberAccount(info) {
   if (!sbUser) return;
   const { data } = await sb.auth.getSession();
@@ -3307,20 +3330,30 @@ async function loadSnap(id, entry) {
   normalize();
   await flush();
 }
-// opens a saved account: its login is refreshed, its local data is put in place, then the app restarts
 async function enterAccount(entry) {
   switching = true;
   try {
+    enterFail = "";
     const { data, error } = await sb.auth.refreshSession({ refresh_token: entry.rt });
-    if (error || !data || !data.session) { await forgetAccount(entry.id); return false; }
+    // only a refusal from the server removes the account; a bad connection never does
+    if (error && !(error.status >= 400 && error.status < 500)) { enterFail = "offline"; return false; }
+    if (error || !data || !data.session) { enterFail = "login"; await forgetAccount(entry.id); return false; }
+    // the login rotated, so the new one is saved at once
+    await acctPut("list", (await acctList()).map(x => x.id === entry.id ? Object.assign({}, x, { rt: data.session.refresh_token }) : x)).catch(() => {});
+    try { sessionStorage.removeItem("nook-route"); } catch (e) {}
     await loadSnap(entry.id, entry);
     try { localStorage.setItem(LOCAL_UID, entry.id); } catch (e) {}
     location.reload();
     return true;
-  } catch (e) { return false; } finally { switching = false; }
+  } catch (e) { enterFail = "offline"; return false; } finally { switching = false; }
 }
+let enterFail = "";
 async function switchAccount(id) {
-  if (!sbUser || id === sbUser.id) return;
+  if (!sbUser || id === sbUser.id || switching) return;
+  switching = true;
+  try { await switchAccountNow(id); } finally { switching = false; }
+}
+async function switchAccountNow(id) {
   const target = (await acctList()).find(a => a.id === id);
   if (!target) return;
   toast("Switching...");
@@ -3331,14 +3364,17 @@ async function switchAccount(id) {
   try { localStorage.removeItem("nook-push-ep"); } catch (e) {}
   if (!(await enterAccount(target))) {
     pushSync().catch(() => {});
+    if (enterFail === "offline") { toast("No connection. Try again"); return; }
     toast("Sign in again to use that account");
     addAccountModal();
   }
 }
-// signs this account out of this phone; the next saved account, if there is one, is opened
 async function leaveThisAccount() {
+  leaving = true;
   const me = sbUser.id;
   await forgetAccount(me);
+  // the saved copies of this account's inbox and chats leave the phone with it
+  try { Object.keys(localStorage).filter(k => k.startsWith(CACHE_PFX) && k.includes(me)).forEach(k => localStorage.removeItem(k)); } catch (e) {}
   const rest = await acctList();
   const next = rest.find(a => a.id === mainAccountId(rest)) || rest[0];
   try { await sb.auth.signOut({ scope: "local" }); } catch (e) {}
@@ -3480,19 +3516,20 @@ function takeOpen() {
   const v = p.get("open");
   if (!v) return;
   p.delete("open");
-  history.replaceState(null, "", location.pathname + (p.toString() ? "?" + p.toString() : ""));
+  history.replaceState(history.state, "", location.pathname + (p.toString() ? "?" + p.toString() : ""));
   handleOpen(v);
 }
 if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", e => { if (e.data && e.data.type === "open") handleOpen(e.data.open); });
 
-// privacy policy and terms; reachable before signing in
 const LEGAL = {
   privacy: { title: "Privacy Policy", body: [
-    ["Information we keep", "We keep your account details, profile, posts and messages. We do not sell your data and we do not show ads."],
+    ["Information we keep", "We keep your account details and email, profile, posts and messages. We also keep the push addresses of your devices for alerts, records of login tries, and a marker of your age check. We do not sell your data and we do not show ads."],
     ["Messages", "Messages are end to end encrypted: only you and the recipient can read them, with a key that lives on your devices."],
     ["Message key backup", "Nook keeps a copy of your message key, locked with your login password, so a new phone can open your messages. Our server sees your password when you sign in, so it could in theory unlock the copy. You can turn this off in Settings."],
-    ["Posts", "Posts and photos are checked by an automated system for content that violates our terms. Photos remain hidden until the check is complete."],
-    ["Service providers", "We use Supabase, GitHub Pages and an AI service to operate Nook. They receive only the data needed to provide their service."],
+    ["Posts", "Posts, photos, profile pictures, banners, names and bios are checked by an automated system for content that violates our terms. Photos remain hidden until the check is complete."],
+    ["Links", "When a link shows a preview card, the link is sent to a preview service, and the picture loads from the linked site. This also applies to links in messages."],
+    ["Age", "You must be 18 or older. If you say you are under 18, or the automated check finds a sign of it, the account is locked or banned. A copy of a banned account is kept for 30 days so it can be downloaded, then deleted."],
+    ["Service providers", "We use Supabase, GitHub Pages, an AI service and your phone's push service to operate Nook. They receive only the data needed to provide their service. New passwords are checked against known leaks with Have I Been Pwned, without sending the password itself."],
     ["Retention and deletion", "We keep your data until you delete it or your account. You may delete your account at any time in Settings."],
   ] },
   terms: { title: "Terms of Use", body: [
@@ -3514,7 +3551,6 @@ function legalV(c) {
 const legalLink = (r, label) => h("a", { role: "link", tabindex: "0", onclick: () => go({ r }), onkeydown: e => { if (e.key === "Enter") go({ r }); } }, label);
 
 let authMode = "in";
-// tells people about a limit while they type, instead of the letters silently stopping
 function hinted(input, max, rule, min, holder) {
   const hint = h("p", { class: "hint", "aria-live": "polite" });
   const paint = () => {
@@ -3758,7 +3794,6 @@ function untilText(iso) {
   return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) + " at " + time;
 }
 const lockedMsg = until => "Too many tries. Try again " + untilText(until);
-// what went wrong, in plain words, for an error from the sign up or account calls
 function authMsg(error) {
   const c = String((error && error.code) || ""), m = String((error && error.message) || "");
   if (c === "user_already_exists" || c === "email_exists" || /already (been )?registered/i.test(m)) return "An account with this email already exists. Sign in instead";
@@ -3770,7 +3805,6 @@ function authMsg(error) {
   if (/network|fetch/i.test(m)) return "Could not reach Nook. Check your connection";
   return m || "Something went wrong. Try again";
 }
-// the answer of the signin function when a password was being changed
 function setpwMsg(r) {
   const e = r.body && r.body.error;
   if (e === "wrong_password") return "Current password is wrong" + (r.body.left > 0 ? ". " + r.body.left + (r.body.left === 1 ? " try" : " tries") + " left before a wait" : "");
@@ -3784,7 +3818,6 @@ async function takeSession(r) {
   const ss = r.body && r.body.session;
   if (ss) await sb.auth.setSession({ access_token: ss.access_token, refresh_token: ss.refresh_token });
 }
-// the answer of the signin function turned into words; gives "" for no problem
 function signinMsg(r) {
   const e = r.body && r.body.error;
   if (r.ok) return "";
@@ -3844,7 +3877,6 @@ async function dmThread(otherId) {
   if (error) throw error;
   return (data || []).filter(m => visibleMsg(m, otherId));
 }
-// load the chat list in the background so it is ready before the Chats tab opens
 async function warmInbox() {
   const convos = await dmInbox();
   cacheWrite("inbox:" + sbUser.id, convos);
@@ -3974,7 +4006,6 @@ async function loginBackup(pw, opt) {
     const login = rows.find(r => r.mode === "login");
     const optedOut = rows.some(r => r.mode === "off");
     if (!mine) {
-      // a new phone: the saved copy opens with the password that was just typed
       if (login && me && me.public_key === login.pub) {
         try { const rec = await openKeyBackup(login, pw); await saveLocalKeys(await keyDb(), sbUser.id, rec); resetKeyCaches(); return "restored"; } catch (e) { return "locked"; }
       }
@@ -4006,24 +4037,37 @@ function pwField(ph) {
   return { input, wrap: h("div", { class: "fld", style: "position:relative" }, input, eye) };
 }
 const LINK_MIN = 10;
-// twelve digits made from the public half of the temporary key: both phones show them, so a swapped request is seen
+// twenty digits made from the public half of the temporary key: both phones show them, so a swapped request is seen
 async function linkCode(pub) {
   const d = new Uint8Array(await crypto.subtle.digest("SHA-256", fromB64(pub)));
   let n = 0n;
-  for (let i = 0; i < 6; i++) n = (n << 8n) | BigInt(d[i]);
-  return String(n % 1000000000000n).padStart(12, "0").replace(/(\d{4})(?=\d)/g, "$1 ");
+  for (let i = 0; i < 9; i++) n = (n << 8n) | BigInt(d[i]);
+  return String(n % 100000000000000000000n).padStart(20, "0").replace(/(\d{4})(?=\d)/g, "$1 ");
 }
-const codeBox = t => h("div", { style: "font-size:var(--fs-3xl);font-weight:700;letter-spacing:.06em;text-align:center;padding:14px 0;font-variant-numeric:tabular-nums" }, t);
+const codeBox = t => h("div", { style: "font-size:var(--fs-2xl);font-weight:700;letter-spacing:.04em;text-align:center;padding:14px 0;font-variant-numeric:tabular-nums" }, t);
+// a new key reaches the server first and this phone second, so a failed call never leaves the old key destroyed
+async function adoptNewKey(rec) {
+  const u = await sb.from("accounts").update({ public_key: rec.pub }).eq("id", sbUser.id);
+  if (u.error) throw u.error;
+  await saveLocalKeys(await keyDb(), sbUser.id, rec);
+}
+// saved copies of an old key must not outlive it, or a later unlock would bring the old key back
+async function dropOldBackups(modes) {
+  for (let i = 0; i < 3; i++) {
+    let q = sb.from("key_backups").delete().eq("user_id", sbUser.id);
+    q = modes ? q.in("mode", modes) : q.neq("mode", "off");
+    const { error } = await q;
+    if (!error) return;
+  }
+  throw new Error("old backup");
+}
 async function makeNewKey() {
   const rec = await makeKeyPair();
-  await saveLocalKeys(await keyDb(), sbUser.id, rec);
-  const { error } = await sb.from("accounts").update({ public_key: rec.pub }).eq("id", sbUser.id);
-  if (error) throw error;
-  await sb.from("key_backups").delete().eq("user_id", sbUser.id).neq("mode", "off");
+  await adoptNewKey(rec);
+  await dropOldBackups();
   await sb.from("key_links").delete().eq("user_id", sbUser.id);
   return rec;
 }
-// the ways to open the messages on a phone that does not have the key
 async function unlockModal() {
   if (!sbUser) return;
   const { data: rows } = await sb.from("key_backups").select("mode").eq("user_id", sbUser.id);
@@ -4037,7 +4081,6 @@ async function unlockModal() {
   items.push({ label: "Cancel", cancel: true });
   sheet(items, "Open your messages");
 }
-// this phone asks, the other one answers
 async function waitForApprovalModal() {
   if (!sbUser) return;
   let stop = false, linkId = null;
@@ -4086,7 +4129,6 @@ async function waitForApprovalModal() {
     if (!stop) msg.textContent = "Nobody answered. Close this and try again";
   } catch (e) { msg.textContent = "Something went wrong. Close this and try again"; }
 }
-// a phone that has the key answers requests from the same account
 let linkTimer = 0;
 const linkShown = new Set();
 async function checkLinks() {
@@ -4121,10 +4163,8 @@ async function approveLinkModal(req) {
         let rec = await myKeys();
         if (!rec.priv.extractable) {
           rec = await makeKeyPair();
-          await saveLocalKeys(await keyDb(), sbUser.id, rec);
-          const u = await sb.from("accounts").update({ public_key: rec.pub }).eq("id", sbUser.id);
-          if (u.error) throw u.error;
-          await sb.from("key_backups").delete().eq("user_id", sbUser.id).neq("mode", "off");
+          await adoptNewKey(rec);
+          await dropOldBackups();
           resetKeyCaches();
         }
         const eph = await crypto.subtle.generateKey(E2E_ALG, false, ["deriveKey"]);
@@ -4169,7 +4209,6 @@ async function loginBackupModal() {
     }
   });
 }
-// a new phone for an account that has a saved key: the recovery password opens it
 async function restoreKeysModal(mode) {
   if (!sbUser) return;
   const login = mode === "login";
@@ -4188,9 +4227,11 @@ async function restoreKeysModal(mode) {
         if (error || !row) { msg.textContent = "Could not load the saved key. Try again"; return; }
         let rec;
         try { rec = await openKeyBackup(row, pw.input.value); } catch (e) { msg.textContent = "That is not the right password"; return; }
-        await saveLocalKeys(await keyDb(), sbUser.id, rec);
+        // a saved key that is not the key of the account is an old one: it must never replace the account's key
         const { data: me } = await sb.from("accounts").select("public_key").eq("id", sbUser.id).maybeSingle();
-        if (!me || me.public_key !== rec.pub) await sb.from("accounts").update({ public_key: rec.pub }).eq("id", sbUser.id);
+        if (me && me.public_key && me.public_key !== rec.pub) { msg.textContent = "That saved key is older than the one on your account. Use another way"; return; }
+        await saveLocalKeys(await keyDb(), sbUser.id, rec);
+        if (!me || !me.public_key) await sb.from("accounts").update({ public_key: rec.pub }).eq("id", sbUser.id);
         e2eLocked = false;
         close();
         toast("Messages unlocked");
@@ -4199,7 +4240,6 @@ async function restoreKeysModal(mode) {
     }
   });
 }
-// turn the backup on, or change its password
 async function backupSetupModal(changing) {
   let cur;
   try { cur = await myKeys(); } catch (e) { toast(e.message || LOCKED_MSG); return; }
@@ -4226,11 +4266,9 @@ async function backupSetupModal(changing) {
         const up = await sb.from("key_backups").upsert(row, { onConflict: "user_id,mode" });
         if (up.error) { msg.textContent = "Could not save the backup. Try again"; return; }
         if (legacy) {
-          await saveLocalKeys(await keyDb(), sbUser.id, rec);
-          const u = await sb.from("accounts").update({ public_key: rec.pub }).eq("id", sbUser.id);
-          if (u.error) throw u.error;
+          await adoptNewKey(rec);
           // a copy locked with the login password belongs to the old key now
-          await sb.from("key_backups").delete().eq("user_id", sbUser.id).eq("mode", "login");
+          await dropOldBackups(["login"]);
           resetKeyCaches();
         }
         close();
@@ -4505,8 +4543,13 @@ function sendTyping(otherId, on) {
   }
   o.ch.send({ type: "broadcast", event: "typing", payload: { from: sbUser.id, on: !!on } });
 }
+// typing signals travel on a channel anybody can join, so only people this person already chats with are believed
+function peerKnown(id) {
+  const hit = cacheRead("inbox:" + sbUser.id);
+  return !!(hit && Array.isArray(hit.v) && hit.v.some(cv => cv && cv.other === id));
+}
 function onTyping(from, on) {
-  if (!from || from === sbUser.id) return;
+  if (!sbUser || !from || from === sbUser.id || typeof from !== "string" || !peerKnown(from)) return;
   clearTimeout(typeIn.get(from));
   if (on === false) {
     // let the dots hang around for a moment, like instagram, instead of cutting off
@@ -4876,7 +4919,6 @@ function searchV() {
     if (mine !== token) return;
     if (error) { list.textContent = ""; list.append(emptyState("user", "Could not load people.")); return; }
     show(data || [], "No one to suggest yet.");
-    // new people appear on their own while this page stays open
     // while nobody can be suggested it looks again every 15 seconds
     const next = (data || []).length ? Math.max(1000, d.until - Date.now()) + 500 : 15000;
     timer = setTimeout(() => { if (document.body.contains(list) && !box.value.trim()) suggest(); }, next);
@@ -4941,7 +4983,6 @@ function dmRow(cv, body) {
     last ? h("span", { class: "time" }, ago(Date.parse(last.created_at))) : null,
     cv.unread ? h("span", { class: "nbadge" }, String(cv.unread)) : null);
 }
-// what a media-only message says in the chat list and in alerts
 function dmGist(text, media, mine) {
   const list = media || [];
   const t = String(text || "").trim();
@@ -5036,7 +5077,6 @@ async function notifsV() {
   await acctsFor(rows.map(r => r.actor_id));
   list.textContent = "";
   if (!rows.length) { list.append(emptyState("bell", "No notifications yet.")); return; }
-  // every notification is its own row, newest first
   const checkEmpty = () => { if (!list.querySelector(".lrow")) list.append(emptyState("bell", "No notifications yet.")); };
   rows.forEach(n => {
     const id = n.actor_id;
@@ -5078,7 +5118,6 @@ function onDeletedMsg(payload) {
 }
 // a post of yours was taken down by the AI check: flash the screen and say why
 const modShown = new Set();
-// remove posts (and the replies under them) from this phone after the server deleted them
 function dropLocalPosts(remoteIds) {
   const want = new Set(remoteIds);
   const gone = new Set(S.posts.filter(x => x.remote && want.has(x.remote)).map(x => x.id));
@@ -5125,7 +5164,6 @@ async function checkModNotices() {
   const { data } = await sb.from("mod_notices").select("id, kind, post_id, note").is("seen_at", null).order("created_at", { ascending: true }).limit(5);
   (data || []).forEach(showModNotice);
 }
-// ask people who use the website to install the app; stay quiet if it is already installed
 const isStandalone = () => (window.matchMedia && matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true;
 let installEv = null;
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEv = e; });
@@ -5215,7 +5253,10 @@ function renderRail() {
     lists.length ? lists.map(l => rowBtn(h("div", { class: "sq rsq" }, ic("list", 20)), l.name, () => go({ r: "list", id: l.id }))) : h("p", { class: "rnote" }, "No lists yet."),
     rowBtn(ic("sliders", 20), "Settings", () => root("settings"))]);
 }
+let ageGate = false;
 function render(anim) {
+  // a held account sees only the age question, whatever route or history entry asked for something else
+  if (ageGate) { stack = [{ r: "age" }]; scrolls.length = 0; }
   let cur = stack[stack.length - 1];
   while (stack.length > 1 && ((cur.r === "thread" && !byId(cur.id)) || (cur.r === "conv" && !S.chats.some(x => x.id === cur.id)) || (cur.r === "list" && !S.lists.some(x => x.id === cur.id)))) {
     stack.pop(); scrolls.pop(); cur = stack[stack.length - 1];
@@ -5270,6 +5311,7 @@ async function boot() {
       (rt.scrolls || []).slice(0, stack.length - 1).forEach(v => scrolls.push(v));
     }
   } catch (e) {}
+  await takeHashLogin().catch(() => {});
   // somebody who was signed in on this phone sees their own saved screen at once; the checks below still decide, and send them elsewhere if they fail
   let early = false, earlySig = "";
   try {
@@ -5284,15 +5326,19 @@ async function boot() {
       earlySig = [S.profile.handle, S.profile.name, S.profile.avatar].join("|");
     }
   } catch (e) { early = false; sbUser = null; }
-  const { data: sess } = await Promise.race([sb.auth.getSession().catch(() => ({ data: { session: null } })), new Promise(r => setTimeout(() => r({ data: { session: null } }), 6000))]);
-  sbUser = sess && sess.session ? sess.session.user : null;
+  const earlyUser = early ? sbUser : null;
+  let slowLogin = false;
+  const { data: sess } = await Promise.race([sb.auth.getSession().catch(() => ({ data: { session: null } })), new Promise(r => setTimeout(() => { slowLogin = true; r({ data: { session: null } }); }, 6000))]);
+  // a slow connection is not a sign out: the saved login stays until the server says no
+  sbUser = sess && sess.session ? sess.session.user : slowLogin ? earlyUser : null;
   let ageHeld = false, ownAvatar = null;
   if (sbUser) {
     const { data: ban } = await sb.from("bans").select("user_id").eq("user_id", sbUser.id).maybeSingle();
     if (ban) { hist(true); showBanned(); return; }
     const { data: acct, error: aerr } = await sb.from("accounts").select("id, deactivated, username, avatar, display_name").eq("id", sbUser.id).maybeSingle();
     if (acct) ownAvatar = acct.avatar || null;
-    if (acct) { const { data: held } = await sb.rpc("my_age_hold"); acct.age_hold = held === true; }
+    // if the check cannot be made the answer is "held": the age screen stays up until the server says otherwise
+    if (acct) { const { data: held, error: he } = await sb.rpc("my_age_hold"); acct.age_hold = he ? true : held === true; }
     ageHeld = !!(acct && acct.age_hold);
     if (!aerr && (!acct || acct.deactivated)) { await sb.auth.signOut(); sbUser = null; }
     else if (sbUser && await foreignLocalData(acct)) { await wipeLocal(true); try { localStorage.setItem(LOCAL_UID, sbUser.id); } catch (e) {} location.reload(); return; }
@@ -5304,15 +5350,15 @@ async function boot() {
       rememberAccount({ username: acct.username, name: acct.display_name, avatar: acct.avatar }).catch(() => {});
     }
     if (sbUser) sb.auth.onAuthStateChange((ev, session) => {
+      if (ev === "SIGNED_OUT" && !switching && !leaving && sbUser) { location.reload(); return; }
       if (switching || !session || !sbUser) return;
-      // another tab switched accounts: this one follows
       if (session.user.id !== sbUser.id) { location.reload(); return; }
       if (ev === "TOKEN_REFRESHED") acctList().then(list => { const a = list.find(x => x.id === sbUser.id); if (a) { a.rt = session.refresh_token; return acctPut("list", list); } }).catch(() => {});
     });
   }
   // whether somebody is banned is only ever decided by the server: a banned account sees the banned page when it signs in
   if (!sbUser) { stack = [{ r: "auth" }]; scrolls.length = 0; }
-  else if (ageHeld) { stack = [{ r: "age" }]; scrolls.length = 0; }
+  else if (ageHeld) { stack = [{ r: "age" }]; scrolls.length = 0; ageGate = true; }
   else if (stack.some(x => x.r === "auth" || x.r === "banned" || x.r === "age")) { stack = [{ r: "home" }]; scrolls.length = 0; }
   if (sbUser && !ageHeld) { if (early) preloadAvatars(ownAvatar).catch(() => {}); else await preloadAvatars(ownAvatar); }
   hist(true);
@@ -5320,8 +5366,8 @@ async function boot() {
   if (!(early && sbUser && !ageHeld && earlySig === [S.profile.handle, S.profile.name, S.profile.avatar].join("|"))) render();
   if (RECOVERY && sbUser) newPasswordModal();
   else if (HASH_ERR && !sbUser) toast("That link did not work. Ask for a new one.");
+  if (!sbUser || ageHeld) return;
   takeShared().catch(() => {});
-  if (!sbUser) return;
   takeOpen();
   loadFeed().catch(() => {});
   loadSocial().catch(() => {});
@@ -5339,7 +5385,7 @@ async function boot() {
 async function takeShared() {
   const p = new URLSearchParams(location.search);
   if (!["title", "text", "url", "shared"].some(k => p.has(k))) return;
-  history.replaceState(null, "", location.pathname);
+  history.replaceState(history.state, "", location.pathname);
   const text = [p.get("title"), p.get("text"), p.get("url")].filter(Boolean).join("\n").trim();
   const count = Math.min(20, Number(p.get("shared")) || 0);
   const files = [];
@@ -5363,7 +5409,6 @@ async function takeShared() {
     for (const f of files) await sendPicTo(t, f);
   };
   const compose = () => openCompose(cleaned ? { prefix: cleaned, files } : { files });
-  // with nobody to message there is nothing to choose, so it goes to a new post
   if (!targets.length) { compose(); return; }
   sheet([
     { icon: "edit", label: "Post", fn: compose },
@@ -5419,7 +5464,7 @@ if (window.visualViewport) {
     y0 = null;
     live = false;
     pull = 0;
-    if (busy || e.touches.length !== 1 || main.scrollTop > 0 || layer.childElementCount || stack[stack.length - 1].r === "conv") return;
+    if (busy || e.touches.length !== 1 || main.scrollTop > 0 || layer.childElementCount || ["conv", "dm", "auth", "age", "banned"].includes(stack[stack.length - 1].r) || (document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName))) return;
     y0 = e.touches[0].clientY;
     x0 = e.touches[0].clientX;
     ty = main.getBoundingClientRect().top;

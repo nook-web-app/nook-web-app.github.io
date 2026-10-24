@@ -224,6 +224,10 @@ async function profileParts(value: string): Promise<unknown[] | "big" | null> {
   return [{ inline_data: { mime_type: d[1] === "image/jpg" ? "image/jpeg" : d[1], data: d[2] } }];
 }
 
+// an update that only applies while a column still holds the value that was checked
+// deno-lint-ignore no-explicit-any
+const holds = (q: any, col: string, val: unknown) => (val === null || val === undefined ? q.is(col, null) : q.eq(col, val));
+
 async function runProfile(id: string, field: "avatar" | "banner") {
   const { data: a } = await admin.from("accounts").select("avatar, banner, avatar_mod, banner_mod").eq("id", id).maybeSingle();
   if (!a || a[field + "_mod"] !== "pending") return;
@@ -238,9 +242,9 @@ async function runProfile(id: string, field: "avatar" | "banner") {
   }
   if (v === null) return;
   if (v === "minor") v = "rules";
-  if (v === "safe") { await admin.from("accounts").update({ [field + "_mod"]: "safe" }).eq("id", id).eq(field + "_mod", "pending"); return; }
+  if (v === "safe") { await holds(admin.from("accounts").update({ [field + "_mod"]: "safe" }).eq("id", id).eq(field + "_mod", "pending"), field, value); return; }
   // whoever clears the picture first gives the warning, so two checks at once do not warn twice
-  const done = await admin.from("accounts").update({ [field]: null, [field + "_mod"]: "safe" }).eq("id", id).eq(field + "_mod", "pending").select("id");
+  const done = await holds(admin.from("accounts").update({ [field]: null, [field + "_mod"]: "safe" }).eq("id", id).eq(field + "_mod", "pending"), field, value).select("id");
   if (done.data && done.data.length) await admin.from("mod_notices").insert({ user_id: id, kind: field + (v === "big" ? "_toolarge" : v === "rules" ? "_rules" : ""), note: v === "big" ? "could not be checked" : why });
 }
 
@@ -261,7 +265,10 @@ async function runProfileText(id: string) {
   }
   const patch: Record<string, unknown> = { text_pending: false };
   for (const b of bad) patch[b.col] = b.col === "username" ? "user" + Array.from(crypto.getRandomValues(new Uint8Array(4)), (x) => (x % 36).toString(36)).join("") : b.col === "bio" ? "" : null;
-  const done = await admin.from("accounts").update(patch).eq("id", id).eq("text_pending", true).select("id");
+  // only while the three texts are still the ones that were read
+  let upd = admin.from("accounts").update(patch).eq("id", id).eq("text_pending", true);
+  upd = holds(holds(holds(upd, "username", a.username), "display_name", a.display_name), "bio", a.bio);
+  const done = await upd.select("id");
   if (done.data && done.data.length) {
     if (minor) { if (await holdAccount(id)) await admin.from("mod_notices").insert({ user_id: id, kind: "minor", note: minor }); }
     else for (const b of bad) await admin.from("mod_notices").insert({ user_id: id, kind: b.kind, note: b.note });

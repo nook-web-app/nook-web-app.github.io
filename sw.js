@@ -1,18 +1,20 @@
-const VERSION = "nook-3.3.35";
+const VERSION = "nook-3.3.36";
 const SHARE_CACHE = "nook-share";
 const SHELL = ["./", "index.html", "app.js", "update.js", "supabase.js", "fonts/inter-latin.woff2", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => {
   // the app files are fetched fresh (not from the browser's own cache) and kept under this version, so a version is always whole
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: "reload" })))).catch(() => {}));
+  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: "reload" })))));
 });
 self.addEventListener("message", e => { if (e.data === "skip") self.skipWaiting(); });
 async function handleShare(request) {
   const home = new URL("./index.html", self.registration.scope).href;
+  // a share comes from the phone's share menu; a form sent by another website is ignored
+  if (request.headers.get("sec-fetch-site") === "cross-site") return Response.redirect(home, 303);
   try {
     const data = await request.formData();
     const c = await caches.open(SHARE_CACHE);
     await Promise.all((await c.keys()).map(k => c.delete(k)));
-    const files = data.getAll("media").filter(f => f && typeof f.arrayBuffer === "function");
+    const files = data.getAll("media").filter(f => f && typeof f.arrayBuffer === "function" && /^image\//.test(f.type || "") && f.size <= 20 * 1024 * 1024).slice(0, 20);
     await Promise.all(files.map((f, i) => c.put(new URL("share/" + i, self.registration.scope).href, new Response(f, { headers: { "Content-Type": f.type || "application/octet-stream", "X-Name": encodeURIComponent(f.name || "shared") } }))));
     const q = new URLSearchParams();
     ["title", "text", "url"].forEach(k => { const v = data.get(k); if (v) q.set(k, String(v)); });
@@ -45,6 +47,7 @@ self.addEventListener("fetch", e => {
       if (r.ok) c.put(e.request, r.clone()).catch(() => {});
       return r;
     } catch (err) {
+      if (e.request.mode === "navigate") { const home = await c.match("index.html"); if (home) return home; }
       return (await caches.match(e.request)) || Response.error();
     }
   })());

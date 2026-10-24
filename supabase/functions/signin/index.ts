@@ -10,6 +10,15 @@ const cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 const MAX_TRIES = 5;
+// all the tries on one email, from any place: far looser, so strangers cannot lock a person out with a few guesses
+const MAX_TRIES_ALL = 40;
+
+// a short fingerprint of the caller's network address; the address itself is never stored
+async function ipTag(req: Request): Promise<string> {
+  const raw = (req.headers.get("cf-connecting-ip") || req.headers.get("x-forwarded-for") || "").split(",")[0].trim() || "none";
+  const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("nook-ip|" + raw)));
+  return Array.from(d.slice(0, 6), (b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
@@ -25,6 +34,7 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   let body: { action?: unknown; email?: unknown; password?: unknown; current?: unknown; check?: unknown };
   try { body = await req.json(); } catch { return json({ error: "bad_request" }, 400); }
+  const ip = await ipTag(req);
   const action = typeof body.action === "string" ? body.action : body.check === true ? "check" : "login";
   const password = typeof body.password === "string" ? body.password : "";
 
@@ -51,7 +61,7 @@ Deno.serve(async (req) => {
         const current = typeof body.current === "string" ? body.current : "";
         if (!current) return json({ error: "no_password" }, 400);
         if (current === next) return json({ error: "setpw_failed", code: "same_password", message: "New password should be different from the old password." }, 400);
-        const bad = await proveOld(email, current);
+        const bad = await proveOld(email, current, ip);
         if (bad instanceof Response) return bad;
       }
       const mixedNew = await pepper(admin, next);
@@ -65,7 +75,7 @@ Deno.serve(async (req) => {
     if (!email) return json({ error: "no_email" }, 400);
     if (!okEmail(email)) return json({ error: "bad_email" }, 400);
     if (!password) return json({ error: "no_password" }, 400);
-    const res = await proveOld(email, password);
+    const res = await proveOld(email, password, ip);
     if (res instanceof Response) return res;
     // an account that was just upgraded lost its sessions, so the person gets the fresh one
     if (action === "check") return json(res.upgraded ? { ok: true, session: { access_token: res.access_token, refresh_token: res.refresh_token } } : { ok: true });
@@ -97,16 +107,24 @@ async function signup(email: string, password: string): Promise<Response> {
 }
 
 // counts the try, checks the password, answers with a Response when something is wrong and with the session when it is right
-async function proveOld(email: string, password: string): Promise<Response | { access_token: string; refresh_token: string; upgraded: boolean }> {
+async function proveOld(email: string, password: string, ip: string): Promise<Response | { access_token: string; refresh_token: string; upgraded: boolean }> {
   if (password.length > 200) return json({ error: "wrong_password", left: 0 }, 401);
-  const key = "e:" + email;
+  // the strict count is per email and place, so somebody far away cannot use up the tries of the real owner
+  const key = "e:" + email + "|" + ip;
+  const all = "a:" + email;
   const gate = await admin.rpc("nook_login_gate", { p_key: key, p_max: MAX_TRIES });
   if (gate.error) return json({ error: "server" }, 500);
   if (gate.data) return json({ error: "locked", until: iso(gate.data) }, 429);
+  const gateAll = await admin.rpc("nook_login_gate", { p_key: all, p_max: MAX_TRIES_ALL });
+  if (gateAll.error) return json({ error: "server" }, 500);
+  if (gateAll.data) return json({ error: "locked", until: iso(gateAll.data) }, 429);
 
   const miss = async (error: string, status: number) => {
     const f = await admin.rpc("nook_login_fail", { p_key: key, p_max: MAX_TRIES });
+    const g = await admin.rpc("nook_login_fail", { p_key: all, p_max: MAX_TRIES_ALL });
     const row = Array.isArray(f.data) ? f.data[0] : f.data;
+    const rowAll = Array.isArray(g.data) ? g.data[0] : g.data;
+    if (rowAll && rowAll.locked_until) return json({ error: "locked", until: iso(rowAll.locked_until) }, 429);
     if (row && row.locked_until) return json({ error: "locked", until: iso(row.locked_until) }, 429);
     return json({ error, left: Math.max(0, MAX_TRIES - (row ? row.used : MAX_TRIES)) }, status);
   };
@@ -137,5 +155,6 @@ async function proveOld(email: string, password: string): Promise<Response | { a
     return json({ error: "server" }, 500);
   }
   await admin.rpc("nook_login_ok", { p_key: key });
+  await admin.rpc("nook_login_ok", { p_key: all });
   return { access_token: r.data.session!.access_token, refresh_token: r.data.session!.refresh_token, upgraded };
 }

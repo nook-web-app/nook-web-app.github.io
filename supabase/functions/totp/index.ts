@@ -134,8 +134,13 @@ Deno.serve(async (req) => {
   // sends the reset link to the email on the account; the answer is the same whether or not the account exists
   if (action === "reset") {
     const ident = String(body.ident || "").trim();
-    const redirectTo = typeof body.redirectTo === "string" && body.redirectTo.length < 300 ? body.redirectTo : undefined;
-    if (ident && ident.length <= 100) {
+    // only a link back into the app is allowed
+    const redirectTo = typeof body.redirectTo === "string" && body.redirectTo.length < 300 && /^https:\/\/nook-web-app\.github\.io(\/|$)/.test(body.redirectTo) ? body.redirectTo : undefined;
+    // a few reset mails per person, then a wait, so nobody can fill an inbox
+    const usable = ident.length > 0 && ident.length <= 100;
+    const slow = usable ? (await admin.rpc("nook_login_gate", { p_key: "r:" + ident.toLowerCase(), p_max: 3 })).data : null;
+    if (usable && !slow) await admin.rpc("nook_login_fail", { p_key: "r:" + ident.toLowerCase(), p_max: 3 });
+    if (usable && !slow) {
       const found = await admin.rpc("nook_find_user", { ident });
       const id = typeof found.data === "string" ? found.data : null;
       if (id) {
@@ -170,7 +175,7 @@ Deno.serve(async (req) => {
     const label = encodeURIComponent("Nook:" + ((acc && acc.username) || user.email || "account"));
     const uri = "otpauth://totp/" + label + "?secret=" + secret + "&issuer=Nook&algorithm=SHA1&digits=6&period=" + STEP;
     const { error } = await admin.from("totp_secrets").upsert({ user_id: user.id, secret, enabled: false, failed_attempts: 0, locked_until: null, last_counter: null });
-    if (error) return json({ error: error.message }, 500);
+    if (error) return json({ error: "Could not start the setup. Try again." }, 500);
     return json({ secret, uri });
   }
 

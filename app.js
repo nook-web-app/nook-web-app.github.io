@@ -134,7 +134,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.9";
+const APP_VERSION = "3.3.8";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -4775,6 +4775,65 @@ if (window.visualViewport) {
   vv.addEventListener("resize", fit);
   vv.addEventListener("scroll", fit);
 }
+(function () {
+  const ptr = h("div", { id: "ptr", "aria-hidden": "true" }, ic("refresh", 20));
+  document.body.append(ptr);
+  const TH = 72;
+  let y0 = null, x0 = 0, pull = 0, ty = 0, busy = false, live = false;
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const place = p => {
+    ptr.style.transform = "translateY(" + (ty + p - 44) + "px)";
+    ptr.style.opacity = String(Math.min(1, p / (TH * 0.6)));
+    ptr.firstChild.style.transform = "rotate(" + p * 5 + "deg)";
+  };
+  const reset = () => {
+    ptr.classList.add("snap");
+    ptr.style.opacity = "0";
+    ptr.style.transform = "translateY(" + (ty - 44) + "px)";
+  };
+  async function run() {
+    busy = true;
+    ptr.classList.add("snap", "spin");
+    ptr.firstChild.style.transform = "";
+    ptr.style.opacity = "1";
+    ptr.style.transform = "translateY(" + (ty - 8) + "px)";
+    try {
+      await Promise.all([flush(), wait(600)]);
+      if ("serviceWorker" in navigator) await Promise.race([navigator.serviceWorker.getRegistrations().then(rs => Promise.all(rs.map(r => r.update()))), wait(1500)]);
+    } catch (e) {}
+    location.reload();
+  }
+  main.addEventListener("touchstart", e => {
+    y0 = null;
+    live = false;
+    pull = 0;
+    if (busy || e.touches.length !== 1 || main.scrollTop > 0 || layer.childElementCount || stack[stack.length - 1].r === "conv") return;
+    y0 = e.touches[0].clientY;
+    x0 = e.touches[0].clientX;
+    ty = main.getBoundingClientRect().top;
+    ptr.classList.remove("snap");
+  }, { passive: true });
+  main.addEventListener("touchmove", e => {
+    if (y0 == null) return;
+    const dy = e.touches[0].clientY - y0, dx = e.touches[0].clientX - x0;
+    if (!live) {
+      if (dy < 0 || Math.abs(dx) > Math.abs(dy) || main.scrollTop > 0) { y0 = null; return; }
+      if (dy < 6) return;
+      live = true;
+    }
+    pull = Math.min(dy * 0.5, TH * 1.5);
+    if (e.cancelable) e.preventDefault();
+    place(pull);
+  }, { passive: false });
+  const end = () => {
+    const was = live, p = pull;
+    y0 = null; live = false; pull = 0;
+    if (!was) return;
+    if (p >= TH) run(); else reset();
+  };
+  main.addEventListener("touchend", end);
+  main.addEventListener("touchcancel", end);
+})();
 window.addEventListener("pagehide", flush);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flush(); });
 boot();

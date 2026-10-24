@@ -7,7 +7,15 @@ const cors = {
   "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
-const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY") || "";
+// the Gemini key is saved in the database vault (secret name gemini_api_key) or as an edge secret; it is looked up once a minute at most
+let keyCache = { v: Deno.env.get("GEMINI_API_KEY") || "", at: 0 };
+async function geminiKey(): Promise<string> {
+  if (keyCache.v && Deno.env.get("GEMINI_API_KEY")) return keyCache.v;
+  if (Date.now() - keyCache.at < 60000) return keyCache.v;
+  const { data } = await admin.rpc("nook_gemini_key");
+  keyCache = { v: typeof data === "string" ? data : "", at: Date.now() };
+  return keyCache.v;
+}
 const MODEL = Deno.env.get("ZENITH_MODEL") || "gemini-2.5-flash";
 
 function json(body: unknown, status = 200): Response {
@@ -18,11 +26,11 @@ function json(body: unknown, status = 200): Response {
 const okUntil = new Map<string, number>();
 
 // with a Gemini key saved as a secret the answer comes straight from Gemini, with the thinking switched off for speed; without it the old worker is used
-async function gemini(system: unknown, history: unknown, stream: boolean): Promise<Response> {
+async function gemini(key: string, system: unknown, history: unknown, stream: boolean): Promise<Response> {
   const url = "https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + (stream ? ":streamGenerateContent?alt=sse" : ":generateContent");
   const make = (think: boolean) => fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": GEMINI_KEY },
+    headers: { "content-type": "application/json", "x-goog-api-key": key },
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: String(system || "") }] },
       contents: history,
@@ -54,7 +62,8 @@ Deno.serve(async (req) => {
 
   try {
     let up: Response;
-    if (GEMINI_KEY) up = await gemini(body.system, body.history, body.stream === true);
+    const key = await geminiKey();
+    if (key) up = await gemini(key, body.system, body.history, body.stream === true);
     else {
       const password = Deno.env.get("ZENITH_PASSWORD");
       if (!password) return json({ error: "no ZENITH_PASSWORD secret" }, 500);

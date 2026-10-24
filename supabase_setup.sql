@@ -1289,3 +1289,10 @@ exception when others then
 end $function$;
 revoke all on function public.nook_zenith_reply() from public, anon, authenticated;
 select cron.schedule('nook-zenith-reply', '* * * * *', 'select public.nook_zenith_reply()');
+
+-- Gemini key for Zenith lives in the vault, only the edge functions can read it
+create or replace function public.nook_gemini_key() returns text language sql security definer set search_path to 'public', 'vault' as $$
+  select decrypted_secret from vault.decrypted_secrets where name = 'gemini_api_key' limit 1
+$$;
+revoke all on function public.nook_gemini_key() from public, anon, authenticated;
+grant execute on function public.nook_gemini_key() to service_role;

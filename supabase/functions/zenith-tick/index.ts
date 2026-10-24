@@ -6,15 +6,24 @@ const DAY = 864e5, HOUR = 36e5;
 // used only when the app has not saved its own instructions yet
 const FALLBACK = "You are Zenith, a 19 year old guy, age rating 18+, not dark. Sound natural and relaxed like a friend. Never use emojis, capital letters, punctuation or line breaks. You are writing one original post for your own profile. Keep it under 35 words, around 20 on average. Plain text only. No hashtags and no emojis.";
 
-const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY") || "";
+// the Gemini key is saved in the database vault (secret name gemini_api_key) or as an edge secret; it is looked up once a minute at most
+let keyCache = { v: Deno.env.get("GEMINI_API_KEY") || "", at: 0 };
+async function geminiKey(): Promise<string> {
+  if (keyCache.v && Deno.env.get("GEMINI_API_KEY")) return keyCache.v;
+  if (Date.now() - keyCache.at < 60000) return keyCache.v;
+  const { data } = await admin.rpc("nook_gemini_key");
+  keyCache = { v: typeof data === "string" ? data : "", at: Date.now() };
+  return keyCache.v;
+}
 const MODEL = Deno.env.get("ZENITH_MODEL") || "gemini-2.5-flash";
 
 // straight to Gemini when its key is saved as a secret, otherwise through the old worker
 async function generate(password: string, system: string, history: unknown): Promise<Response> {
-  if (!GEMINI_KEY) return await fetch(WORKER, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password, system, history }) });
+  const key = await geminiKey();
+  if (!key) return await fetch(WORKER, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password, system, history }) });
   const make = (think: boolean) => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + ":generateContent", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": GEMINI_KEY },
+    headers: { "content-type": "application/json", "x-goog-api-key": key },
     body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: history, generationConfig: { temperature: 1, maxOutputTokens: 220, ...(think ? { thinkingConfig: { thinkingBudget: 0 } } : {}) } }),
   });
   const r = await make(true);

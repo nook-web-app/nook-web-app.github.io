@@ -155,7 +155,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.37";
+const APP_VERSION = "3.3.38";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -4313,12 +4313,23 @@ async function ensureE2E() {
   // asks the browser not to drop the key by itself when the phone runs low on space (it cannot stop a person clearing the data)
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); } catch (e) {}
 }
+function keyChangedNotice(otherId) {
+  const a = acctCache.get(otherId) || {};
+  const who = nickOf(otherId) || a.name || "This person";
+  sheet([{ label: "OK", cancel: true }], who + " has a new security key. That happens with a new phone or a reset. If you did not expect it, be careful what you send.");
+}
 function sharedKey(otherId) {
   if (!e2eShared.has(otherId)) {
     const p = (async () => {
       const mine = await myKeys();
       const { data } = await sb.from("accounts").select("public_key").eq("id", otherId).maybeSingle();
       if (!data || !data.public_key) throw new Error("they need to open nook once first");
+      // the first key seen from a person is remembered; a different one later is shown, never silent
+      const pinName = "nook-pin:" + sbUser.id + ":" + otherId;
+      let pinned = null;
+      try { pinned = localStorage.getItem(pinName); } catch (e) {}
+      try { localStorage.setItem(pinName, data.public_key); } catch (e) {}
+      if (pinned && pinned !== data.public_key) setTimeout(() => keyChangedNotice(otherId), 600);
       const peer = await crypto.subtle.importKey("raw", fromB64(data.public_key), E2E_ALG, false, []);
       return crypto.subtle.deriveKey({ name: "ECDH", public: peer }, mine.priv, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
     })();

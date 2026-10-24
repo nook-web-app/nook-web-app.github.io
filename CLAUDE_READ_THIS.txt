@@ -1,0 +1,351 @@
+<!--
+how to write updates here
+- version is MAJOR.MINOR.PATCH like 2.3.1
+- MAJOR when the app changes a lot or stops working the way it did before
+- MINOR when new stuff gets added
+- PATCH when it is only bug fixes or small polish
+- newest version goes at the top
+- under each version write only what applies, nothing else:
+  new: Added new features
+  fixed: Fixed some bugs
+- use exactly those two sentences, do not name a feature, a bug, a page or a number
+- skip the "new:" line when nothing was added and the "fixed:" line when nothing was fixed
+- do not add summary lines or anything else under a version
+- the only extra allowed is a ! after the version, like "## 3.0.8 !", for an update that people must install right away (privacy or security fixes). It installs at once and cannot be skipped.
+- an update with the same first two numbers as the one people have (a patch like 3.0.7 to 3.0.8) installs quietly in the background without asking. A new minor or major version asks first.
+-->
+## 3.2.19
+fixed: Fixed some bugs
+
+## 3.2.18
+fixed: Fixed some bugs
+
+## 3.2.17
+fixed: Fixed some bugs
+
+## 3.2.16
+new: Added new features
+
+## 3.2.15
+fixed: Fixed some bugs
+
+## 3.2.14
+fixed: Fixed some bugs
+
+## 3.2.13
+fixed: Fixed some bugs
+
+## 3.2.12
+fixed: Fixed some bugs
+
+## 3.2.11
+fixed: Fixed some bugs
+
+## 3.2.10
+fixed: Fixed some bugs
+
+## 3.2.9
+fixed: Fixed some bugs
+
+## 3.2.8
+fixed: Fixed some bugs
+
+## 3.2.7
+new: Added new features
+
+## 3.2.6
+fixed: Fixed some bugs
+
+## 3.2.5
+fixed: Fixed some bugs
+
+## 3.2.4
+fixed: Fixed some bugs
+
+## 3.2.3
+fixed: Fixed some bugs
+
+## 3.2.2
+fixed: Fixed some bugs
+
+## 3.2.1
+fixed: Fixed some bugs
+
+## 3.2.0
+new: Added new features
+
+## 3.1.0
+new: Added new features
+
+## 3.0.8
+fixed: Fixed some bugs
+
+## 3.0.7
+fixed: Fixed some bugs
+
+## 3.0.6
+fixed: Fixed some bugs
+
+## 3.0.5
+fixed: Fixed some bugs
+
+## 3.0.4
+fixed: Fixed some bugs
+
+## 3.0.3
+fixed: Fixed some bugs
+
+## 3.0.2
+fixed: Fixed some bugs
+
+## 3.0.1
+fixed: Fixed some bugs
+
+## 3.0.0
+fixed: Fixed some bugs
+
+## 2.17.3
+fixed: Fixed some bugs
+
+## 2.17.2
+fixed: Fixed some bugs
+
+## 2.17.1
+fixed: Fixed some bugs
+
+## 2.17.0
+new: Added new features
+fixed: Fixed some bugs
+
+## 2.15.3
+fixed: Fixed some bugs
+
+## 2.15.2
+new: Added new features
+fixed: Fixed some bugs
+
+## 2.15.1
+fixed: Fixed some bugs
+
+## 2.15.0
+new: Added new features
+
+## 2.14.1
+fixed: Fixed some bugs
+
+## 2.14.0
+new: Added new features
+
+## 2.13.11
+fixed: Fixed some bugs
+
+## 2.13.10
+fixed: Fixed some bugs
+
+## 2.13.9
+fixed: Fixed some bugs
+
+## 2.13.8
+fixed: Fixed some bugs
+
+## 2.13.7
+new: Added new features
+
+## 2.13.6
+fixed: Fixed some bugs
+
+## 2.13.5
+fixed: Fixed some bugs
+
+## 2.13.4
+fixed: Fixed some bugs
+
+## 2.13.3
+new: Added new features
+
+## 2.13.2
+fixed: Fixed some bugs
+
+## 2.13.1
+fixed: Fixed some bugs
+
+## 2.13.0
+new: Added new features
+fixed: Fixed some bugs
+
+## 2.12.3
+new: Added new features
+
+## 2.12.2
+new: Added new features
+fixed: Fixed some bugs
+
+## 2.12.1
+new: Added new features
+fixed: Fixed some bugs
+
+## 2.12.0
+new: Added new features
+fixed: Fixed some bugs
+
+## 2.11.2
+fixed: Fixed some bugs
+
+## 2.11.1
+fixed: Fixed some bugs
+
+## 2.11.0
+new: Added new features
+fixed: Fixed some bugs
+
+## 2.10.0
+new: Added new features
+fixed: Fixed some bugs
+
+## 2.9.0
+new: Added new features
+
+## 2.8.0
+new: Added new features
+
+## 2.7.0
+new: Added new features
+fixed: Fixed some bugs
+
+## 2.6.1
+new: Added new features
+fixed: Fixed some bugs
+
+## 2.6.0
+new: Added new features
+fixed: Fixed some bugs
+
+## 2.5.2
+new: Added new features
+fixed: Fixed some bugs
+
+## 2.5.1
+fixed: Fixed some bugs
+
+## 2.5.0
+new: Added new features
+fixed: Fixed some bugs
+
+## 2.4.4
+fixed: Fixed some bugs
+
+## 2.4.3
+fixed: Fixed some bugs
+
+## 2.4.2
+fixed: Fixed some bugs
+
+## 2.4.1
+fixed: Fixed some bugs
+
+## 2.4.0
+new: Added new features
+
+## 2.3.2
+fixed: Fixed some bugs
+
+## 2.3.1
+fixed: Fixed some bugs
+
+## 2.3.0
+new: Added new features
+fixed: Fixed some bugs
+
+## 2.2.0
+new: Added new features
+
+## 2.1.8
+fixed: Fixed some bugs
+
+## 2.1.7
+fixed: Fixed some bugs
+
+## 2.1.6
+fixed: Fixed some bugs
+
+## 2.1.5
+fixed: Fixed some bugs
+
+## 2.1.4
+fixed: Fixed some bugs
+
+## 2.1.3
+fixed: Fixed some bugs
+
+## 2.1.2
+fixed: Fixed some bugs
+
+## 2.1.1
+fixed: Fixed some bugs
+
+## 2.1.0
+new: Added new features
+
+## 2.0.1
+fixed: Fixed some bugs
+
+## 2.0.0
+new: Added new features
+fixed: Fixed some bugs
+
+## 1.8.0
+new: Added new features
+
+## 1.7.1
+fixed: Fixed some bugs
+
+## 1.7.0
+new: Added new features
+fixed: Fixed some bugs
+
+## 1.6.0
+new: Added new features
+fixed: Fixed some bugs
+
+## 1.5.2
+fixed: Fixed some bugs
+
+## 1.5.1
+fixed: Fixed some bugs
+
+## 1.5.0
+new: Added new features
+
+## 1.4.0
+new: Added new features
+
+## 1.3.4
+fixed: Fixed some bugs
+
+## 1.3.3
+fixed: Fixed some bugs
+
+## 1.3.2
+fixed: Fixed some bugs
+
+## 1.3.1
+fixed: Fixed some bugs
+
+## 1.3.0
+new: Added new features
+fixed: Fixed some bugs
+
+## 1.2.0
+new: Added new features
+fixed: Fixed some bugs
+
+## 1.1.1
+fixed: Fixed some bugs
+
+## 1.1.0
+new: Added new features
+fixed: Fixed some bugs
+
+## 1.0.0
+First release
+new: The app is out

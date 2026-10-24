@@ -16,7 +16,7 @@ async function geminiKey(): Promise<string> {
   keyCache = { v: typeof data === "string" ? data : "", at: Date.now() };
   return keyCache.v;
 }
-const MODEL = Deno.env.get("ZENITH_MODEL") || "gemini-2.5-flash";
+const MODEL = Deno.env.get("ZENITH_MODEL") || "gemini-flash-lite-latest";
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
@@ -25,21 +25,19 @@ function json(body: unknown, status = 200): Response {
 // an owner check that was already done for this login is remembered for a few minutes, so a message does not wait for it again
 const okUntil = new Map<string, number>();
 
-// with a Gemini key saved as a secret the answer comes straight from Gemini, with the thinking switched off for speed; without it the old worker is used
+// with a Gemini key saved as a secret the answer comes straight from Gemini; without it the old worker is used
 async function gemini(key: string, system: unknown, history: unknown, stream: boolean): Promise<Response> {
   const url = "https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + (stream ? ":streamGenerateContent?alt=sse" : ":generateContent");
-  const make = (think: boolean) => fetch(url, {
+  const make = () => fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json", "x-goog-api-key": key },
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: String(system || "") }] },
       contents: history,
-      generationConfig: { temperature: 1, maxOutputTokens: 220, ...(think ? { thinkingConfig: { thinkingBudget: 0 } } : {}) },
+      generationConfig: { temperature: 1, maxOutputTokens: 220 },
     }),
   });
-  let r = await make(true);
-  if (r.status === 400) r = await make(false);
-  return r;
+  return await make();
 }
 
 // the app owner talks to Zenith through here, so the password only ever lives in the ZENITH_PASSWORD secret

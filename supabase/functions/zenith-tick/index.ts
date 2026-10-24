@@ -15,19 +15,18 @@ async function geminiKey(): Promise<string> {
   keyCache = { v: typeof data === "string" ? data : "", at: Date.now() };
   return keyCache.v;
 }
-const MODEL = Deno.env.get("ZENITH_MODEL") || "gemini-2.5-flash";
+const MODEL = Deno.env.get("ZENITH_MODEL") || "gemini-flash-lite-latest";
 
 // straight to Gemini when its key is saved as a secret, otherwise through the old worker
 async function generate(password: string, system: string, history: unknown): Promise<Response> {
   const key = await geminiKey();
   if (!key) return await fetch(WORKER, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password, system, history }) });
-  const make = (think: boolean) => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + ":generateContent", {
+  const make = () => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + ":generateContent", {
     method: "POST",
     headers: { "content-type": "application/json", "x-goog-api-key": key },
-    body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: history, generationConfig: { temperature: 1, maxOutputTokens: 220, ...(think ? { thinkingConfig: { thinkingBudget: 0 } } : {}) } }),
+    body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: history, generationConfig: { temperature: 1, maxOutputTokens: 220 } }),
   });
-  const r = await make(true);
-  return r.status === 400 ? await make(false) : r;
+  return await make();
 }
 
 let cached: string | null = null;

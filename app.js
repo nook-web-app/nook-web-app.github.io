@@ -155,7 +155,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.8";
+const APP_VERSION = "3.4.9";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1813,7 +1813,9 @@ function zenV() {
   av.style.width = "";
   av.style.height = "";
   const mine = S.posts.filter(p => p.ai && !p.parent).sort((a, b) => b.t - a.t);
-  main.append(h("div", { class: "banner" }), h("div", { class: "pinfo" },
+  const zbn = h("div", { class: "banner" });
+  if (S.zen.pfp) zbn.append(mkImg(S.zen.pfp, "pic blur"));
+  main.append(zbn, h("div", { class: "pinfo" },
     h("div", { class: "arow" }, av,
       h("div", { class: "btns" },
         h("label", { class: "ghost" }, "Edit picture", h("input", { type: "file", accept: "image/*", class: "vh", "aria-label": "Edit picture", onchange: async e => {

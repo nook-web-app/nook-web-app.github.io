@@ -1192,3 +1192,21 @@ begin
   end if;
   return new;
 end $$;
+
+-- message key backup: the chat key is sealed on the phone with a recovery password; the server only holds the sealed copy, readable by its owner alone
+create table if not exists public.key_backups (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  salt text not null check (char_length(salt) <= 64),
+  iv text not null check (char_length(iv) <= 64),
+  ct text not null check (char_length(ct) <= 4000),
+  iters integer not null check (iters between 100000 and 2000000),
+  pub text not null check (char_length(pub) <= 200),
+  updated_at timestamptz not null default now()
+);
+alter table public.key_backups enable row level security;
+revoke all on public.key_backups from anon, public;
+grant select, insert, update, delete on public.key_backups to authenticated;
+create policy key_backups_select on public.key_backups for select to authenticated using (user_id = (select auth.uid()));
+create policy key_backups_insert on public.key_backups for insert to authenticated with check (user_id = (select auth.uid()));
+create policy key_backups_update on public.key_backups for update to authenticated using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
+create policy key_backups_delete on public.key_backups for delete to authenticated using (user_id = (select auth.uid()));

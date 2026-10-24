@@ -135,7 +135,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.22";
+const APP_VERSION = "3.3.23";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1659,10 +1659,30 @@ function settingsV() {
     const sub = totpRow.querySelector(".sub");
     if (sub) sub.textContent = !r.ok ? "Could not check right now." : totpOn ? "On" : "Off";
   }).catch(() => { const sub = totpRow.querySelector(".sub"); if (sub) sub.textContent = "Could not check right now."; });
+  let keyState = null;
+  const keyRow = row(ic("lock", 22), "Message key backup", "Checking...", () => {
+    if (keyState === null) { toast("One moment..."); return; }
+    if (keyState === "off") backupSetupModal(false);
+    else if (keyState === "locked") restoreKeysModal();
+    else sheet([{ icon: "lock", label: "Change recovery password", fn: () => backupSetupModal(true) }, { icon: "close", label: "Turn off backup", danger: true, fn: () => confirmSheet("Turn off the backup? A new phone will not be able to open your old messages.", "Turn off", async () => {
+      const { error } = await sb.from("key_backups").delete().eq("user_id", sbUser.id);
+      toast(error ? "Could not turn it off" : "Backup is off");
+      render();
+    }) }], "Message key backup is on");
+  });
+  (async () => {
+    const sub = keyRow.querySelector(".sub");
+    try {
+      const [bk, loc] = await Promise.all([sb.from("key_backups").select("pub").eq("user_id", sbUser.id).maybeSingle(), peekKeys()]);
+      if (bk.error) throw bk.error;
+      keyState = !bk.data ? "off" : !loc || loc.pub !== bk.data.pub ? "locked" : "on";
+      if (sub) sub.textContent = keyState === "off" ? "Off. Tap to keep your messages on a new phone." : keyState === "locked" ? "Locked on this phone. Tap to unlock." : "On. Your messages can be opened on a new phone.";
+    } catch (e) { if (sub) sub.textContent = "Could not check right now."; }
+  })();
   main.append(h("div", { class: "group" },
     row(ic("lock", 22), "Change password", "Needs your current password.", () => changePassV()),
     row(ic("mail", 22), "Change email", "We send a link to the new address.", () => changeEmailV()),
-    totpRow));
+    totpRow, keyRow));
   main.append(sec("Notifications"));
   const pushRowEl = row(ic("bell", 24), "Phone notifications", "Checking...", async () => {
     const cur = await pushSub();
@@ -3625,33 +3645,176 @@ function keyDb() {
     r.onerror = () => rej(r.error);
   });
 }
-async function loadMyKeys(id) {
-  const db = await keyDb();
-  const got = await new Promise((res, rej) => {
+function readLocalKeys(db, id) {
+  return new Promise((res, rej) => {
     const q = db.transaction("k").objectStore("k").get(id);
-    q.onsuccess = () => res(q.result);
+    q.onsuccess = () => res(q.result && q.result.priv && q.result.pub ? q.result : null);
     q.onerror = () => rej(q.error);
   });
-  if (got && got.priv && got.pub) return got;
-  const kp = await crypto.subtle.generateKey(E2E_ALG, false, ["deriveKey"]);
-  const rec = { priv: kp.privateKey, pub: toB64(new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey))) };
-  await new Promise((res, rej) => {
+}
+function saveLocalKeys(db, id, rec) {
+  return new Promise((res, rej) => {
     const tx = db.transaction("k", "readwrite");
     tx.objectStore("k").put(rec, id);
     tx.oncomplete = () => res();
     tx.onerror = () => rej(tx.error);
   });
+}
+// a fresh chat key; it can be exported, which is what lets a recovery password carry it to another phone
+async function makeKeyPair() {
+  const kp = await crypto.subtle.generateKey(E2E_ALG, true, ["deriveKey"]);
+  return { priv: kp.privateKey, pub: toB64(new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey))) };
+}
+let e2eLocked = false, restoreAsked = false;
+const LOCKED_MSG = "Unlock your messages first (Settings, Message key backup)";
+async function loadMyKeys(id) {
+  const db = await keyDb();
+  const got = await readLocalKeys(db, id);
+  if (got) { e2eLocked = false; return got; }
+  // a new phone must never make a new key when the old one is saved with a recovery password: that would lock the old messages for good
+  const { data: bk, error } = await sb.from("key_backups").select("user_id").eq("user_id", id).maybeSingle();
+  if (error) throw new Error("Could not check your message key. Try again");
+  if (bk) {
+    e2eLocked = true;
+    if (!restoreAsked) { restoreAsked = true; setTimeout(restoreKeysModal, 600); }
+    throw new Error(LOCKED_MSG);
+  }
+  const rec = await makeKeyPair();
+  await saveLocalKeys(db, id, rec);
   return rec;
 }
 function myKeys() {
   const id = sbUser.id;
-  if (!e2eMine.has(id)) e2eMine.set(id, loadMyKeys(id));
+  if (!e2eMine.has(id)) { const p = loadMyKeys(id); e2eMine.set(id, p); p.catch(() => e2eMine.delete(id)); }
   return e2eMine.get(id);
+}
+const KDF_ITERS = 600000;
+async function recoveryKey(pw, salt, iters) {
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw.normalize("NFKC")), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: iters, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+}
+// the key is sealed on this phone with the recovery password: the server only ever holds the sealed copy
+async function sealKeyBackup(priv, pub, pw) {
+  const jwk = await crypto.subtle.exportKey("jwk", priv);
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await recoveryKey(pw, salt, KDF_ITERS);
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify(jwk)));
+  return { user_id: sbUser.id, salt: toB64(salt), iv: toB64(iv), ct: toB64(new Uint8Array(ct)), iters: KDF_ITERS, pub, updated_at: new Date().toISOString() };
+}
+async function openKeyBackup(row, pw) {
+  const key = await recoveryKey(pw, fromB64(row.salt), row.iters);
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(row.iv) }, key, fromB64(row.ct));
+  const jwk = JSON.parse(new TextDecoder().decode(plain));
+  const priv = await crypto.subtle.importKey("jwk", jwk, E2E_ALG, true, ["deriveKey"]);
+  const pubKey = await crypto.subtle.importKey("jwk", { kty: "EC", crv: "P-256", x: jwk.x, y: jwk.y, ext: true }, E2E_ALG, true, []);
+  const pub = toB64(new Uint8Array(await crypto.subtle.exportKey("raw", pubKey)));
+  if (pub !== row.pub) throw new Error("mismatch");
+  return { priv, pub };
+}
+const peekKeys = async () => readLocalKeys(await keyDb(), sbUser.id);
+const resetKeyCaches = () => { e2eMine.delete(sbUser.id); e2eShared.clear(); e2eEnc.clear(); };
+function pwField(ph) {
+  const input = h("input", { class: "in", type: "password", placeholder: ph, autocomplete: "off", "aria-label": ph, style: "padding-right:60px" });
+  const eye = h("button", { type: "button", class: "tbtn", "aria-label": "Show password", style: "position:absolute;right:14px;top:50%;transform:translateY(-50%);padding:6px 0;color:var(--muted);font-size:var(--fs-md);font-weight:600", onclick: () => { const s = input.type === "password"; input.type = s ? "text" : "password"; eye.textContent = s ? "Hide" : "Show"; eye.setAttribute("aria-label", s ? "Hide password" : "Show password"); } }, "Show");
+  return { input, wrap: h("div", { class: "fld", style: "position:relative" }, input, eye) };
+}
+// a new phone for an account that has a saved key: the recovery password opens it
+async function restoreKeysModal() {
+  if (!sbUser) return;
+  const pw = pwField("Recovery password");
+  const msg = h("p", { class: "note", role: "alert" });
+  const m = modal({
+    title: "Unlock messages",
+    action: "Unlock",
+    body: [h("p", { class: "note" }, "This account has a saved message key. Type your recovery password to open your old messages on this phone."), pw.wrap, msg,
+      h("button", { class: "tbtn dng", onclick: () => confirmSheet("Make a new message key? Older messages will not open anymore, here or for the other person.", "Make new key", async () => {
+        try {
+          const rec = await makeKeyPair();
+          await saveLocalKeys(await keyDb(), sbUser.id, rec);
+          await sb.from("accounts").update({ public_key: rec.pub }).eq("id", sbUser.id);
+          await sb.from("key_backups").delete().eq("user_id", sbUser.id);
+          m.close();
+          toast("New message key made");
+          setTimeout(() => location.reload(), 500);
+        } catch (e) { toast("Could not do that. Try again"); }
+      }) }, "I forgot it, make a new key")],
+    onAction: async close => {
+      msg.textContent = "";
+      if (!pw.input.value) { msg.textContent = "Type your recovery password"; return; }
+      m.act.disabled = true; m.act.textContent = "Working...";
+      try {
+        const { data: row, error } = await sb.from("key_backups").select("salt, iv, ct, iters, pub").eq("user_id", sbUser.id).maybeSingle();
+        if (error || !row) { msg.textContent = "Could not load the saved key. Try again"; return; }
+        let rec;
+        try { rec = await openKeyBackup(row, pw.input.value); } catch (e) { msg.textContent = "That is not the right recovery password"; return; }
+        await saveLocalKeys(await keyDb(), sbUser.id, rec);
+        const { data: me } = await sb.from("accounts").select("public_key").eq("id", sbUser.id).maybeSingle();
+        if (!me || me.public_key !== rec.pub) await sb.from("accounts").update({ public_key: rec.pub }).eq("id", sbUser.id);
+        e2eLocked = false;
+        close();
+        toast("Messages unlocked");
+        setTimeout(() => location.reload(), 500);
+      } finally { m.act.disabled = false; m.act.textContent = "Unlock"; }
+    }
+  });
+}
+// turn the backup on, or change its password
+async function backupSetupModal(changing) {
+  let cur;
+  try { cur = await myKeys(); } catch (e) { toast(e.message || LOCKED_MSG); return; }
+  const legacy = !cur.priv.extractable;
+  const p1 = pwField("Recovery password"), p2 = pwField("Type it again");
+  const msg = h("p", { class: "note", role: "alert" });
+  const m = modal({
+    title: changing ? "New recovery password" : "Message key backup",
+    action: "Save",
+    body: [
+      h("p", { class: "note" }, "Your messages are locked with a key that lives on this phone. A recovery password saves a sealed copy, so a new phone can open your messages too. Nook never sees the password or the key."),
+      legacy ? h("p", { class: "note", style: "color:var(--danger)" }, "Your current key cannot be saved. A new one is made, so older messages stop opening, here and for the other person. New ones work everywhere.") : null,
+      h("p", { class: "note" }, "Write the password down. If you lose it and every phone, your messages cannot be recovered."),
+      p1.wrap, p2.wrap, msg],
+    onAction: async close => {
+      msg.textContent = "";
+      const a = p1.input.value;
+      if (a.length < 10) { msg.textContent = "Use at least 10 characters. Three random words work well"; return; }
+      if (a !== p2.input.value) { msg.textContent = "The two passwords do not match"; return; }
+      m.act.disabled = true; m.act.textContent = "Working...";
+      try {
+        const rec = legacy ? await makeKeyPair() : cur;
+        const row = await sealKeyBackup(rec.priv, rec.pub, a);
+        // the sealed copy is saved first, so a failure can never leave a changed key without a backup
+        const up = await sb.from("key_backups").upsert(row);
+        if (up.error) { msg.textContent = "Could not save the backup. Try again"; return; }
+        if (legacy) {
+          await saveLocalKeys(await keyDb(), sbUser.id, rec);
+          const u = await sb.from("accounts").update({ public_key: rec.pub }).eq("id", sbUser.id);
+          if (u.error) throw u.error;
+          resetKeyCaches();
+        }
+        close();
+        toast(changing ? "Recovery password changed" : "Backup is on");
+        setTimeout(() => { if (legacy) location.reload(); else render(); }, legacy ? 500 : 0);
+      } catch (e) { msg.textContent = "Something went wrong. Try again"; } finally { m.act.disabled = false; m.act.textContent = "Save"; }
+    }
+  });
 }
 async function ensureE2E() {
   if (!sbUser || !crypto.subtle) return;
   const k = await myKeys();
   const { data } = await sb.from("accounts").select("public_key").eq("id", sbUser.id).maybeSingle();
+  if (data && data.public_key && data.public_key !== k.pub) {
+    // another phone made a new key and saved it with a recovery password: this phone must not overwrite it, it has to unlock the saved one
+    const { data: bk } = await sb.from("key_backups").select("pub").eq("user_id", sbUser.id).maybeSingle();
+    if (bk && bk.pub === data.public_key) {
+      e2eLocked = true;
+      const stale = Promise.reject(new Error(LOCKED_MSG));
+      stale.catch(() => {});
+      e2eMine.set(sbUser.id, stale);
+      if (!restoreAsked) { restoreAsked = true; setTimeout(restoreKeysModal, 600); }
+      throw new Error(LOCKED_MSG);
+    }
+  }
   if (!data || data.public_key !== k.pub) {
     const { error } = await sb.from("accounts").update({ public_key: k.pub }).eq("id", sbUser.id);
     if (error) throw error;
@@ -3684,7 +3847,7 @@ async function openText(otherId, raw) {
     const key = await sharedKey(otherId);
     const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(parts[0]) }, key, fromB64(parts[1]));
     return new TextDecoder().decode(pt);
-  } catch (e) { return "Can't open this one (the chat key changed)"; }
+  } catch (e) { return e2eLocked ? "Locked. Unlock your messages in Settings" : "Can't open this one (the chat key changed)"; }
 }
 function loadEncMedia(md, otherId) {
   if (!e2eEnc.has(md.url)) {

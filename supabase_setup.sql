@@ -1210,3 +1210,24 @@ create policy key_backups_select on public.key_backups for select to authenticat
 create policy key_backups_insert on public.key_backups for insert to authenticated with check (user_id = (select auth.uid()));
 create policy key_backups_update on public.key_backups for update to authenticated using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
 create policy key_backups_delete on public.key_backups for delete to authenticated using (user_id = (select auth.uid()));
+
+-- approving a new phone: the new phone asks with a temporary public key, the phone that has the chat key answers with the key sealed to it; rows live for minutes
+create table if not exists public.key_links (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  req_pub text not null check (char_length(req_pub) <= 200),
+  status text not null default 'pending' check (status in ('pending', 'approved')),
+  sender_pub text check (sender_pub is null or char_length(sender_pub) <= 200),
+  iv text check (iv is null or char_length(iv) <= 64),
+  ct text check (ct is null or char_length(ct) <= 4000),
+  created_at timestamptz not null default now()
+);
+create index if not exists key_links_user_idx on public.key_links (user_id);
+alter table public.key_links enable row level security;
+revoke all on public.key_links from anon, public;
+grant select, insert, update, delete on public.key_links to authenticated;
+create policy key_links_select on public.key_links for select to authenticated using (user_id = (select auth.uid()));
+create policy key_links_insert on public.key_links for insert to authenticated with check (user_id = (select auth.uid()) and status = 'pending');
+create policy key_links_update on public.key_links for update to authenticated using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
+create policy key_links_delete on public.key_links for delete to authenticated using (user_id = (select auth.uid()));
+select cron.schedule('nook_clean_key_links', '17 * * * *', $$delete from public.key_links where created_at < now() - interval '1 hour'$$);

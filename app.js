@@ -135,7 +135,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.23";
+const APP_VERSION = "3.3.24";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -473,7 +473,7 @@ function longPress(el, fn) {
 function modal(o) {
   const ov = h("div", { class: "ov", role: "dialog" });
   const closeM = trackLayer(() => dismiss(ov), () => { if (o.onBack) o.onBack(); dismiss(ov); });
-  const close = () => closeM();
+  const close = then => closeM(typeof then === "function" ? then : undefined);
   const act = h("button", { class: "pri", onclick: () => o.onAction(close) }, o.action || "Save");
   const cancel = h("button", { class: "tbtn", onclick: () => (o.onCancel ? o.onCancel(close) : close()) }, "Cancel");
   ov.append(h("div", { class: "bar mbar" }, cancel, h("div", { class: "ttl" }, o.title || ""), act), h("div", { class: "mbody" }, o.body));
@@ -1663,7 +1663,7 @@ function settingsV() {
   const keyRow = row(ic("lock", 22), "Message key backup", "Checking...", () => {
     if (keyState === null) { toast("One moment..."); return; }
     if (keyState === "off") backupSetupModal(false);
-    else if (keyState === "locked") restoreKeysModal();
+    else if (keyState === "locked") unlockModal();
     else sheet([{ icon: "lock", label: "Change recovery password", fn: () => backupSetupModal(true) }, { icon: "close", label: "Turn off backup", danger: true, fn: () => confirmSheet("Turn off the backup? A new phone will not be able to open your old messages.", "Turn off", async () => {
       const { error } = await sb.from("key_backups").delete().eq("user_id", sbUser.id);
       toast(error ? "Could not turn it off" : "Backup is off");
@@ -1676,7 +1676,7 @@ function settingsV() {
       const [bk, loc] = await Promise.all([sb.from("key_backups").select("pub").eq("user_id", sbUser.id).maybeSingle(), peekKeys()]);
       if (bk.error) throw bk.error;
       keyState = !bk.data ? "off" : !loc || loc.pub !== bk.data.pub ? "locked" : "on";
-      if (sub) sub.textContent = keyState === "off" ? "Off. Tap to keep your messages on a new phone." : keyState === "locked" ? "Locked on this phone. Tap to unlock." : "On. Your messages can be opened on a new phone.";
+      if (sub) sub.textContent = keyState === "off" ? "Off. Optional: lets you recover your messages if you lose every phone." : keyState === "locked" ? "Locked on this phone. Tap to unlock." : "On. You can recover your messages with your recovery password.";
     } catch (e) { if (sub) sub.textContent = "Could not check right now."; }
   })();
   main.append(h("div", { class: "group" },
@@ -3666,17 +3666,20 @@ async function makeKeyPair() {
   return { priv: kp.privateKey, pub: toB64(new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey))) };
 }
 let e2eLocked = false, restoreAsked = false;
-const LOCKED_MSG = "Unlock your messages first (Settings, Message key backup)";
+const LOCKED_MSG = "Open your messages first (Settings, Message key backup)";
+function lockKeys() {
+  e2eLocked = true;
+  if (!restoreAsked) { restoreAsked = true; setTimeout(unlockModal, 600); }
+}
 async function loadMyKeys(id) {
   const db = await keyDb();
   const got = await readLocalKeys(db, id);
   if (got) { e2eLocked = false; return got; }
-  // a new phone must never make a new key when the old one is saved with a recovery password: that would lock the old messages for good
-  const { data: bk, error } = await sb.from("key_backups").select("user_id").eq("user_id", id).maybeSingle();
-  if (error) throw new Error("Could not check your message key. Try again");
-  if (bk) {
-    e2eLocked = true;
-    if (!restoreAsked) { restoreAsked = true; setTimeout(restoreKeysModal, 600); }
+  // a new phone must never make a new key when the account already has one: that would lock the old messages for good
+  const [me, bk] = await Promise.all([sb.from("accounts").select("public_key").eq("id", id).maybeSingle(), sb.from("key_backups").select("user_id").eq("user_id", id).maybeSingle()]);
+  if (me.error || bk.error) throw new Error("Could not check your message key. Try again");
+  if ((me.data && me.data.public_key) || bk.data) {
+    lockKeys();
     throw new Error(LOCKED_MSG);
   }
   const rec = await makeKeyPair();
@@ -3719,6 +3722,145 @@ function pwField(ph) {
   const eye = h("button", { type: "button", class: "tbtn", "aria-label": "Show password", style: "position:absolute;right:14px;top:50%;transform:translateY(-50%);padding:6px 0;color:var(--muted);font-size:var(--fs-md);font-weight:600", onclick: () => { const s = input.type === "password"; input.type = s ? "text" : "password"; eye.textContent = s ? "Hide" : "Show"; eye.setAttribute("aria-label", s ? "Hide password" : "Show password"); } }, "Show");
   return { input, wrap: h("div", { class: "fld", style: "position:relative" }, input, eye) };
 }
+const LINK_MIN = 10;
+// twelve digits made from the public half of the temporary key: both phones show them, so a swapped request is seen
+async function linkCode(pub) {
+  const d = new Uint8Array(await crypto.subtle.digest("SHA-256", fromB64(pub)));
+  let n = 0n;
+  for (let i = 0; i < 6; i++) n = (n << 8n) | BigInt(d[i]);
+  return String(n % 1000000000000n).padStart(12, "0").replace(/(\d{4})(?=\d)/g, "$1 ");
+}
+const codeBox = t => h("div", { style: "font-size:var(--fs-3xl);font-weight:700;letter-spacing:.06em;text-align:center;padding:14px 0;font-variant-numeric:tabular-nums" }, t);
+async function makeNewKey() {
+  const rec = await makeKeyPair();
+  await saveLocalKeys(await keyDb(), sbUser.id, rec);
+  const { error } = await sb.from("accounts").update({ public_key: rec.pub }).eq("id", sbUser.id);
+  if (error) throw error;
+  await sb.from("key_backups").delete().eq("user_id", sbUser.id);
+  await sb.from("key_links").delete().eq("user_id", sbUser.id);
+  return rec;
+}
+// the three ways to open the messages on a phone that does not have the key
+async function unlockModal() {
+  if (!sbUser) return;
+  const { data: bk } = await sb.from("key_backups").select("user_id").eq("user_id", sbUser.id).maybeSingle();
+  const m = modal({
+    title: "Open your messages",
+    action: "Later",
+    body: [
+      h("p", { class: "note" }, "Your messages are locked so only you can read them. The key lives on your other phone."),
+      h("button", { class: "pri", style: "width:100%;margin-top:6px", onclick: () => m.close(waitForApprovalModal) }, "Approve on my other phone"),
+      bk ? h("button", { class: "ghost", style: "width:100%;margin-top:10px", onclick: () => m.close(restoreKeysModal) }, "Use my recovery password") : null,
+      h("button", { class: "tbtn dng", style: "margin-top:14px", onclick: () => confirmSheet("Start fresh? Older messages will not open anymore, here or for the other person.", "Start fresh", async () => {
+        try { await makeNewKey(); m.close(); toast("New message key made"); setTimeout(() => location.reload(), 500); } catch (e) { toast("Could not do that. Try again"); }
+      }) }, "Start fresh")],
+    onAction: close => close()
+  });
+}
+// this phone asks, the other one answers
+async function waitForApprovalModal() {
+  if (!sbUser) return;
+  let stop = false, linkId = null;
+  const msg = h("p", { class: "note", role: "alert" });
+  const box = codeBox("...");
+  const m = modal({
+    title: "Approve on your other phone",
+    action: "Done",
+    body: [h("p", { class: "note" }, "Open Nook on your other phone. It asks you to approve this one. Tap Approve only if it shows the same code as below."), box, msg],
+    onCancel: close => { stop = true; if (linkId) sb.from("key_links").delete().eq("id", linkId).then(() => {}); close(unlockModal); },
+    onAction: close => { stop = true; if (linkId) sb.from("key_links").delete().eq("id", linkId).then(() => {}); close(); }
+  });
+  m.act.hidden = true;
+  try {
+    const kp = await crypto.subtle.generateKey(E2E_ALG, false, ["deriveKey"]);
+    const reqPub = toB64(new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey)));
+    await sb.from("key_links").delete().eq("user_id", sbUser.id);
+    const ins = await sb.from("key_links").insert({ user_id: sbUser.id, req_pub: reqPub }).select("id").single();
+    if (ins.error) throw ins.error;
+    linkId = ins.data.id;
+    box.textContent = await linkCode(reqPub);
+    const until = Date.now() + LINK_MIN * 60000;
+    while (!stop && Date.now() < until) {
+      await new Promise(r => setTimeout(r, 2000));
+      if (stop) return;
+      const { data: row } = await sb.from("key_links").select("status, sender_pub, iv, ct").eq("id", linkId).maybeSingle();
+      if (!row || row.status !== "approved") continue;
+      msg.textContent = "Opening...";
+      const peer = await crypto.subtle.importKey("raw", fromB64(row.sender_pub), E2E_ALG, false, []);
+      const key = await crypto.subtle.deriveKey({ name: "ECDH", public: peer }, kp.privateKey, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+      const jwk = JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(row.iv) }, key, fromB64(row.ct))));
+      const priv = await crypto.subtle.importKey("jwk", jwk, E2E_ALG, true, ["deriveKey"]);
+      const pubKey = await crypto.subtle.importKey("jwk", { kty: "EC", crv: "P-256", x: jwk.x, y: jwk.y, ext: true }, E2E_ALG, true, []);
+      const pub = toB64(new Uint8Array(await crypto.subtle.exportKey("raw", pubKey)));
+      const { data: me } = await sb.from("accounts").select("public_key").eq("id", sbUser.id).maybeSingle();
+      if (!me || me.public_key !== pub) { msg.textContent = "That key does not match this account. Try again"; stop = true; return; }
+      await saveLocalKeys(await keyDb(), sbUser.id, { priv, pub });
+      await sb.from("key_links").delete().eq("id", linkId);
+      e2eLocked = false;
+      stop = true;
+      m.close();
+      toast("Messages opened");
+      setTimeout(() => location.reload(), 500);
+      return;
+    }
+    if (!stop) msg.textContent = "Nobody answered. Close this and try again";
+  } catch (e) { msg.textContent = "Something went wrong. Close this and try again"; }
+}
+// a phone that has the key answers requests from the same account
+let linkTimer = 0;
+const linkShown = new Set();
+async function checkLinks() {
+  if (document.visibilityState !== "visible" || !sbUser || e2eLocked) return;
+  try {
+    const since = new Date(Date.now() - LINK_MIN * 60000).toISOString();
+    const { data } = await sb.from("key_links").select("id, req_pub").eq("status", "pending").gt("created_at", since).order("created_at", { ascending: false }).limit(1);
+    if (data && data[0] && !linkShown.has(data[0].id)) { linkShown.add(data[0].id); approveLinkModal(data[0]); }
+  } catch (e) {}
+}
+function watchLinks() {
+  if (linkTimer) return;
+  linkTimer = setInterval(checkLinks, 8000);
+  document.addEventListener("visibilitychange", checkLinks);
+  checkLinks();
+}
+async function approveLinkModal(req) {
+  const code = await linkCode(req.req_pub);
+  const k0 = await peekKeys().catch(() => null);
+  const legacy = !!k0 && !k0.priv.extractable;
+  const msg = h("p", { class: "note", role: "alert" });
+  const deny = () => sb.from("key_links").delete().eq("id", req.id).then(() => {});
+  const m = modal({
+    title: "New phone",
+    action: "Approve",
+    body: [h("p", { class: "note" }, "A new phone wants to open your messages. Approve only if you just asked for it and it shows this same code."), codeBox(code), legacy ? h("p", { class: "note", style: "color:var(--danger)" }, "This phone has to make a new message key to share it. Older messages stop opening, here and for the other person. New ones work everywhere.") : null, msg],
+    onCancel: close => { deny(); close(); },
+    onAction: async close => {
+      msg.textContent = "";
+      m.act.disabled = true; m.act.textContent = "Working...";
+      try {
+        let rec = await myKeys();
+        if (!rec.priv.extractable) {
+          rec = await makeKeyPair();
+          await saveLocalKeys(await keyDb(), sbUser.id, rec);
+          const u = await sb.from("accounts").update({ public_key: rec.pub }).eq("id", sbUser.id);
+          if (u.error) throw u.error;
+          await sb.from("key_backups").delete().eq("user_id", sbUser.id);
+          resetKeyCaches();
+        }
+        const eph = await crypto.subtle.generateKey(E2E_ALG, false, ["deriveKey"]);
+        const peer = await crypto.subtle.importKey("raw", fromB64(req.req_pub), E2E_ALG, false, []);
+        const key = await crypto.subtle.deriveKey({ name: "ECDH", public: peer }, eph.privateKey, { name: "AES-GCM", length: 256 }, false, ["encrypt"]);
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const jwk = await crypto.subtle.exportKey("jwk", rec.priv);
+        const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify(jwk)));
+        const up = await sb.from("key_links").update({ status: "approved", sender_pub: toB64(new Uint8Array(await crypto.subtle.exportKey("raw", eph.publicKey))), iv: toB64(iv), ct: toB64(new Uint8Array(ct)) }).eq("id", req.id);
+        if (up.error) throw up.error;
+        close();
+        toast("Approved");
+      } catch (e) { msg.textContent = "Something went wrong. Try again"; } finally { m.act.disabled = false; m.act.textContent = "Approve"; }
+    }
+  });
+}
 // a new phone for an account that has a saved key: the recovery password opens it
 async function restoreKeysModal() {
   if (!sbUser) return;
@@ -3730,10 +3872,7 @@ async function restoreKeysModal() {
     body: [h("p", { class: "note" }, "This account has a saved message key. Type your recovery password to open your old messages on this phone."), pw.wrap, msg,
       h("button", { class: "tbtn dng", onclick: () => confirmSheet("Make a new message key? Older messages will not open anymore, here or for the other person.", "Make new key", async () => {
         try {
-          const rec = await makeKeyPair();
-          await saveLocalKeys(await keyDb(), sbUser.id, rec);
-          await sb.from("accounts").update({ public_key: rec.pub }).eq("id", sbUser.id);
-          await sb.from("key_backups").delete().eq("user_id", sbUser.id);
+          await makeNewKey();
           m.close();
           toast("New message key made");
           setTimeout(() => location.reload(), 500);
@@ -3770,7 +3909,7 @@ async function backupSetupModal(changing) {
     title: changing ? "New recovery password" : "Message key backup",
     action: "Save",
     body: [
-      h("p", { class: "note" }, "Your messages are locked with a key that lives on this phone. A recovery password saves a sealed copy, so a new phone can open your messages too. Nook never sees the password or the key."),
+      h("p", { class: "note" }, "Your messages are locked with a key that lives on this phone. A new phone can already be approved from your other phone. A recovery password saves a sealed copy for the day you lose every phone. Nook never sees the password or the key."),
       legacy ? h("p", { class: "note", style: "color:var(--danger)" }, "Your current key cannot be saved. A new one is made, so older messages stop opening, here and for the other person. New ones work everywhere.") : null,
       h("p", { class: "note" }, "Write the password down. If you lose it and every phone, your messages cannot be recovered."),
       p1.wrap, p2.wrap, msg],
@@ -3804,21 +3943,18 @@ async function ensureE2E() {
   const k = await myKeys();
   const { data } = await sb.from("accounts").select("public_key").eq("id", sbUser.id).maybeSingle();
   if (data && data.public_key && data.public_key !== k.pub) {
-    // another phone made a new key and saved it with a recovery password: this phone must not overwrite it, it has to unlock the saved one
-    const { data: bk } = await sb.from("key_backups").select("pub").eq("user_id", sbUser.id).maybeSingle();
-    if (bk && bk.pub === data.public_key) {
-      e2eLocked = true;
-      const stale = Promise.reject(new Error(LOCKED_MSG));
-      stale.catch(() => {});
-      e2eMine.set(sbUser.id, stale);
-      if (!restoreAsked) { restoreAsked = true; setTimeout(restoreKeysModal, 600); }
-      throw new Error(LOCKED_MSG);
-    }
+    // another phone holds the key of this account now: this phone must not overwrite it, it asks for it
+    const stale = Promise.reject(new Error(LOCKED_MSG));
+    stale.catch(() => {});
+    e2eMine.set(sbUser.id, stale);
+    lockKeys();
+    throw new Error(LOCKED_MSG);
   }
-  if (!data || data.public_key !== k.pub) {
+  if (!data || !data.public_key) {
     const { error } = await sb.from("accounts").update({ public_key: k.pub }).eq("id", sbUser.id);
     if (error) throw error;
   }
+  watchLinks();
 }
 function sharedKey(otherId) {
   if (!e2eShared.has(otherId)) {

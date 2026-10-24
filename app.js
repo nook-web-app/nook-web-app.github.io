@@ -139,7 +139,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.31";
+const APP_VERSION = "3.3.32";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1520,7 +1520,7 @@ async function zenTick() {
       if (text) { zenPost(text); z.log.push(Date.now()); z.next = Date.now() + (2 + Math.random() * 4) * 36e5; persist(); zenRefresh(); }
     }
     const fresh = p => p.t > z.since;
-    const todo = S.posts.find(p => !p.ai && !p.ra && !p.parent && (p.text || p.imgs.length) && !p.zenReplied && fresh(p) && (!p.imgs.length || S.zen.pics));
+    const todo = S.posts.find(p => !p.ai && !p.ra && !p.parent && (p.text || p.imgs.length) && !p.zenReplied && fresh(p));
     if (todo) {
       todo.zenReplied = true;
       const text = await zGen(ZSYS_REPLY, "Post: " + (todo.text || "(photo only)"), todo.imgs);
@@ -1650,7 +1650,7 @@ function settingsV() {
   const sec = t => h("div", { class: "sec" }, t);
   const row = (lead, label, sub, fn, cls) => h("button", { class: "srow" + (cls ? " " + cls : ""), onclick: fn }, lead, h("div", { class: "nm" }, h("b", {}, label), sub ? h("span", { class: "sub" }, sub) : null));
   main.append(sec("Appearance"));
-  main.append(h("div", { class: "seg" }, [["system", "System"], ["dark", "Dark"], ["light", "Light"]].map(t => h("button", { class: S.ui.theme === t[0] ? "on" : "", onclick: () => { S.ui.theme = t[0]; applyTheme(); persist(); render(); } }, t[1]))));
+  main.append(h("div", { class: "seg" }, [["system", "System"], ["dark", "Dark"], ["light", "Light"]].map(t => h("button", { class: S.ui.theme === t[0] ? "on" : "", onclick: e => { S.ui.theme = t[0]; applyTheme(); persist(); e.currentTarget.parentNode.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === e.currentTarget)); } }, t[1]))));
   main.append(sec("Account"));
   const swRow = row(ic("userswap", 22), "Switch account", "Add or switch account", openAccounts);
   main.append(h("div", { class: "group" }, row(avatar(36), "Edit profile", "@" + S.profile.handle, editProfile), swRow, row(ic("usercut", 22), "Sign out", "Log out of this device.", async () => { await pushDetach().catch(() => {}); await leaveThisAccount(); })));
@@ -1674,13 +1674,13 @@ function settingsV() {
     const items = [];
     if (hasRec) items.push({ icon: "lock", label: "Change recovery password", fn: () => backupSetupModal(true) }, { icon: "close", label: "Remove recovery password", danger: true, fn: () => confirmSheet("Remove the recovery password?", "Remove", async () => { const { error } = await sb.from("key_backups").delete().eq("user_id", sbUser.id).eq("mode", "recovery"); toast(error ? "Could not remove it" : "Recovery password removed"); render(); }) });
     else items.push({ icon: "lock", label: "Add a recovery password", fn: () => backupSetupModal(false) });
-    if (hasLogin) items.push({ icon: "close", label: "Stop saving with my login password", danger: true, fn: () => confirmSheet("Stop saving your message key with your login password? Signing in on a new phone will not open your messages by itself anymore.", "Stop saving", async () => {
+    if (hasLogin) items.push({ icon: "close", label: "Stop saving", danger: true, fn: () => confirmSheet("Stop saving your message key? Signing in on a new phone will not open your messages by itself anymore.", "Stop saving", async () => {
       const a = await sb.from("key_backups").delete().eq("user_id", sbUser.id).eq("mode", "login");
       const b = await sb.from("key_backups").upsert({ user_id: sbUser.id, mode: "off", salt: "x", iv: "x", ct: "x", iters: 100000, pub: null }, { onConflict: "user_id,mode" });
       toast(a.error || b.error ? "Could not do that" : "Stopped saving with your login password");
       render();
     }) });
-    else items.push({ icon: "check", label: "Save with my login password", fn: () => loginBackupModal() });
+    else items.push({ icon: "check", label: "Start saving", fn: () => loginBackupModal() });
     items.push({ label: "Cancel", cancel: true });
     sheet(items, "Message key backup");
   });
@@ -1730,10 +1730,6 @@ function settingsV() {
       await pushDetach().catch(() => {});
       await leaveThisAccount();
     }))));
-  if (isOwner()) {
-  main.append(sec("Zenith"));
-  main.append(h("div", { class: "group" }, row(ic("image", 22), "Reply to photo posts", S.zen.pics ? "On" : "Off", () => { S.zen.pics = !S.zen.pics; persist(); render(); })));
-  }
   main.append(sec("Your data"));
   main.append(h("div", { class: "group" },
     row(ic("copy", 22), "Download backup", "Posts, messages and media in a zip", () => downloadBackup())));
@@ -3208,6 +3204,61 @@ async function leaveThisAccount() {
   if (next && (await enterAccount(next))) return;
   location.reload();
 }
+// makes a brand new account and keeps it on this phone next to the open one; the open one stays open
+function newAccountModal() {
+  const dn = h("input", { class: "in", type: "text", placeholder: "Display name", autocomplete: "off", maxlength: "15", "aria-label": "Display name" });
+  const user = h("input", { class: "in", type: "text", placeholder: "Username", autocomplete: "off", maxlength: "15", "aria-label": "Username" });
+  const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "off", "aria-label": "Email" });
+  const pw = pwField("Password");
+  const agree = h("input", { type: "checkbox", id: "agree2", "aria-label": "I am 18+ and agree to the Terms of Use and Privacy Policy" });
+  const msg = h("p", { class: "note", role: "alert" });
+  const m = modal({
+    title: "New account",
+    action: "Create",
+    body: [h("div", { class: "fld" }, dn), h("div", { class: "fld" }, user), h("div", { class: "fld" }, email), pw.wrap,
+      h("label", { class: "agree" }, agree, h("span", {}, "I am 18+ and agree to the Terms and Privacy")), msg],
+    onAction: async close => {
+      msg.textContent = "";
+      const n = dn.value.trim(), u = user.value.trim(), e = email.value.trim(), p = pw.input.value;
+      if (!n) { msg.textContent = "Enter a display name"; return; }
+      if (!/^[A-Za-z0-9._]{1,15}$/.test(u)) { msg.textContent = "Username: letters, numbers, dots or underscores, max 15"; return; }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e)) { msg.textContent = "That email does not look right. Check for typos"; return; }
+      if (p.length < 8) { msg.textContent = "Password needs at least 8 characters"; return; }
+      if (!agree.checked) { msg.textContent = "Agree to the terms and privacy policy to continue"; return; }
+      m.act.disabled = true;
+      try {
+        const { data: taken } = await sb.from("accounts").select("id").eq("username", u).maybeSingle();
+        if (taken) { msg.textContent = "That username is taken"; return; }
+        if (await pwnedPassword(p)) { msg.textContent = PWNED_MSG; return; }
+        const sr = await callFn("signin", { action: "signup", email: e, password: p }).catch(() => null);
+        if (!sr) { msg.textContent = "Could not reach Nook. Check your connection"; return; }
+        if (!sr.ok) { msg.textContent = sr.body.error === "signup_failed" ? authMsg({ code: sr.body.code, message: sr.body.message, status: sr.body.status }) : signinMsg(sr); return; }
+        if (!sr.body.session) { msg.textContent = "Check your email to confirm, then add it with Add account"; return; }
+        // a separate connection, so the account that is open keeps its own login
+        const tmp = window.supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+        const { data: sd, error: se } = await tmp.auth.setSession({ access_token: sr.body.session.access_token, refresh_token: sr.body.session.refresh_token });
+        if (se || !sd.user) { msg.textContent = "Could not set it up. Try again"; return; }
+        const id = sd.user.id;
+        const ins = await tmp.from("accounts").insert({ id, username: u, display_name: n });
+        if (ins.error) { msg.textContent = ins.error.code === "23505" ? "That username is taken" : "Could not save the account: " + ins.error.message; return; }
+        // its message key is made now and saved locked with the password, like for any new account
+        try {
+          const rec = await makeKeyPair();
+          await saveLocalKeys(await keyDb(), id, rec);
+          const row = await sealKeyBackup(rec.priv, rec.pub, p, "login");
+          row.user_id = id;
+          await tmp.from("key_backups").upsert(row, { onConflict: "user_id,mode" });
+          await tmp.from("accounts").update({ public_key: rec.pub }).eq("id", id);
+        } catch (x) {}
+        const list = await acctList();
+        await acctPut("list", list.filter(x => x.id !== id).concat({ id, rt: sr.body.session.refresh_token, username: u, name: n, avatar: null, main: false }));
+        close();
+        toast("Account created");
+        setTimeout(openAccounts, 350);
+      } catch (x) { msg.textContent = "Something went wrong. Try again"; } finally { m.act.disabled = false; }
+    }
+  });
+}
 function addAccountModal() {
   const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "email", "aria-label": "Email" });
   const pass = h("input", { class: "in", type: "password", placeholder: "Password", autocomplete: "current-password", "aria-label": "Password", style: "padding-right:60px" });
@@ -3216,7 +3267,7 @@ function addAccountModal() {
   const m = modal({
     title: "Add account",
     action: "Add",
-    body: [h("p", { class: "note" }, "Sign in to the other account. Its login stays on this phone only."), h("div", { class: "fld" }, email), h("div", { class: "fld", style: "position:relative" }, pass, eye), msg],
+    body: [h("p", { class: "note" }, "Sign in to the other account. Its login stays on this phone only."), h("div", { class: "fld" }, email), h("div", { class: "fld", style: "position:relative" }, pass, eye), msg, h("button", { class: "ghost", style: "width:100%;margin-top:10px", onclick: () => m.close(newAccountModal) }, "Create a new account")],
     onAction: async close => {
       msg.textContent = "";
       const e = email.value.trim();
@@ -3307,7 +3358,7 @@ function hinted(input, max, rule, min, holder) {
     if (rule && n && !rule.re.test(input.value)) { bad = true; text = rule.msg; }
     else if (n >= max) { bad = true; text = "Limit reached: " + max + " characters at most"; }
     else if (min && n && n < min) text = "At least " + min + " characters (" + n + "/" + min + ")";
-    else text = min ? (n ? n + "/" + max : min + " to " + max + " characters") : "";
+    else text = "";
     hint.textContent = text;
     hint.classList.toggle("warn", bad);
   };
@@ -3932,7 +3983,7 @@ async function loginBackupModal() {
   const pw = pwField("Your login password");
   const msg = h("p", { class: "note", role: "alert" });
   const m = modal({
-    title: "Save with login password",
+    title: "Save my key",
     action: "Save",
     body: [h("p", { class: "note" }, "A new phone opens your messages when you sign in. Less private than a recovery password."), legacy ? h("p", { class: "note", style: "color:var(--danger)" }, "Makes a new key. Older messages stop opening.") : null, pw.wrap, msg],
     onAction: async close => {
@@ -4592,32 +4643,6 @@ function dmV(c) {
   sync();
 }
 
-// owner only: every reported post with its reasons, and buttons to remove it or dismiss the reports
-const REPORT_WHY = { sexual: "Sexual content", harassment: "Bullying or harassment", hate: "Hate speech", threats: "Threats or violence", selfharm: "Self harm", illegal: "Illegal or dangerous", private: "Private information", impersonation: "Pretending to be someone", spam: "Spam or scam", other: "Something else" };
-async function reportsV() {
-  topEl.append(bar(backBtn(), ttl("Reported posts")));
-  const list = h("div", { class: "rep" });
-  main.append(list);
-  list.append(loadingEl());
-  const { data, error } = await sb.rpc("owner_reports");
-  list.textContent = "";
-  if (error) { list.append(emptyState("flag", "Could not load reports.")); return; }
-  const byPost = new Map();
-  (data || []).forEach(r => { if (!byPost.has(r.post_id)) byPost.set(r.post_id, []); byPost.get(r.post_id).push(r); });
-  if (!byPost.size) { list.append(emptyState("flag", "No reports.")); return; }
-  byPost.forEach((rs, pid) => {
-    const f = rs[0];
-    const card = h("div", { class: "repc" },
-      h("div", { class: "reph" }, h("b", {}, "@" + f.author), h("span", { class: "sub" }, f.mod_status === "pending" ? "being checked" : ago(Date.parse(f.reported_at)))),
-      f.body ? h("div", { class: "tx" }, f.body) : null,
-      parseMedia(f.media_url).length ? imgGrid(parseMedia(f.media_url)) : null,
-      h("div", { class: "sub" }, rs.map(r => (REPORT_WHY[r.reason] || r.reason) + " by @" + r.reporter).join(" · ")),
-      h("div", { class: "btns" },
-        h("button", { class: "ghost", onclick: async () => { const { error: e } = await sb.rpc("owner_dismiss_reports", { p_post: pid }); if (e) { toast("Could not dismiss"); return; } card.remove(); if (!list.childElementCount) list.append(emptyState("flag", "No reports.")); } }, "Dismiss"),
-        h("button", { class: "ghost dng", onclick: () => confirmSheet("Delete this post for good?", "Delete post", async () => { const { error: e } = await sb.rpc("owner_delete_post", { p_post: pid }); if (e) { toast("Could not delete"); return; } card.remove(); toast("Post deleted"); if (!list.childElementCount) list.append(emptyState("flag", "No reports.")); }) }, "Delete post")));
-    list.append(card);
-  });
-}
 function blockedV() {
   topEl.append(bar(backBtn(), ttl("Blocked accounts")));
   const list = h("div");
@@ -4977,7 +5002,7 @@ function startRealtime() {
     .subscribe();
 }
 
-const VIEWS = { privacy: legalV, terms: legalV, auth: authV, user: userV, home: homeV, thread: threadV, profile: profileV, chat: chatV, conv: convV, saved: savedV, tag: tagV, lists: listsV, list: listV, settings: settingsV, zen: zenV, dm: dmV, notifs: notifsV, followers: c => followListV(c, "followers"), following: c => followListV(c, "following"), blocked: blockedV, reports: reportsV, banned: bannedV, age: ageV, search: searchV };
+const VIEWS = { privacy: legalV, terms: legalV, auth: authV, user: userV, home: homeV, thread: threadV, profile: profileV, chat: chatV, conv: convV, saved: savedV, tag: tagV, lists: listsV, list: listV, settings: settingsV, zen: zenV, dm: dmV, notifs: notifsV, followers: c => followListV(c, "followers"), following: c => followListV(c, "following"), blocked: blockedV, banned: bannedV, age: ageV, search: searchV };
 let lastProfileTap = 0;
 // double tap on the profile button: the first one goes back to the account used before, taps in a row after that walk down the list
 async function quickSwitch() {

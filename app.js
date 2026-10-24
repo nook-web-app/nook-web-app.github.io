@@ -133,7 +133,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.2.24";
+const APP_VERSION = "3.2.25";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2639,7 +2639,6 @@ function openDrawer() {
   layer.append(scrim, dr);
 }
 
-const BAN_KEY = "nook-banned";
 const BAN_EMAIL = "nook-banned-email";
 const isBanErr = e => !!e && (e.code === "user_banned" || /banned/i.test(e.message || ""));
 // what is saved on this phone (posts, chats, profile picture) belongs to the account that used it last
@@ -2674,7 +2673,6 @@ function showBanned(email) {
   if (banShown) return;
   banShown = true;
   try {
-    localStorage.setItem(BAN_KEY, "1");
     const mail = email || (sbUser && sbUser.email) || "";
     if (mail) localStorage.setItem(BAN_EMAIL, mail);
   } catch (e) {}
@@ -2689,7 +2687,7 @@ function showBanned(email) {
 }
 function bannedV() {
   navEl.hidden = true;
-  const leave = () => { wipeLocal(false); try { localStorage.removeItem(BAN_KEY); localStorage.removeItem(BAN_EMAIL); } catch (e) {} banShown = false; stack = [{ r: "auth" }]; scrolls.length = 0; render(); };
+  const leave = () => { wipeLocal(false); try { localStorage.removeItem(BAN_EMAIL); } catch (e) {} banShown = false; stack = [{ r: "auth" }]; scrolls.length = 0; render(); };
   main.append(h("div", { class: "empty", style: "padding-top:18vh" },
     ic("lock", 56),
     h("h1", { class: "pname", style: "margin:0;color:var(--fg)" }, "You're banned"),
@@ -3140,7 +3138,7 @@ function authV() {
           msg.textContent = error.message;
           return;
         }
-        try { localStorage.removeItem(BAN_KEY); } catch (x) {}
+        try { localStorage.removeItem(BAN_EMAIL); } catch (x) {}
         await sb.rpc("set_my_deactivated", { flag: false });
       }
       location.reload();
@@ -4330,7 +4328,7 @@ async function boot() {
   if (!S) { try { const r = localStorage.getItem("tiny-posts-v3"); if (r) S = JSON.parse(r); } catch (e) {} }
   if (!S) { S = freshState(); persist(); }
   // keys that older versions left on this device
-  try { ["tiny-bsky-v2", "zenith-pw"].forEach(k => localStorage.removeItem(k)); } catch (e) {}
+  try { ["tiny-bsky-v2", "zenith-pw", "nook-banned"].forEach(k => localStorage.removeItem(k)); } catch (e) {}
   if (normalize()) persist();
   applyTheme();
   try {
@@ -4343,20 +4341,18 @@ async function boot() {
   } catch (e) {}
   const { data: sess } = await Promise.race([sb.auth.getSession().catch(() => ({ data: { session: null } })), new Promise(r => setTimeout(() => r({ data: { session: null } }), 6000))]);
   sbUser = sess && sess.session ? sess.session.user : null;
-  let flagged = false, ageHeld = false;
-  try { flagged = localStorage.getItem(BAN_KEY) === "1"; } catch (e) {}
+  let ageHeld = false;
   if (sbUser) {
     const { data: ban } = await sb.from("bans").select("user_id").eq("user_id", sbUser.id).maybeSingle();
     if (ban) { hist(true); showBanned(); return; }
-    if (flagged) { flagged = false; try { localStorage.removeItem(BAN_KEY); } catch (e) {} }
     const { data: acct, error: aerr } = await sb.from("accounts").select("id, deactivated, username").eq("id", sbUser.id).maybeSingle();
     if (acct) { const { data: held } = await sb.rpc("my_age_hold"); acct.age_hold = held === true; }
     ageHeld = !!(acct && acct.age_hold);
     if (!aerr && (!acct || acct.deactivated)) { await sb.auth.signOut(); sbUser = null; }
     else if (sbUser && await foreignLocalData(acct)) { await wipeLocal(true); try { localStorage.setItem(LOCAL_UID, sbUser.id); } catch (e) {} location.reload(); return; }
   }
-  if (!sbUser && flagged) { stack = [{ r: "banned" }]; scrolls.length = 0; }
-  else if (!sbUser) { stack = [{ r: "auth" }]; scrolls.length = 0; }
+  // whether somebody is banned is only ever decided by the server: a banned account sees the banned page when it signs in
+  if (!sbUser) { stack = [{ r: "auth" }]; scrolls.length = 0; }
   else if (ageHeld) { stack = [{ r: "age" }]; scrolls.length = 0; }
   else if (stack.some(x => x.r === "auth" || x.r === "banned")) { stack = [{ r: "home" }]; scrolls.length = 0; }
   hist(true);

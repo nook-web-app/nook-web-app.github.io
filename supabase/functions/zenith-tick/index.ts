@@ -50,7 +50,7 @@ Deno.serve(async (req) => {
   const tz = prompt && prompt.data && typeof prompt.data.tz === "string" ? String(prompt.data.tz) : "Asia/Muscat";
   let when = "";
   try { when = new Date().toLocaleString("en-US", { dateStyle: "full", timeStyle: "short", timeZone: tz }); } catch { when = new Date().toISOString(); }
-  const system = base + " Never use line breaks. Write everything as one paragraph. Current local time: " + when + ". Use this for anything about the time or date.";
+  const system = base + " Never use line breaks. Write everything as one paragraph. Current local time: " + when + ". Only use it when the time or date is really needed, never bring it up on your own.";
 
   let text = "";
   try {

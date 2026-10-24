@@ -6,7 +6,7 @@
   const touch = () => { try { localStorage.setItem(LAST, String(Date.now())); } catch (e) {} };
   const notes = async () => {
     try {
-      const t = await (await fetch("CLAUDE_READ_THIS.txt", { cache: "no-store" })).text();
+      const t = await (await fetch("CLAUDE_READ_THIS.txt", { cache: "no-store", signal: AbortSignal.timeout ? AbortSignal.timeout(6000) : undefined })).text();
       const top = t.split(/^## /m)[1] || "";
       const ver = top.split("\n")[0].trim();
       const lines = top.split("\n").slice(1).map(l => l.replace(/^\s*-\s*/, "").trim()).filter(Boolean);
@@ -51,10 +51,12 @@
     else layer.append(scrim, sh);
   };
   const check = async manual => {
-    if (!reg) return;
-    try { await reg.update(); } catch (e) {}
+    if (!reg) { if (manual) toast("Not available right now"); return; }
+    let failed = false;
+    try { await Promise.race([reg.update(), new Promise((_, rej) => setTimeout(() => rej(new Error("slow")), 10000))]); } catch (e) { failed = true; }
     await new Promise(r => setTimeout(r, 1500));
     if (reg.waiting) { if (manual) ask(reg.waiting, true); return; }
+    if (manual && failed && !reg.installing) { toast("Could not check. Check your connection and try again"); return; }
     if (!reg.installing && manual) toast("Up to date");
   };
   navigator.serviceWorker.register("sw.js").then(r => {
@@ -68,7 +70,10 @@
     const last = Number(localStorage.getItem(LAST) || 0);
     const idle = last > 0 && Date.now() - last > IDLE;
     touch();
-    if (idle) r.update().then(() => location.reload(), () => location.reload());
+    // an idle phone gets a fresh start, once per tab session, so a blocked storage can never cause a reload loop
+    let once = false;
+    try { once = sessionStorage.getItem("nook-idle-reload") === "1"; if (idle && !once) sessionStorage.setItem("nook-idle-reload", "1"); } catch (e) { once = true; }
+    if (idle && !once) Promise.race([r.update(), new Promise(res => setTimeout(res, 4000))]).then(() => location.reload(), () => location.reload());
   }).catch(() => {});
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") touch(); });
   window.addEventListener("pagehide", touch);

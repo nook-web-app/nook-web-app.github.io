@@ -155,7 +155,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.15";
+const APP_VERSION = "3.4.16";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -192,6 +192,10 @@ function idbLoad(d) {
   });
 }
 function idbSave(d, meta, fresh, drop) {
+  // a save that never finishes is given up after a while, so the queue behind it keeps moving
+  return Promise.race([idbSaveNow(d, meta, fresh, drop), new Promise((_, rej) => setTimeout(() => rej(new Error("slow save")), 10000))]);
+}
+function idbSaveNow(d, meta, fresh, drop) {
   return new Promise((res, rej) => {
     const t = d.transaction(["kv", "img"], "readwrite");
     t.objectStore("kv").put(meta, "state");
@@ -1069,18 +1073,23 @@ async function deleteRemote(items) {
   if (uniq.length) sb.storage.from("media").remove(uniq).then(() => {}, () => {});
 }
 function serverDelete(items) {
-  deleteRemote(items).catch(e => toast("Could not delete on server: " + ((e && e.message) || "error")));
+  deleteRemote(items).catch(e => toast("Could not delete on the server yet. " + plainErr(e, "It will be tried again")));
 }
+// true when the edit is saved (or the post is not on the server yet, so the retry sends the new words)
 async function syncEdit(ed, text, origin, now) {
-  if (!sbUser || !ed.remote || ed.ra || ed.ai) return;
+  if (!sbUser || !ed.remote || ed.ra || ed.ai) return true;
   const kept = origin.map((src, i) => (now.includes(src) ? (ed.media || [])[i] : null)).filter(Boolean);
   const added = now.filter(src => !origin.includes(src));
   const up = added.length ? await uploadMedia(added) : [];
-  if (!up) { toast("Could not upload media"); return; }
+  if (!up) { toast("Could not upload the photo. The edit was not saved"); return false; }
   const all = kept.concat(up);
   const { error } = await sb.from("posts").update({ body: text, media_url: all.length ? JSON.stringify(all) : null }).eq("id", ed.remote);
-  if (error) toast("Could not save edit on server: " + error.message);
-  else { ed.media = all; persist(); }
+  if (error) {
+    toast(/rate_limited/.test(error.message || "") ? "Wait a few seconds before editing again. The edit was not saved" : "The edit was not saved. " + plainErr(error, "Try again"));
+    return false;
+  }
+  ed.media = all; persist();
+  return true;
 }
 
 
@@ -1903,7 +1912,11 @@ function settingsV() {
   main.append(h("div", { class: "group" }, row(avatar(36), "Edit profile", "@" + S.profile.handle, editProfile), swRow, row(ic("usercut", 22), "Sign out", "Log out of this device.", () => confirmSheet("Sign out of @" + S.profile.handle + " on this phone?", "Sign out", signOutNow))));
   main.append(sec("Login"));
   const totpRow = row(ic("shield", 22), "Authenticator app", rowSubs.totp || "Checking...", async () => {
-    if (totpOn === null) { toast("One moment..."); return; }
+    if (totpOn === null) {
+      toast("Checking...");
+      callFn("totp", { action: "status" }).then(r => { totpOn = r.ok ? !!r.body.enabled : null; const sub = totpRow.querySelector(".sub"); if (sub) sub.textContent = !r.ok ? "Could not check right now. Tap to retry." : totpOn ? "On" : "Off"; if (r.ok) rowSubs.totp = totpOn ? "On" : "Off"; });
+      return;
+    }
     if (totpOn) sheet([{ icon: "close", label: "Turn off authenticator", danger: true, fn: authenticatorOff }], "Authenticator is on");
     else { await authenticatorSetup(); render(); }
   });
@@ -1986,7 +1999,9 @@ function settingsV() {
   main.append(h("div", { class: "group" }, row(ic("check", 22), "Check for updates", "You are on version " + APP_VERSION, () => {
     if (!window.nookCheckUpdate) { toast("Not available right now"); return; }
     if (window.nookPtr) window.nookPtr.spin();
-    Promise.resolve(window.nookCheckUpdate()).catch(() => {}).then(() => { if (window.nookPtr) window.nookPtr.stop(); });
+    const done = () => { if (window.nookPtr) window.nookPtr.stop(); };
+    setTimeout(done, 15000);
+    Promise.resolve(window.nookCheckUpdate()).catch(() => {}).then(done);
   })));
   main.append(sec("Legal"));
   main.append(h("div", { class: "group" },
@@ -1995,7 +2010,7 @@ function settingsV() {
   main.append(sec("Danger zone"));
   main.append(h("div", { class: "group" }, row(ic("trash", 22), "Delete account", "Deletes your account and its data", () => confirmLogin("Delete account", "Deletes your account, posts and messages for good.", "Delete", async () => {
     const r = await callFn("delete-account");
-    if (!r.ok) { toast(r.body.error || "Could not delete account"); return; }
+    if (!r.ok) return failText(r, "Could not delete the account. Try again");
     await wipeLocal();
     await leaveThisAccount();
   }), "dng")));
@@ -2591,16 +2606,25 @@ async function uploadMedia(srcs) {
   }
   return urls;
 }
-async function pushPost(np) {
+// posts that could not be saved are sent again by themselves when the connection is back
+function retryUnsent() {
+  if (!sbUser || !S || (typeof navigator !== "undefined" && navigator.onLine === false)) return;
+  S.posts.filter(p => !p.remote && !p.ai && !p.ra && !p.sending && !p.noRetry && (p.text || (p.imgs && p.imgs.length)) && (!p.parent || (byId(p.parent) && byId(p.parent).remote))).slice(0, 3).forEach(p => pushPost(p, true));
+}
+async function pushPost(np, quiet) {
   const hasImgs = !!(np.imgs && np.imgs.length);
-  if (!sbUser || (!np.text && !hasImgs)) return;
+  if (!sbUser || (!np.text && !hasImgs) || np.sending) return;
   const par = np.parent ? byId(np.parent) : null;
   if (np.parent && (!par || !par.remote)) return;
+  np.sending = true;
+  try { await pushPostNow(np, par, hasImgs, quiet); } finally { delete np.sending; }
+}
+async function pushPostNow(np, par, hasImgs, quiet) {
   const row = { user_id: sbUser.id, body: np.text || "" };
   let urls = null;
   if (hasImgs) {
     urls = await uploadMedia(np.imgs);
-    if (!urls) { toast("Could not upload media"); return; }
+    if (!urls) { if (!quiet) toast("Could not upload the photo. It will be sent again when the connection is back"); return; }
     row.media_url = JSON.stringify(urls);
   }
   if (par) row.parent_id = par.remote;
@@ -2610,7 +2634,7 @@ async function pushPost(np) {
   if (!error && data) { np.remote = data.id; np.media = urls || []; persist(); }
   else {
     if (urls && urls.length) sb.storage.from("media").remove(urls.map(u => storagePath(u, "media")).filter(Boolean)).then(() => {}, () => {});
-    toast("Could not save that post to the server");
+    if (!quiet) toast("Could not send that post yet. It will be sent again when the connection is back");
   }
 }
 const BANNED_WORDS = ["nigger", "nigga", "n1gga", "n1gger", "nigg4", "nigg3r", "n1gg4", "n1gg3r"];
@@ -2647,13 +2671,18 @@ function openCompose(o) {
     foot: h("div", { class: "cfoot" }, bCam, bImg),
     onCancel: close => {
       const dirty = ta.value !== startText || imgs.length !== (ed ? ed.imgs.length : 0);
-      if (dirty) sheet([{ label: "Discard", danger: true, fn: () => { keepDraft(); close(); } }, { label: "Keep editing", cancel: true }], "Discard this post?");
+      if (dirty) sheet([{ label: "Discard", danger: true, fn: () => { S.draft = null; persist(); close(); } }, { label: "Keep editing", cancel: true }], "Discard this post?");
       else close();
     },
     onAction: close => {
       const text = cleanText(ta.value.trim());
       if (bannedHit(text)) { toast("That post has a banned word"); return; }
-      if (ed) { const origin = ed.imgs.slice(); syncEdit(ed, text, origin, imgs.slice()); ed.text = text; ed.imgs = imgs.slice(); ed.edited = true; }
+      if (ed) {
+        const origin = ed.imgs.slice(), was = { text: ed.text, imgs: ed.imgs, edited: ed.edited };
+        // shown at once, and put back if the server refuses it
+        syncEdit(ed, text, origin, imgs.slice()).then(ok => { if (!ok) { ed.text = was.text; ed.imgs = was.imgs; ed.edited = was.edited; persist(); render(); } });
+        ed.text = text; ed.imgs = imgs.slice(); ed.edited = true;
+      }
       else {
         const np = { id: uid(), text, t: Date.now(), imgs: imgs.slice(), parent: parent ? parent.id : null, liked: false, reposted: false, saved: false, pinned: false };
         S.posts.push(np);
@@ -2850,6 +2879,10 @@ function editProfile() {
   };
   const m = modal({
     top: true,
+    onCancel: close => {
+      const dirty = name.value.trim() !== (pr.name || "") || handle.value.trim().toLowerCase() !== pr.handle || bio.value !== (pr.bio || "") || avatarData !== pr.avatar || bannerData !== pr.banner || themeVal !== (pr.bannerTheme === "avatar" ? "avatar" : "default");
+      if (dirty) sheet([{ label: "Discard changes", danger: true, fn: close }, { label: "Keep editing", cancel: true }], "Discard your changes?"); else close();
+    },
     title: "Edit profile",
     body: [bn, eav, h("div", { class: "fld" }, h("label", {}, "Banner style"), seg),
       h("div", { class: "fld" }, h("label", { for: "en" }, "Display name"), name),
@@ -2878,15 +2911,15 @@ function editProfile() {
         pr.bannerTheme = themeVal;
         if (sbUser) {
           const uid0 = sbUser.id;
-          sb.from("accounts").update({ bio: pr.bio, display_name: pr.name, banner_theme: pr.bannerTheme }).eq("id", uid0).then(({ error }) => { if (error) toast("Could not save profile: " + error.message); });
+          sb.from("accounts").update({ bio: pr.bio, display_name: pr.name, banner_theme: pr.bannerTheme }).eq("id", uid0).then(({ error }) => { if (error) toast("Your profile was saved on this phone only. " + plainErr(error, "Try again later")); });
           avatarValue(pr.avatar).then(small => {
             if (small === undefined) { toast("Could not upload profile photo"); return; }
-            if (sbUser) sb.from("accounts").update({ avatar: small }).eq("id", uid0).then(() => { loadFeed(); if (sbUser && sbUser.id === uid0) rememberAccount({ username: pr.handle, name: pr.name || pr.handle, avatar: small }).catch(() => {}); });
+            if (sbUser) sb.from("accounts").update({ avatar: small }).eq("id", uid0).then(({ error }) => { if (error) toast("The new picture was not saved. " + plainErr(error, "Try again later")); loadFeed(); if (sbUser && sbUser.id === uid0) rememberAccount({ username: pr.handle, name: pr.name || pr.handle, avatar: small }).catch(() => {}); });
           });
           const src = pr.banner;
           bannerUrl(src).then(url => {
             if (url === undefined) { toast("Could not upload banner"); return; }
-            sb.from("accounts").update({ banner: url }).eq("id", uid0).then(() => {});
+            sb.from("accounts").update({ banner: url }).eq("id", uid0).then(({ error }) => { if (error) toast("The new banner was not saved. " + plainErr(error, "Try again later")); });
             if (url && pr.banner === src && url !== src) { pr.banner = url; persist(); }
           });
         }
@@ -3044,19 +3077,22 @@ function ageV() {
   const go1 = h("button", { class: "pri", onclick: send }, "Continue");
   async function send() {
     const years = Number(day.value);
-    if (!day.value || years < 1 || years > 120) { msg.textContent = "Type your age as a number."; return; }
+    if (!day.value) { msg.textContent = "Type your age."; return; }
+    if (years < 1 || years > 120) { msg.textContent = "Type your real age, from 1 to 120."; return; }
     go1.disabled = true; msg.textContent = "";
     const r = await callFn("age", { action: "answer", age: years });
     go1.disabled = false;
     const s = r.body && r.body.state;
-    if (s === "passed" || s === "banned") { try { sessionStorage.removeItem("nook-route"); } catch (e) {} location.reload(); return; }
-    msg.textContent = (r.body && r.body.error) || "Something went wrong. Try again.";
+    if (s === "passed") { try { sessionStorage.removeItem("nook-route"); } catch (e) {} location.reload(); return; }
+    if (s === "banned") { showBanned(sbUser && sbUser.email); return; }
+    msg.textContent = failText(r, "Something went wrong. Try again.");
   }
   main.append(h("div", { class: "empty", style: "padding-top:14vh" },
     h("h1", { class: "pname", style: "margin:0;color:var(--fg)" }, "One quick question"),
     h("p", {}, "How old are you?"),
     h("div", { class: "fld", style: "width:100%;max-width:320px" }, day),
-    go1, msg));
+    go1, msg,
+    h("button", { class: "tbtn", onclick: () => confirmSheet("Sign out of this account?", "Sign out", signOutNow) }, "Sign out")));
 }
 const extFromType = t => ({ "image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp" })[t] || "bin";
 // the chat key of this browser, only if it is still here; used to open old messages in the backup
@@ -3197,7 +3233,7 @@ function authenticatorSetup() {
         msg.textContent = "";
         try {
           const r = await callFn("totp", { action: "enable", code: c });
-          if (!r.ok) { msg.textContent = r.body.error || "That code did not work"; return; }
+          if (!r.ok) { msg.textContent = failText(r, "That code did not work"); return; }
           totpOn = true;
           close();
           toast("Authenticator is on");
@@ -3206,15 +3242,16 @@ function authenticatorSetup() {
       }
     });
     m.act.disabled = true;
-    callFn("totp", { action: "begin" }).then(r => {
+    const begin = () => callFn("totp", { action: "begin" }).then(r => {
       box.textContent = "";
-      if (!r.ok) { box.append(h("p", { class: "note" }, r.body.error || "Could not start the setup. Try again later.")); return; }
+      if (!r.ok) { box.append(h("p", { class: "note" }, failText(r, "Could not start the setup.")), h("button", { class: "ghost", type: "button", onclick: () => { box.textContent = ""; begin(); } }, "Try again")); return; }
       box.append(
         h("a", { class: "pri sbtn big", href: r.body.uri }, "Add Nook to the app"),
         h("p", { class: "note" }, "If that does not open the app, add it by hand with this key. Tap the key to copy it."),
         h("button", { class: "keybox", type: "button", onclick: () => copy(r.body.secret) }, r.body.secret));
       m.act.disabled = false;
-    }).catch(() => { box.textContent = ""; box.append(h("p", { class: "note" }, "Could not reach the server. Try again later.")); });
+    });
+    begin();
   });
 }
 function authenticatorOff() {
@@ -3230,7 +3267,7 @@ function authenticatorOff() {
       m.act.disabled = true;
       try {
         const r = await callFn("totp", { action: "disable", code: c });
-        if (!r.ok) { msg.textContent = r.body.error || "That code did not work"; return; }
+        if (!r.ok) { msg.textContent = failText(r, "That code did not work"); return; }
         totpOn = false;
         close();
         render();
@@ -3450,9 +3487,12 @@ async function enterAccount(entry) {
   switching = true;
   try {
     enterFail = "";
-    const { data, error } = await sb.auth.refreshSession({ refresh_token: entry.rt });
-    // only a refusal from the server removes the account; a bad connection never does
-    if (error && !(error.status >= 400 && error.status < 500)) { enterFail = "offline"; return false; }
+    const got = await Promise.race([sb.auth.refreshSession({ refresh_token: entry.rt }), wait(12000).then(() => null)]);
+    if (!got) { enterFail = "offline"; return false; }
+    const { data, error } = got;
+    // only a real refusal of the saved login removes the account; a bad connection, a busy server or a limit never does
+    if (error && error.status === 429) { enterFail = "busy"; return false; }
+    if (error && !(error.status === 400 || error.status === 401 || error.status === 403)) { enterFail = "offline"; return false; }
     if (error || !data || !data.session) { enterFail = "login"; await forgetAccount(entry.id); return false; }
     // the login rotated, so the new one is saved at once
     await acctPut("list", (await acctList()).map(x => x.id === entry.id ? Object.assign({}, x, { rt: data.session.refresh_token }) : x)).catch(() => {});
@@ -3481,13 +3521,16 @@ async function switchAccountNow(id) {
   if (!(await enterAccount(target))) {
     pushSync().catch(() => {});
     if (enterFail === "offline") { toast("No connection. Try again"); return; }
+    if (enterFail === "busy") { toast("Too many tries. Try again in a few minutes"); return; }
     toast("Sign in again to use that account");
     addAccountModal();
   }
 }
 // a slow network never holds up leaving: the phone is cleared first, the server is told on the way out
+let signingOut = false;
 async function signOutNow() {
-  if (leaving) return;
+  if (leaving || signingOut) return;
+  signingOut = true;
   toast("Signing out...");
   await Promise.race([pushDetach().catch(() => {}), wait(2000)]);
   await leaveThisAccount();
@@ -3811,16 +3854,19 @@ function authV() {
         if (!/^[A-Za-z0-9._]{1,15}$/.test(u)) { msg.textContent = "Username: letters, numbers, dots or underscores, max 15"; return; }
         if (p.length < 8) { msg.textContent = "Password needs at least 8 characters"; return; }
         if (await pwnedPassword(p)) { msg.textContent = PWNED_MSG; return; }
-        const sr = await callFn("signin", { action: "signup", email: e, password: p }).catch(() => null);
-        if (!sr) { msg.textContent = "Could not reach Nook. Check your connection"; return; }
+        const { data: taken } = await sb.from("accounts").select("id").eq("username", u).maybeSingle();
+        if (taken) { msg.textContent = "That username is taken"; return; }
+        const sr = await callFn("signin", { action: "signup", email: e, password: p });
         if (!sr.ok) { msg.textContent = sr.body.error === "signup_failed" ? authMsg({ code: sr.body.code, message: sr.body.message, status: sr.body.status }) : signinMsg(sr); return; }
         if (!sr.body.session) { msg.textContent = "Check your email to confirm, then sign in"; return; }
         const { data, error } = await sb.auth.setSession({ access_token: sr.body.session.access_token, refresh_token: sr.body.session.refresh_token });
         if (error || !data.user) { msg.textContent = "Could not sign in. Try again"; return; }
         const { error: ie } = await sb.from("accounts").insert({ id: data.user.id, username: u, display_name: dn });
         if (ie) {
-          await sb.auth.signOut();
-          msg.textContent = ie.code === "23505" ? "That username is taken" : "Could not save account: " + ie.message;
+          // no half made account is left behind: the login that was just made is removed again
+          await callFn("delete-account").catch(() => {});
+          await sb.auth.signOut().catch(() => {});
+          msg.textContent = ie.code === "23505" ? "That username is taken" : "Could not create the account. " + plainErr(ie, "Try again");
           return;
         }
         // the saved data on this phone may belong to someone else: the check at start-up clears it, so nothing is copied into the new account here
@@ -3831,6 +3877,7 @@ function authV() {
         const r = await callFn("signin", { email: e, password: p }).catch(() => ({ ok: false, body: {} }));
         if (r.body && r.body.error === "banned") { showBanned(e); return; }
         if (!r.ok) { msg.textContent = signinMsg(r); return; }
+        if (!r.body || !r.body.session) { msg.textContent = "Could not sign in. Try again"; return; }
         const { data: sd, error } = await sb.auth.setSession({ access_token: r.body.session.access_token, refresh_token: r.body.session.refresh_token });
         if (error) { msg.textContent = "Could not sign in. Try again"; return; }
         try { localStorage.removeItem(BAN_EMAIL); } catch (x) {}
@@ -3907,7 +3954,8 @@ function cachedAccounts(ids) {
     const r = cacheRead("acct:" + id);
     if (r && r.v) { out.set(id, r.v); if (Date.now() - r.t >= ACCT_TTL) stale.push(id); } else miss.push(id);
   });
-  const pull = list => sb.from("accounts").select(ACC_COLS).in("id", list).then(({ data }) => {
+  const pull = list => sb.from("accounts").select(ACC_COLS).in("id", list).then(({ data, error }) => {
+    if (error) out.failed = true;
     (data || []).forEach(a => { out.set(a.id, a); cacheWrite("acct:" + a.id, a); });
     return out;
   });
@@ -3935,7 +3983,9 @@ function acctsFor(ids) {
   return cachedAccounts(need).then(m => {
     need.forEach(id => {
       const a = m.get(id);
-      acctCache.set(id, a ? Object.assign({}, a, { name: a.display_name || a.username }) : { id, username: "user", name: "user", avatar: null });
+      // a lookup that failed is not remembered, so the real name loads the next time
+      if (a) acctCache.set(id, Object.assign({}, a, { name: a.display_name || a.username }));
+      else if (!m.failed) acctCache.set(id, { id, username: "user", name: "user", avatar: null });
     });
     return acctCache;
   });
@@ -3986,7 +4036,7 @@ async function pwnedPassword(pw) {
   try {
     const raw = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(pw));
     const hex = Array.from(new Uint8Array(raw), b => b.toString(16).padStart(2, "0")).join("").toUpperCase();
-    const r = await fetch("https://api.pwnedpasswords.com/range/" + hex.slice(0, 5), { headers: { "Add-Padding": "true" } });
+    const r = await fetch("https://api.pwnedpasswords.com/range/" + hex.slice(0, 5), { headers: { "Add-Padding": "true" }, signal: AbortSignal.timeout ? AbortSignal.timeout(3000) : undefined });
     if (!r.ok) return false;
     const tail = hex.slice(5);
     return (await r.text()).split("\n").some(l => { const [s, n] = l.trim().split(":"); return s === tail && Number(n) > 0; });
@@ -4021,7 +4071,7 @@ function setpwMsg(r) {
   if (e === "setpw_failed") return authMsg({ code: r.body.code, message: r.body.message });
   if (e === "no_password") return "Enter your current password";
   if (e === "not_signed_in") return "You are signed out. Sign in again";
-  return signinMsg(r);
+  return failText(r, "Could not change the password. Try again");
 }
 // the signin function hands back a fresh session after the password changed, because the old one stops working
 async function takeSession(r) {
@@ -4039,15 +4089,37 @@ function signinMsg(r) {
   if (e === "not_confirmed") return "This email is not confirmed yet. Open the link we sent you";
   if (e === "no_email") return "Enter your email";
   if (e === "no_password") return "Enter your password";
-  return "Could not sign in. Check your connection and try again";
+  return failText(r, "Could not sign in. Try again");
+}
+// a plain line for a failed call: no connection, signed out, too many tries, a problem on our side, or the given fallback
+function failText(r, fallback) {
+  const s = r && r.status;
+  if (!s) return "Could not reach Nook. Check your connection and try again";
+  if (s === 401) return "Your session ended. Sign in again";
+  if (s === 429) return "Too many tries. Wait a few minutes and try again";
+  if (s >= 500) return "Nook is having trouble. Try again in a minute";
+  const e = r.body && r.body.error;
+  return typeof e === "string" && /\s/.test(e) && e.length < 140 ? e : fallback;
+}
+// any thrown error turned into a line that makes sense to a person
+function plainErr(e, fallback) {
+  const m = String((e && e.message) || e || "");
+  if (/failed to fetch|networkerror|load failed|network request|abort|timed out|timeout/i.test(m)) return "No connection. Check it and try again";
+  if (/row-level security|permission denied/i.test(m)) return "That is not allowed right now";
+  if (/rate_limited/i.test(m)) return "Too many changes. Wait a little and try again";
+  if (/need to open nook/i.test(m)) return "They have not opened messages yet";
+  return fallback || "Something went wrong. Try again";
 }
 async function callFn(name, body) {
-  const { data } = await sb.auth.getSession();
-  const tok = data && data.session ? data.session.access_token : null;
-  const r = await fetch(SB_URL + "/functions/v1/" + name, { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: JSON.stringify(body || {}), signal: AbortSignal.timeout ? AbortSignal.timeout(25000) : undefined });
-  let j = null;
-  try { j = await r.json(); } catch (e) {}
-  return { ok: r.ok, status: r.status, body: j || {} };
+  // a lost connection or a timeout is an answer with status 0, never a thrown error
+  try {
+    const { data } = await sb.auth.getSession();
+    const tok = data && data.session ? data.session.access_token : null;
+    const r = await fetch(SB_URL + "/functions/v1/" + name, { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: JSON.stringify(body || {}), signal: AbortSignal.timeout ? AbortSignal.timeout(25000) : undefined });
+    let j = null;
+    try { j = await r.json(); } catch (e) {}
+    return { ok: r.ok, status: r.status, body: j || {} };
+  } catch (e) { return { ok: false, status: 0, body: { error: "network" } }; }
 }
 function refreshBadge() {
   if (!sbUser) return;
@@ -4094,8 +4166,10 @@ async function warmInbox() {
 }
 async function dmInbox() {
   await loadSocial(true);
-  const { data } = await sb.from("messages").select("id, sender_id, recipient_id, body, media, created_at, read_at")
+  const { data, error } = await sb.from("messages").select("id, sender_id, recipient_id, body, media, created_at, read_at")
     .or("sender_id.eq." + sbUser.id + ",recipient_id.eq." + sbUser.id).order("created_at", { ascending: false }).limit(500);
+  // a failed load keeps what is on the screen and in the cache
+  if (error) throw error;
   const convos = new Map();
   (data || []).forEach(m => {
     const other = m.sender_id === sbUser.id ? m.recipient_id : m.sender_id;
@@ -4265,9 +4339,12 @@ function confirmLogin(title, warn, label, fn) {
     try {
       const v = await verifyPassword(pw.input.value);
       if (!v.ok) { say(v.msg.replace("Current password", "Password")); return; }
+      go1.textContent = "Please wait";
+      // the screen stays until the work is done; a returned text is the reason it failed
+      const err = await fn();
+      if (typeof err === "string" && err) { say(err); return; }
       close();
-      await fn();
-    } catch (e) { say("Something went wrong. Try again"); } finally { go1.disabled = false; }
+    } catch (e) { say("Something went wrong. Try again"); } finally { go1.disabled = false; go1.textContent = label; }
   };
 }
 function pwField(ph) {
@@ -4713,7 +4790,7 @@ function deleteDm(m, row, otherId) {
   threadDrop(otherId, m.id);
   inboxDrop(otherId, m.id);
   sb.from("messages").delete().eq("id", m.id).select("id").then(({ data, error }) => {
-    if (error || !data || !data.length) { toast(error ? "Could not delete: " + error.message : "Could not delete that message"); render(); return; }
+    if (error || !data || !data.length) { toast(error ? "Could not delete that message. " + plainErr(error, "Try again") : "Could not delete that message"); render(); return; }
     if (paths.length) sb.storage.from(DM_BUCKET).remove(paths).then(() => {}, () => {});
   });
 }
@@ -5083,9 +5160,10 @@ function dmV(c) {
     } catch (e) {
       row.remove();
       if (!list.querySelector("[data-mid], .tmpm")) hint("No messages yet. Say hi.");
-      ta.value = text;
+      // what was typed in the meantime is never overwritten
+      ta.value = ta.value.trim() ? ta.value : text;
       pend.push(...srcs);
-      toast("Could not send: " + ((e && e.message) || "error"));
+      toast("Could not send. " + plainErr(e, "Try again"));
       refreshStatus();
     }
     busy = false;
@@ -5573,6 +5651,7 @@ function render(anim) {
   while (stack.length > 1 && ((cur.r === "thread" && !byId(cur.id)) || (cur.r === "conv" && !S.chats.some(x => x.id === cur.id)) || (cur.r === "list" && !S.lists.some(x => x.id === cur.id)))) {
     stack.pop(); scrolls.pop(); cur = stack[stack.length - 1];
   }
+  if (stack.length === 1 && ((cur.r === "thread" && !byId(cur.id)) || (cur.r === "conv" && !S.chats.some(x => x.id === cur.id)) || (cur.r === "list" && !S.lists.some(x => x.id === cur.id)))) { stack = [{ r: "home" }]; scrolls.length = 0; cur = stack[0]; }
   try { sessionStorage.setItem("nook-route", JSON.stringify({ stack, scrolls })); } catch (e) {}
   if (convRO) { convRO.disconnect(); convRO = null; }
   if (liveDm && liveDm.stop) liveDm.stop();
@@ -5827,5 +5906,8 @@ window.addEventListener("pagehide", flush);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flush(); });
 boot();
 setInterval(zenTick, 10000);
+setInterval(retryUnsent, 45000);
+window.addEventListener("online", () => setTimeout(retryUnsent, 800));
+window.addEventListener("load", () => setTimeout(retryUnsent, 6000));
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") zenTick(); });
 window.addEventListener("load", () => setTimeout(zenTick, 1500));

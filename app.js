@@ -139,7 +139,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.30";
+const APP_VERSION = "3.3.31";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1644,6 +1644,7 @@ function zenV() {
   else if (zt === "replies") main.append(postList(S.posts.filter(p => p.ai && p.parent).sort((a, b) => b.t - a.t), { replyTo: true, empty: emptyState("reply", "No replies yet.") }));
   else main.append(postList(S.posts.filter(p => !p.ai && p.zenLike).sort((a, b) => b.t - a.t), { replyTo: true, empty: emptyState("heart", "Zenith has not liked anything yet.") }));
 }
+const rowSubs = {};
 function settingsV() {
   topEl.append(bar(menuBtn(), ttl("Settings")));
   const sec = t => h("div", { class: "sec" }, t);
@@ -1654,7 +1655,7 @@ function settingsV() {
   const swRow = row(ic("userswap", 22), "Switch account", "Add or switch account", openAccounts);
   main.append(h("div", { class: "group" }, row(avatar(36), "Edit profile", "@" + S.profile.handle, editProfile), swRow, row(ic("usercut", 22), "Sign out", "Log out of this device.", async () => { await pushDetach().catch(() => {}); await leaveThisAccount(); })));
   main.append(sec("Login"));
-  const totpRow = row(ic("shield", 22), "Authenticator app", "Checking...", async () => {
+  const totpRow = row(ic("shield", 22), "Authenticator app", rowSubs.totp || "Checking...", async () => {
     if (totpOn === null) { toast("One moment..."); return; }
     if (totpOn) sheet([{ icon: "close", label: "Turn off authenticator", danger: true, fn: authenticatorOff }], "Authenticator is on");
     else { await authenticatorSetup(); render(); }
@@ -1663,9 +1664,10 @@ function settingsV() {
     totpOn = r.ok ? !!r.body.enabled : null;
     const sub = totpRow.querySelector(".sub");
     if (sub) sub.textContent = !r.ok ? "Could not check right now." : totpOn ? "On" : "Off";
+    if (r.ok) rowSubs.totp = totpOn ? "On" : "Off";
   }).catch(() => { const sub = totpRow.querySelector(".sub"); if (sub) sub.textContent = "Could not check right now."; });
-  let keyState = null, keyRows = [];
-  const keyRow = row(ic("backup", 22), "Message key backup", "Checking...", () => {
+  let keyState = rowSubs.keyState || null, keyRows = rowSubs.keyRows || [];
+  const keyRow = row(ic("backup", 22), "Message key backup", rowSubs.key || "Checking...", () => {
     if (keyState === null) { toast("One moment..."); return; }
     if (keyState === "locked") { unlockModal(); return; }
     const hasRec = keyRows.some(r => r.mode === "recovery"), hasLogin = keyRows.some(r => r.mode === "login");
@@ -1690,6 +1692,8 @@ function settingsV() {
       keyRows = (bk.data || []).filter(r => r.mode !== "off");
       keyState = !keyRows.length ? "off" : !loc || !keyRows.some(r => r.pub === loc.pub) ? "locked" : "on";
       const modes = keyRows.map(r => r.mode);
+      rowSubs.keyState = keyState; rowSubs.keyRows = keyRows;
+      rowSubs.key = keyState === "locked" ? "Locked. Tap to unlock." : keyState === "off" ? "Off" : modes.includes("login") ? "On" : "On with a recovery password";
       if (sub) sub.textContent = keyState === "locked" ? "Locked. Tap to unlock." : keyState === "off" ? "Off" : modes.includes("login") ? "On" : "On with a recovery password";
     } catch (e) { if (sub) sub.textContent = "Could not check right now."; }
   })();
@@ -1698,7 +1702,7 @@ function settingsV() {
     row(ic("mail", 22), "Change email", "We send a link to the new address.", () => changeEmailV()),
     totpRow, keyRow));
   main.append(sec("Notifications"));
-  const pushRowEl = row(ic("bell", 24), "Phone notifications", "Checking...", async () => {
+  const pushRowEl = row(ic("bell", 24), "Phone notifications", rowSubs.push || "Checking...", async () => {
     const cur = await pushSub();
     try {
       if (cur && Notification.permission === "granted") { await pushOff(); toast("Phone notifications are off"); }
@@ -1709,10 +1713,11 @@ function settingsV() {
   const paintPush = async () => {
     const sub = pushRowEl.querySelector(".sub");
     if (!sub) return;
-    if (!pushOk()) { sub.textContent = "Not available here. On iPhone, add Nook to your home screen first."; return; }
-    if (Notification.permission === "denied") { sub.textContent = "Blocked in your phone settings"; return; }
+    const put = t => { sub.textContent = t; rowSubs.push = t; };
+    if (!pushOk()) { put("Not available here. On iPhone, add Nook to your home screen first."); return; }
+    if (Notification.permission === "denied") { put("Blocked in your phone settings"); return; }
     const cur = await pushSub();
-    sub.textContent = cur && Notification.permission === "granted" ? "On for this device. Tap to turn off." : "Off. Tap to get follows, replies and messages when the app is closed.";
+    put(cur && Notification.permission === "granted" ? "On for this device. Tap to turn off." : "Off. Tap to get follows, replies and messages when the app is closed.");
   };
   paintPush();
   main.append(h("div", { class: "group" }, pushRowEl));
@@ -1726,8 +1731,6 @@ function settingsV() {
       await leaveThisAccount();
     }))));
   if (isOwner()) {
-  main.append(sec("Reports"));
-  main.append(h("div", { class: "group" }, row(ic("flag", 22), "Reported posts", "Look at reports and remove posts.", () => go({ r: "reports" }))));
   main.append(sec("Zenith"));
   main.append(h("div", { class: "group" }, row(ic("image", 22), "Reply to photo posts", S.zen.pics ? "On" : "Off", () => { S.zen.pics = !S.zen.pics; persist(); render(); })));
   }
@@ -2571,10 +2574,9 @@ function editProfile() {
   const m = modal({
     title: "Edit profile",
     body: [bn, eav, h("div", { class: "fld" }, h("label", {}, "Banner style"), seg),
-      h("div", { class: "fld" }, h("label", { for: "en" }, "Display name"), name, h("p", { class: "dim-note" }, "Leave it empty to show no name.")),
-      h("div", { class: "fld" }, h("label", { for: "eh" }, "Handle"), handle, h("p", { class: "dim-note" }, lockDays ? "You changed your handle recently. You can change it again in " + lockDays + (lockDays === 1 ? " day." : " days.") : "Must be unique. You can change it once every 7 days.")),
-      h("div", { class: "fld" }, h("label", { for: "eb" }, "Bio"), bio),
-      pr.avatar || pr.banner ? h("button", { class: "tbtn dng", onclick: () => { avatarData = null; bannerData = null; paint(); } }, "Remove photos") : null],
+      h("div", { class: "fld" }, h("label", { for: "en" }, "Display name"), name),
+      h("div", { class: "fld" }, h("label", { for: "eh" }, "Handle"), handle, lockDays ? h("p", { class: "dim-note" }, "You changed your handle recently. You can change it again in " + lockDays + (lockDays === 1 ? " day." : " days.")) : null),
+      h("div", { class: "fld" }, h("label", { for: "eb" }, "Bio"), bio)],
     onAction: async close => {
       const newHandle = handle.value.trim().toLowerCase();
       const handleChanged = newHandle !== pr.handle;
@@ -2627,7 +2629,7 @@ async function verifyPassword(pw) {
 }
 function changePassV() {
   const cur = h("input", { class: "in", type: "password", placeholder: "Current password", autocomplete: "current-password", "aria-label": "Current password" });
-  const nw = h("input", { class: "in", type: "password", placeholder: "New password (8+ characters)", autocomplete: "new-password", "aria-label": "New password" });
+  const nw = h("input", { class: "in", type: "password", placeholder: "New password", autocomplete: "new-password", "aria-label": "New password" });
   const again = h("input", { class: "in", type: "password", placeholder: "New password again", autocomplete: "new-password", "aria-label": "Repeat new password" });
   const msg = h("p", { class: "note", role: "alert" });
   let busy = false;
@@ -2767,7 +2769,7 @@ function ageV() {
     const r = await callFn("age", { action: "answer", age: years });
     go1.disabled = false;
     const s = r.body && r.body.state;
-    if (s === "passed" || s === "banned") { location.reload(); return; }
+    if (s === "passed" || s === "banned") { try { sessionStorage.removeItem("nook-route"); } catch (e) {} location.reload(); return; }
     msg.textContent = (r.body && r.body.error) || "Something went wrong. Try again.";
   }
   main.append(h("div", { class: "empty", style: "padding-top:14vh" },
@@ -2999,7 +3001,7 @@ function recoverCodeModal(prefill) {
   const ident = h("input", { class: "in", placeholder: "Email or username", autocomplete: "username", "aria-label": "Email or username", autocapitalize: "none" });
   ident.value = prefill || "";
   const code = codeInput();
-  const pw = h("input", { class: "in", type: "password", placeholder: "New password (8+ characters)", autocomplete: "new-password", "aria-label": "New password" });
+  const pw = h("input", { class: "in", type: "password", placeholder: "New password", autocomplete: "new-password", "aria-label": "New password" });
   const pw2 = h("input", { class: "in", type: "password", placeholder: "New password again", autocomplete: "new-password", "aria-label": "Repeat new password" });
   const msg = h("p", { class: "note", role: "alert" });
   const m = modal({
@@ -3025,7 +3027,7 @@ function recoverCodeModal(prefill) {
 }
 // opened from the link in the reset email: the person is signed in just for this
 function newPasswordModal() {
-  const pw = h("input", { class: "in", type: "password", placeholder: "New password (8+ characters)", autocomplete: "new-password", "aria-label": "New password" });
+  const pw = h("input", { class: "in", type: "password", placeholder: "New password", autocomplete: "new-password", "aria-label": "New password" });
   const pw2 = h("input", { class: "in", type: "password", placeholder: "New password again", autocomplete: "new-password", "aria-label": "Repeat new password" });
   const msg = h("p", { class: "note", role: "alert" });
   const leave = async () => { await sb.auth.signOut().catch(() => {}); location.reload(); };
@@ -3305,7 +3307,7 @@ function hinted(input, max, rule, min, holder) {
     if (rule && n && !rule.re.test(input.value)) { bad = true; text = rule.msg; }
     else if (n >= max) { bad = true; text = "Limit reached: " + max + " characters at most"; }
     else if (min && n && n < min) text = "At least " + min + " characters (" + n + "/" + min + ")";
-    else text = n ? n + "/" + max : (min ? min + " to " + max + " characters" : "Up to " + max + " characters");
+    else text = min ? (n ? n + "/" + max : min + " to " + max + " characters") : "";
     hint.textContent = text;
     hint.classList.toggle("warn", bad);
   };
@@ -5121,7 +5123,7 @@ async function boot() {
   // whether somebody is banned is only ever decided by the server: a banned account sees the banned page when it signs in
   if (!sbUser) { stack = [{ r: "auth" }]; scrolls.length = 0; }
   else if (ageHeld) { stack = [{ r: "age" }]; scrolls.length = 0; }
-  else if (stack.some(x => x.r === "auth" || x.r === "banned")) { stack = [{ r: "home" }]; scrolls.length = 0; }
+  else if (stack.some(x => x.r === "auth" || x.r === "banned" || x.r === "age")) { stack = [{ r: "home" }]; scrolls.length = 0; }
   if (sbUser && !ageHeld) { if (early) preloadAvatars(ownAvatar).catch(() => {}); else await preloadAvatars(ownAvatar); }
   hist(true);
   // the saved screen is already up: draw again only when the checks changed what it shows

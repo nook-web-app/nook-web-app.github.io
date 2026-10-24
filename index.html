@@ -426,7 +426,11 @@ button:focus-visible,[role=button]:focus-visible,a:focus-visible,input:focus-vis
 .legal p{font-size:var(--fs-base);line-height:1.55;margin:6px 0}
 .legal .upd{color:var(--muted);font-size:var(--fs-sm)}
 .agree{display:flex;gap:10px;align-items:flex-start;font-size:var(--fs-md);color:var(--muted);text-align:left}
-.agree input{margin-top:3px;flex:none;width:18px;height:18px}
+.agree input{-webkit-appearance:none;appearance:none;margin:2px 0 0;flex:none;width:20px;height:20px;border-radius:6px;border:1.5px solid var(--muted);background:var(--bg2);display:grid;place-items:center;cursor:pointer;transition:background-color .15s,border-color .15s}
+.agree input:checked{background:var(--fill,var(--accent));border-color:var(--fill,var(--accent))}
+.agree input:checked::after{content:"";width:10px;height:5px;border-left:2.2px solid #fff;border-bottom:2.2px solid #fff;transform:rotate(-45deg) translate(1px,-1px)}
+.agree input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.fldh .hint:empty{display:none}
 .agree a{color:var(--lnk,var(--accent));text-decoration:none;font-weight:600;cursor:pointer}
 .mask{-webkit-text-security:disc;text-security:disc;resize:none;overflow:hidden;white-space:nowrap;height:42px;display:block;font-family:inherit}
 .fold .kids{display:none;background:var(--bg2)}

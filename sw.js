@@ -1,4 +1,4 @@
-const VERSION = "nook-3.2.29";
+const VERSION = "nook-3.2.30";
 const SHARE_CACHE = "nook-share";
 const SHELL = ["./", "index.html", "app.js", "update.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => {
@@ -38,21 +38,55 @@ self.addEventListener("fetch", e => {
     return r;
   }).catch(() => caches.match(e.request)));
 });
+const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+// a chat message arrives sealed: the key of this phone opens it here, nothing is sent anywhere
+async function messageText(d) {
+  if (d.text) return d.text;
+  if (d.photo) return "sent a photo";
+  if (!d.enc || !d.key || !d.uid) return "";
+  try {
+    const db = await new Promise((res, rej) => {
+      const r = indexedDB.open("nook-keys", 1);
+      r.onupgradeneeded = () => r.transaction.abort();
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+    const rec = await new Promise((res, rej) => { const q = db.transaction("k").objectStore("k").get(d.uid); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+    if (!rec || !rec.priv) return "";
+    const peer = await crypto.subtle.importKey("raw", b64(d.key), { name: "ECDH", namedCurve: "P-256" }, false, []);
+    const aes = await crypto.subtle.deriveKey({ name: "ECDH", public: peer }, rec.priv, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+    const parts = d.enc.slice(5).split(".");
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64(parts[0]) }, aes, b64(parts[1])));
+  } catch (e) { return ""; }
+}
 self.addEventListener("push", e => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch (x) {}
   e.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     if (wins.some(w => w.visibilityState === "visible" && w.focused)) return;
-    const title = d.title || "Nook";
+    const tag = d.tag || "nook";
+    let title = d.title || "Nook", body = d.body || "";
+    let lines = [];
+    if (/^message:/.test(tag)) {
+      const text = await messageText(d);
+      if (text) {
+        // messages of the same person pile up in one notification, newest at the bottom
+        const prev = (await self.registration.getNotifications({ tag })).filter(n => n.data && Array.isArray(n.data.lines) && Date.now() - (n.data.t || 0) < 600000);
+        lines = (prev[0] ? prev[0].data.lines : []).concat(text.length > 160 ? text.slice(0, 157) + "..." : text).slice(-6);
+        body = lines.join("\n");
+        if (lines.length > 1) title += " (" + lines.length + " messages)";
+      }
+    }
     const opts = {
-      body: d.body || "",
-      icon: "icon-192.png",
+      body,
+      // a clear picture keeps the phone from drawing its own square next to the text
+      icon: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
       badge: "icon-192.png",
-      tag: d.tag || "nook",
+      tag,
       renotify: true,
       vibrate: [120, 60, 120],
-      data: { open: d.open || "notifs" }
+      data: { open: d.open || "notifs", lines, t: Date.now() }
     };
     // a notification must always come out: if the phone refuses one of the extras, show it again with only the basics
     try { await self.registration.showNotification(title, opts); }

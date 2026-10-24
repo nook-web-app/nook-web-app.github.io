@@ -56,11 +56,26 @@ Deno.serve(async (req) => {
   if (!subs || !subs.length) return json({ sent: 0 });
 
   const name = (actor && (actor.display_name || actor.username)) || "Someone";
+  const msg: Record<string, unknown> = {};
+  if (n.kind === "message") {
+    // the words of a chat message stay end to end encrypted: only the sealed text goes along, and the phone opens it with its own key
+    const { data: m } = await admin.from("messages").select("body, media").eq("sender_id", n.actor_id).eq("recipient_id", n.user_id).order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (m) {
+      const text = typeof m.body === "string" ? m.body : "";
+      const hasPhoto = Array.isArray(m.media) && m.media.length > 0;
+      if (!text) { if (hasPhoto) msg.photo = true; }
+      else if (text.startsWith("e2e1:")) {
+        const { data: a } = await admin.from("accounts").select("public_key").eq("id", n.actor_id).maybeSingle();
+        if (text.length <= 2400 && a && a.public_key) { msg.enc = text; msg.key = a.public_key; msg.uid = n.user_id; }
+      } else if (text.length <= 300) msg.text = text;
+    }
+  }
   const payload = JSON.stringify({
     title: name,
     body: WHAT[n.kind] || "sent you something",
     open: n.kind === "message" ? "dm:" + n.actor_id : "notifs",
     tag: n.kind + ":" + n.actor_id,
+    ...msg,
   });
 
   let sent = 0;

@@ -133,7 +133,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.2.29";
+const APP_VERSION = "3.2.30";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -714,7 +714,11 @@ async function sendLinkTo(t, link) {
     toast("Saved in " + t.name);
     return;
   }
-  try { await sendDm(t.id, link, [], []); toast("Sent to " + t.name); }
+  try {
+    if (!(S.previews[link] && S.previews[link].v)) await Promise.race([getPreview(link), new Promise(r => setTimeout(r, 4500))]);
+    await sendDm(t.id, link, [], []);
+    toast("Sent to " + t.name);
+  }
   catch (e) { toast("Could not send"); }
 }
 function chooseTarget(targets, send) {
@@ -3541,8 +3545,13 @@ function loadEncMedia(md, otherId) {
   }
   return e2eEnc.get(md.url);
 }
-function openRows(rows, otherId) {
-  return Promise.all(rows.map(async m => Object.assign({}, m, { text: await openText(otherId, m.body) })));
+async function openRows(rows, otherId) {
+  const out = await Promise.all(rows.map(async m => Object.assign({}, m, { text: await openText(otherId, m.body) })));
+  // photos are opened before their bubbles show, so no grey box sits on the screen while they load
+  const jobs = [];
+  rows.forEach(m => (m.media || []).forEach(md => { if (md.iv && !/^video\//.test(md.type || "")) jobs.push(loadEncMedia(md, otherId).catch(() => {})); }));
+  if (jobs.length) await Promise.race([Promise.all(jobs), new Promise(r => setTimeout(r, 6000))]);
+  return out;
 }
 async function sendDm(otherId, text, srcs, dims) {
   const media = [];
@@ -3815,6 +3824,7 @@ async function openDm(id) {
     try {
       const [rows] = await Promise.all([Promise.race([dmThread(id), new Promise((_, rej) => setTimeout(rej, 2500))]), acctsFor([id])]);
       cacheWrite(k, rows.slice(-100));
+      await Promise.race([openRows(rows.slice(-12), id), new Promise(r => setTimeout(r, 3000))]);
     } catch (e) {}
   }
   go({ r: "dm", id });
@@ -3938,6 +3948,9 @@ function dmV(c) {
     row.classList.add("new", "tmpm");
     pushRow(row);
     try {
+      // a link is sent after its preview is ready, so the other person gets the card at once
+      const lk = firstUrl(text);
+      if (lk && !(S.previews[lk] && S.previews[lk].v)) await Promise.race([getPreview(lk), new Promise(r => setTimeout(r, 4500))]);
       const saved = await sendDm(c.id, text, srcs, dims);
       threadPush(c.id, saved);
       // keep the bubble that is already on screen: no re-render, no flash

@@ -1,6 +1,9 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { pepper } from "./pepper.ts";
 
-const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
+const URL_ = Deno.env.get("SUPABASE_URL")!;
+const admin = createClient(URL_, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
+const mk = () => createClient(URL_, Deno.env.get("SUPABASE_ANON_KEY")!, { auth: { persistSession: false, autoRefreshToken: false } });
 const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info",
@@ -12,29 +15,90 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 }
 const iso = (t: unknown) => new Date(String(t)).toISOString();
+const okEmail = (e: string) => e.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 
-// the only place that checks a password for the app: every try is counted per email, 5 tries are free, then the waits grow 45 minutes, 90 minutes, 3 hours ... up to 48 hours
+// the only place that checks a password for the app. Every try is counted per email: 5 are free, then the waits grow 45 minutes, 90 minutes, 3 hours ... up to 48 hours.
+// Passwords are stored mixed with a server secret (see pepper.ts), so the login service cannot be used to guess them directly.
+// Actions: login (default), check (a signed in person proves the current password), signup, setpw (change or reset the password).
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
   if (req.method !== "POST") return json({ error: "method" }, 405);
-  let body: { email?: unknown; password?: unknown; check?: unknown };
+  let body: { action?: unknown; email?: unknown; password?: unknown; current?: unknown; check?: unknown };
   try { body = await req.json(); } catch { return json({ error: "bad_request" }, 400); }
-
-  let email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+  const action = typeof body.action === "string" ? body.action : body.check === true ? "check" : "login";
   const password = typeof body.password === "string" ? body.password : "";
-  // check mode: a signed in person proves their current password, always for their own email
-  const check = body.check === true;
-  if (check) {
-    const jwt = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
-    const { data, error } = jwt ? await admin.auth.getUser(jwt) : { data: { user: null }, error: true };
-    if (error || !data || !data.user || !data.user.email) return json({ error: "not_signed_in" }, 401);
-    email = data.user.email.trim().toLowerCase();
-  }
-  if (!email) return json({ error: "no_email" }, 400);
-  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json({ error: "bad_email" }, 400);
-  if (!password) return json({ error: "no_password" }, 400);
-  if (password.length > 200) return json({ error: "wrong_password", left: 0 }, 401);
 
+  try {
+    if (action === "signup") return await signup(typeof body.email === "string" ? body.email.trim().toLowerCase() : "", password);
+
+    // everything else needs an email: the one in the request (login) or the one of the signed in person
+    let email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    let user: { id: string; email?: string } | null = null;
+    let jwt = "";
+    if (action !== "login") {
+      jwt = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+      const { data, error } = jwt ? await admin.auth.getUser(jwt) : { data: { user: null }, error: true };
+      if (error || !data || !data.user || !data.user.email) return json({ error: "not_signed_in" }, 401);
+      user = data.user;
+      email = data.user.email!.trim().toLowerCase();
+    }
+
+    if (action === "setpw") {
+      const next = password;
+      if (next.length < 8 || next.length > 72) return json({ error: "setpw_failed", message: "Password needs 8 to 72 characters." , code: "weak_password" }, 400);
+      // somebody who just opened the link of a reset email may set a new password without the old one; everybody else must prove the old one
+      if (!recovering(jwt)) {
+        const current = typeof body.current === "string" ? body.current : "";
+        if (!current) return json({ error: "no_password" }, 400);
+        if (current === next) return json({ error: "setpw_failed", code: "same_password", message: "New password should be different from the old password." }, 400);
+        const bad = await proveOld(email, current);
+        if (bad instanceof Response) return bad;
+      }
+      const mixedNew = await pepper(admin, next);
+      const upd = await admin.auth.admin.updateUserById(user!.id, { password: mixedNew });
+      if (upd.error) return json({ error: "setpw_failed", code: (upd.error as { code?: string }).code || "", message: upd.error.message }, 400);
+      // changing the password ends the old sessions, so the person gets a fresh one
+      const fresh = await mk().auth.signInWithPassword({ email, password: mixedNew });
+      return json({ ok: true, session: fresh.data && fresh.data.session ? { access_token: fresh.data.session.access_token, refresh_token: fresh.data.session.refresh_token } : null });
+    }
+
+    if (!email) return json({ error: "no_email" }, 400);
+    if (!okEmail(email)) return json({ error: "bad_email" }, 400);
+    if (!password) return json({ error: "no_password" }, 400);
+    const res = await proveOld(email, password);
+    if (res instanceof Response) return res;
+    // an account that was just upgraded lost its sessions, so the person gets the fresh one
+    if (action === "check") return json(res.upgraded ? { ok: true, session: { access_token: res.access_token, refresh_token: res.refresh_token } } : { ok: true });
+    return json({ session: { access_token: res.access_token, refresh_token: res.refresh_token } });
+  } catch (_e) {
+    return json({ error: "server" }, 500);
+  }
+});
+
+const wrong = (e: { code?: string; status?: number }) => String(e.code || "") === "invalid_credentials" || (!e.code && e.status === 400);
+
+// true for a session that came from the link in a reset email, which GoTrue marks in the token (as "otp"; the app has no other sign in by link)
+function recovering(jwt: string): boolean {
+  try {
+    const part = jwt.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const claims = JSON.parse(atob(part + "=".repeat((4 - (part.length % 4)) % 4)));
+    const now = Date.now() / 1000;
+    return Array.isArray(claims.amr) && claims.amr.some((a: { method?: string; timestamp?: number }) => a && (a.method === "recovery" || a.method === "otp") && now - Number(a.timestamp || 0) < 3600);
+  } catch { return false; }
+}
+
+async function signup(email: string, password: string): Promise<Response> {
+  if (!email) return json({ error: "no_email" }, 400);
+  if (!okEmail(email)) return json({ error: "bad_email" }, 400);
+  if (password.length < 8 || password.length > 72) return json({ error: "signup_failed", code: "weak_password", message: "Password needs 8 to 72 characters." }, 400);
+  const { data, error } = await mk().auth.signUp({ email, password: await pepper(admin, password) });
+  if (error) return json({ error: "signup_failed", code: (error as { code?: string }).code || "", message: error.message, status: (error as { status?: number }).status || 400 }, 400);
+  return json({ user: { id: data.user ? data.user.id : null }, session: data.session ? { access_token: data.session.access_token, refresh_token: data.session.refresh_token } : null });
+}
+
+// counts the try, checks the password, answers with a Response when something is wrong and with the session when it is right
+async function proveOld(email: string, password: string): Promise<Response | { access_token: string; refresh_token: string; upgraded: boolean }> {
+  if (password.length > 200) return json({ error: "wrong_password", left: 0 }, 401);
   const key = "e:" + email;
   const gate = await admin.rpc("nook_login_gate", { p_key: key, p_max: MAX_TRIES });
   if (gate.error) return json({ error: "server" }, 500);
@@ -51,17 +115,27 @@ Deno.serve(async (req) => {
   if (found.error) return json({ error: "server" }, 500);
   if (!found.data) return await miss("no_account", 404);
 
-  const anon = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, { auth: { persistSession: false, autoRefreshToken: false } });
-  const { data, error } = await anon.auth.signInWithPassword({ email, password });
-  if (error) {
-    const code = String((error as { code?: string }).code || "");
+  const mixed = await pepper(admin, password);
+  let upgraded = false;
+  let r = await mk().auth.signInWithPassword({ email, password: mixed });
+  if (r.error && wrong(r.error)) {
+    // an account that was not upgraded yet still has its plain password stored: if that one fits, upgrade it now
+    r = await mk().auth.signInWithPassword({ email, password });
+    if (!r.error && r.data.user) {
+      const up = await admin.auth.admin.updateUserById(r.data.user.id, { password: mixed });
+      // the upgrade ends every session that exists, so a fresh one is made
+      if (!up.error) { r = await mk().auth.signInWithPassword({ email, password: mixed }); upgraded = true; }
+    }
+  }
+  if (r.error) {
+    const code = String((r.error as { code?: string }).code || "");
     // a banned or unconfirmed account got its password right, so that is not a wrong try
-    if (code === "user_banned" || /banned/i.test(error.message || "")) { await admin.rpc("nook_login_ok", { p_key: key }); return json({ error: "banned" }, 403); }
+    if (code === "user_banned" || /banned/i.test(r.error.message || "")) { await admin.rpc("nook_login_ok", { p_key: key }); return json({ error: "banned" }, 403); }
     if (code === "email_not_confirmed") { await admin.rpc("nook_login_ok", { p_key: key }); return json({ error: "not_confirmed" }, 403); }
-    if (code === "invalid_credentials" || (error as { status?: number }).status === 400) return await miss("wrong_password", 401);
+    if (wrong(r.error)) return await miss("wrong_password", 401);
+    if (code === "over_request_rate_limit" || (r.error as { status?: number }).status === 429) return json({ error: "busy" }, 429);
     return json({ error: "server" }, 500);
   }
   await admin.rpc("nook_login_ok", { p_key: key });
-  if (check) return json({ ok: true });
-  return json({ session: { access_token: data.session!.access_token, refresh_token: data.session!.refresh_token } });
-});
+  return { access_token: r.data.session!.access_token, refresh_token: r.data.session!.refresh_token, upgraded };
+}

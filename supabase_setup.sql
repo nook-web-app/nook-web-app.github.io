@@ -1147,3 +1147,28 @@ begin
 end $$;
 revoke all on function public.nook_ban_check(text, text) from public, anon, authenticated;
 grant execute on function public.nook_ban_check(text, text) to service_role;
+
+-- v3.2.29 passwords are stored mixed with a server only secret (functions/signin, functions/totp, functions/ban-export),
+-- so the login service of Supabase cannot be used directly to guess them. An old plain password is upgraded at its next login.
+create table if not exists public.nook_pepper_store (id int primary key default 1 check (id = 1), value text not null);
+alter table public.nook_pepper_store enable row level security;
+revoke all on public.nook_pepper_store from anon, authenticated;
+grant all on public.nook_pepper_store to service_role;
+insert into public.nook_pepper_store (id, value) values (1, replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '')) on conflict (id) do nothing;
+create or replace function public.nook_pepper() returns text language sql security definer set search_path = public as $$ select value from public.nook_pepper_store where id = 1 $$;
+revoke all on function public.nook_pepper() from public, anon, authenticated;
+grant execute on function public.nook_pepper() to service_role;
+create or replace function public.nook_ban_check(p_email text, p_password text, p_alt text) returns table(uid uuid, locked_until timestamptz) language plpgsql security definer set search_path = public, extensions as $$
+declare v_key text := 'b:' || lower(btrim(coalesce(p_email, ''))); v_id uuid; v_hash text; v_until timestamptz; v_good boolean;
+begin
+  if length(v_key) <= 2 or p_password is null or p_password = '' or length(p_password) > 200 then return query select null::uuid, null::timestamptz; return; end if;
+  v_until := public.nook_login_gate(v_key);
+  if v_until is not null then return query select null::uuid, v_until; return; end if;
+  select u.id, u.encrypted_password into v_id, v_hash from auth.users u join public.ban_archive a on a.user_id = u.id where lower(u.email) = substr(v_key, 3) and a.expires_at > now() limit 1;
+  if v_hash is null then v_hash := crypt('nook-dummy', gen_salt('bf', 10)); v_id := null; end if;
+  v_good := v_id is not null and (crypt(p_password, v_hash) = v_hash or (p_alt is not null and length(p_alt) <= 200 and crypt(p_alt, v_hash) = v_hash));
+  if v_good then perform public.nook_login_ok(v_key); return query select v_id, null::timestamptz; return; end if;
+  return query select null::uuid, f.locked_until from public.nook_login_fail(v_key) f;
+end $$;
+revoke all on function public.nook_ban_check(text, text, text) from public, anon, authenticated;
+grant execute on function public.nook_ban_check(text, text, text) to service_role;

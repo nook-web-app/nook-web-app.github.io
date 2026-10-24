@@ -133,7 +133,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.2.28";
+const APP_VERSION = "3.2.29";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2581,7 +2581,7 @@ function editProfile() {
 async function verifyPassword(pw) {
   const r = await callFn("signin", { check: true, password: pw }).catch(() => null);
   if (!r) return { ok: false, msg: "Could not reach Nook. Check your connection" };
-  if (r.ok) return { ok: true };
+  if (r.ok) { await takeSession(r); return { ok: true }; }
   const e = r.body && r.body.error;
   if (e === "wrong_password") return { ok: false, msg: "Current password is wrong" + (r.body.left > 0 ? ". " + r.body.left + (r.body.left === 1 ? " try" : " tries") + " left before a wait" : "") };
   return { ok: false, msg: signinMsg(r) };
@@ -2604,11 +2604,11 @@ function changePassV() {
       if (nw.value === cur.value) { msg.textContent = "Pick a different password"; return; }
       busy = true;
       try {
-        const vp = await verifyPassword(cur.value);
-        if (!vp.ok) { msg.textContent = vp.msg; return; }
         if (await pwnedPassword(nw.value)) { msg.textContent = PWNED_MSG; return; }
-        const { error } = await sb.auth.updateUser({ password: nw.value });
-        if (error) { msg.textContent = authMsg(error); return; }
+        const pr = await callFn("signin", { action: "setpw", current: cur.value, password: nw.value }).catch(() => null);
+        if (!pr) { msg.textContent = "Could not reach Nook. Check your connection"; return; }
+        if (!pr.ok) { msg.textContent = setpwMsg(pr); return; }
+        await takeSession(pr);
         close();
         toast("Password changed");
       } finally { busy = false; }
@@ -3001,8 +3001,10 @@ function newPasswordModal() {
       m.act.disabled = true;
       try {
         if (await pwnedPassword(pw.value)) { msg.textContent = PWNED_MSG; return; }
-        const { error } = await sb.auth.updateUser({ password: pw.value });
-        if (error) { msg.textContent = authMsg(error); return; }
+        const pr = await callFn("signin", { action: "setpw", password: pw.value }).catch(() => null);
+        if (!pr) { msg.textContent = "Could not reach Nook. Check your connection"; return; }
+        if (!pr.ok) { msg.textContent = pr.body && pr.body.error === "no_password" ? "This link has run out. Ask for a new one" : setpwMsg(pr); return; }
+        await takeSession(pr);
         close();
         toast("Password changed");
       } finally { m.act.disabled = false; }
@@ -3147,9 +3149,12 @@ function authV() {
         if (!/^[A-Za-z0-9._]{1,15}$/.test(u)) { msg.textContent = "Username: letters, numbers, dots or underscores, max 15"; return; }
         if (p.length < 8) { msg.textContent = "Password needs at least 8 characters"; return; }
         if (await pwnedPassword(p)) { msg.textContent = PWNED_MSG; return; }
-        const { data, error } = await sb.auth.signUp({ email: e, password: p });
-        if (error) { msg.textContent = authMsg(error); return; }
-        if (!data.session) { msg.textContent = "Check your email to confirm, then sign in"; return; }
+        const sr = await callFn("signin", { action: "signup", email: e, password: p }).catch(() => null);
+        if (!sr) { msg.textContent = "Could not reach Nook. Check your connection"; return; }
+        if (!sr.ok) { msg.textContent = sr.body.error === "signup_failed" ? authMsg({ code: sr.body.code, message: sr.body.message, status: sr.body.status }) : signinMsg(sr); return; }
+        if (!sr.body.session) { msg.textContent = "Check your email to confirm, then sign in"; return; }
+        const { data, error } = await sb.auth.setSession({ access_token: sr.body.session.access_token, refresh_token: sr.body.session.refresh_token });
+        if (error || !data.user) { msg.textContent = "Could not sign in. Try again"; return; }
         const { error: ie } = await sb.from("accounts").insert({ id: data.user.id, username: u, display_name: dn });
         if (ie) {
           await sb.auth.signOut();
@@ -3346,6 +3351,20 @@ function authMsg(error) {
   if (/network|fetch/i.test(m)) return "Could not reach Nook. Check your connection";
   return m || "Something went wrong. Try again";
 }
+// the answer of the signin function when a password was being changed
+function setpwMsg(r) {
+  const e = r.body && r.body.error;
+  if (e === "wrong_password") return "Current password is wrong" + (r.body.left > 0 ? ". " + r.body.left + (r.body.left === 1 ? " try" : " tries") + " left before a wait" : "");
+  if (e === "setpw_failed") return authMsg({ code: r.body.code, message: r.body.message });
+  if (e === "no_password") return "Enter your current password";
+  if (e === "not_signed_in") return "You are signed out. Sign in again";
+  return signinMsg(r);
+}
+// the signin function hands back a fresh session after the password changed, because the old one stops working
+async function takeSession(r) {
+  const ss = r.body && r.body.session;
+  if (ss) await sb.auth.setSession({ access_token: ss.access_token, refresh_token: ss.refresh_token });
+}
 // the answer of the signin function turned into words; gives "" for no problem
 function signinMsg(r) {
   const e = r.body && r.body.error;
@@ -3354,6 +3373,7 @@ function signinMsg(r) {
   if (e === "no_account") return "No account uses this email. Check the spelling or make an account";
   if (e === "wrong_password") return "Wrong password for this email." + (r.body.left > 0 ? " " + r.body.left + (r.body.left === 1 ? " try" : " tries") + " left before a wait." : "") + " You can tap Forgot password";
   if (e === "bad_email") return "That email does not look right. Check for typos";
+  if (e === "busy") return "Lots of people are signing in right now. Try again in a minute";
   if (e === "not_confirmed") return "This email is not confirmed yet. Open the link we sent you";
   if (e === "no_email") return "Enter your email";
   if (e === "no_password") return "Enter your password";

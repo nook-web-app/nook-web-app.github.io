@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { pepper } from "./pepper.ts";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 const cors = {
@@ -33,7 +34,8 @@ Deno.serve(async (req) => {
   try { body = await req.json(); } catch { return json({ error: "Bad request" }, 400); }
   if (typeof body.email !== "string" || typeof body.password !== "string") return json({ error: "Enter your email and password" }, 400);
 
-  const { data: chk, error: le } = await admin.rpc("nook_ban_check", { p_email: body.email, p_password: body.password });
+  const mixed = await pepper(admin, body.password);
+  const { data: chk, error: le } = await admin.rpc("nook_ban_check", { p_email: body.email, p_password: mixed, p_alt: body.password });
   if (le) return json({ error: "Something went wrong. Try again later." }, 500);
   const res = Array.isArray(chk) ? chk[0] : chk;
   if (res && res.locked_until) return json({ error: "locked", until: new Date(res.locked_until).toISOString() }, 429);

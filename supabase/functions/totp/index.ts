@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { pepper } from "./pepper.ts";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 const cors = {
@@ -125,7 +126,7 @@ Deno.serve(async (req) => {
     }
     const hit = await check(row.secret, code, row.last_counter);
     if (hit == null || !(await claim(row, hit))) return json({ error: GENERIC }, 400);
-    const upd = await admin.auth.admin.updateUserById(row.user_id, { password });
+    const upd = await admin.auth.admin.updateUserById(row.user_id, { password: await pepper(admin, password) });
     if (upd.error) return json({ error: "Could not set the new password." }, 400);
     return json({ ok: true });
   }

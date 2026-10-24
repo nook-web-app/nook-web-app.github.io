@@ -133,7 +133,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.2.27";
+const APP_VERSION = "3.2.28";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1165,7 +1165,7 @@ function renameChat(chat) {
 function savedV() {
   topEl.append(bar(menuBtn(), ttl("Saved")));
   const a = S.posts.filter(p => p.saved).sort((x, y) => y.t - x.t);
-  main.append(postList(a, { replyTo: true, empty: emptyState("bookmark", "Nothing saved yet. Tap the bookmark on a post to keep it here.") }));
+  main.append(postList(a, { replyTo: true, empty: emptyState("bookmark", "Nothing saved yet.") }));
 }
 
 function tagV(c) {
@@ -1175,7 +1175,7 @@ function tagV(c) {
 
 function listsV() {
   topEl.append(bar(menuBtn(), ttl("Lists")));
-  if (!S.lists.length) main.append(emptyState("list", "Lists group posts you want to find again. Make your first one.", h("button", { class: "pri", onclick: () => listForm(null) }, "New list")));
+  if (!S.lists.length) main.append(emptyState("list", "Make your first list.", h("button", { class: "pri", onclick: () => listForm(null) }, "New list")));
   S.lists.forEach(l => {
     const n = l.ids.filter(byId).length;
     main.append(h("div", { class: "lrow", onclick: () => go({ r: "list", id: l.id }) }, h("div", { class: "sq" }, ic("list", 22)), h("div", { class: "nm" }, h("b", {}, l.name), h("span", { class: "sub" }, n + (n === 1 ? " post" : " posts") + (l.desc ? " · " + l.desc : "")))));
@@ -1669,7 +1669,7 @@ function settingsV() {
     const sub = pushRowEl.querySelector(".sub");
     if (!sub) return;
     if (!pushOk()) { sub.textContent = "Not available here. On iPhone, add Nook to your home screen first."; return; }
-    if (Notification.permission === "denied") { sub.textContent = "Blocked. Allow notifications for Nook in your phone settings."; return; }
+    if (Notification.permission === "denied") { sub.textContent = "Blocked in your phone settings"; return; }
     const cur = await pushSub();
     sub.textContent = cur && Notification.permission === "granted" ? "On for this device. Tap to turn off." : "Off. Tap to get follows, replies and messages when the app is closed.";
   };
@@ -1678,7 +1678,7 @@ function settingsV() {
   main.append(sec("Your account"));
   main.append(h("div", { class: "group" },
     row(ic("close", 22), "Blocked accounts", "People you blocked.", () => go({ r: "blocked" })),
-    row(ic("sliders", 22), "Deactivate account", "Hides your profile and posts until you sign in again.", () => confirmSheet("Hide your account until you sign in again?", "Deactivate", async () => {
+    row(ic("sliders", 22), "Deactivate account", "Hidden until you sign in again", () => confirmSheet("Hide your account until you sign in again?", "Deactivate", async () => {
       const { error } = await sb.rpc("set_my_deactivated", { flag: true });
       if (error) { toast("Could not deactivate"); return; }
       await pushDetach().catch(() => {});
@@ -1693,7 +1693,7 @@ function settingsV() {
   }
   main.append(sec("Your data"));
   main.append(h("div", { class: "group" },
-    row(ic("copy", 22), "Download backup", "A zip with posts, messages, media and settings.", () => downloadBackup())));
+    row(ic("copy", 22), "Download backup", "Posts, messages and media in a zip", () => downloadBackup())));
   main.append(sec("Updates"));
   main.append(h("div", { class: "group" }, row(ic("check", 22), "Check for updates", "You are on version " + APP_VERSION, () => (window.nookCheckUpdate ? window.nookCheckUpdate() : toast("Not available right now")))));
   main.append(sec("Legal"));
@@ -2085,7 +2085,7 @@ function rAv(ra, size) {
   let hsh = 7;
   for (const c of seed) hsh = (hsh * 31 + c.charCodeAt(0)) >>> 0;
   const a = h("div", { class: "av", style: "background:hsl(" + (hsh % 360) + " 45% 42%)" }, seed.trim().charAt(0).toUpperCase() || "?");
-  if (ra && ra.avatar) a.prepend(picImg(ra.avatar));
+  if (ra && ra.avatar) { const im = picImg(ra.avatar); im.loading = "eager"; a.prepend(im); }
   if (size) { a.style.width = size + "px"; a.style.height = size + "px"; a.style.fontSize = Math.round(size * 0.4) + "px"; }
   return a;
 }
@@ -2120,7 +2120,7 @@ function userV(cur) {
   const bio = h("p", { class: "pbio" }, "");
   const stat = h("div", { class: "pstat" });
   const followBtn = h("button", { class: "fbtn", disabled: true }, "Follow");
-  const msgBtn = h("button", { class: "ghost", style: "display:none", onclick: () => go({ r: "dm", id: cur.id }) }, "Message");
+  const msgBtn = h("button", { class: "ghost", style: "display:none", onclick: () => openDm(cur.id) }, "Message");
   const blockBtn = h("button", { class: "ghost", disabled: true }, "Block");
   const pnEl = h("h1", { class: "pname" }, who.name), phEl = h("p", { class: "phand" }, "@" + who.handle);
   const info = h("div", { class: "pinfo" },
@@ -3056,7 +3056,7 @@ async function pushDetach() {
 function handleOpen(v) {
   if (!sbUser || !v) return;
   if (v === "notifs") go({ r: "notifs" });
-  else if (v.startsWith("dm:") && /^[0-9a-f-]{36}$/i.test(v.slice(3))) go({ r: "dm", id: v.slice(3) });
+  else if (v.startsWith("dm:") && /^[0-9a-f-]{36}$/i.test(v.slice(3))) openDm(v.slice(3));
 }
 function takeOpen() {
   const p = new URLSearchParams(location.search);
@@ -3128,7 +3128,7 @@ function authV() {
   const user = h("input", { class: "in", type: "text", placeholder: "Username", autocomplete: "username", maxlength: "15", "aria-label": "Username" });
   const btn = h("button", { class: "pri" }, up ? "Create account" : "Sign in");
   const agree = up ? h("input", { type: "checkbox", id: "agree", "aria-label": "I agree to the Terms of Use and Privacy Policy" }) : null;
-  const agreeRow = up ? h("label", { class: "agree" }, agree, h("span", {}, "I am 18 or older and I agree to the ", legalLink("terms", "Terms of Use"), " and ", legalLink("privacy", "Privacy Policy"))) : null;
+  const agreeRow = up ? h("label", { class: "agree" }, agree, h("span", {}, "I am 18+ and agree to the ", legalLink("terms", "Terms"), " and ", legalLink("privacy", "Privacy"))) : null;
   const forgot = up ? null : h("button", { class: "tbtn", onclick: () => recoverModal(email.value.trim()) }, "Forgot password?");
   const flip = SIGNUP_OPEN ? h("button", { class: "ghost", onclick: () => { authMode = up ? "in" : "up"; render(); } }, up ? "I already have an account" : "Make an account") : null;
   btn.addEventListener("click", async () => {
@@ -3205,6 +3205,25 @@ function cacheWrite(k, v) {
       localStorage.setItem(CACHE_PFX + k, val);
     } catch (e2) {}
   }
+}
+// the pictures people see first are loaded before the app opens, so they never pop in later (waits 3 seconds at most)
+async function preloadAvatars(own) {
+  const urls = new Set();
+  const add = u => { if (typeof u === "string" && u) urls.add(u); };
+  try {
+    add(own);
+    add(S && S.profile && S.profile.avatar);
+    Object.keys(localStorage).filter(k => k.startsWith(CACHE_PFX + "acct:")).forEach(k => { try { const r = JSON.parse(localStorage.getItem(k)); add(r && r.v && r.v.avatar); } catch (e) {} });
+    const inbox = cacheRead("inbox:" + sbUser.id);
+    ((inbox && inbox.v) || []).forEach(cv => add(cv.avatar));
+  } catch (e) {}
+  const load = u => new Promise(res => {
+    const i = new Image();
+    i.onload = i.onerror = () => res();
+    i.src = view(u);
+    if (i.decode) i.decode().then(res, res);
+  });
+  await Promise.race([Promise.all([...urls].slice(0, 40).map(load)), new Promise(r => setTimeout(r, 3000))]);
 }
 function cacheFresh(k, ttl) {
   const r = cacheRead(k);
@@ -3591,7 +3610,7 @@ function storagePath(url, bucket) {
 }
 function deleteDm(m, row, otherId) {
   const paths = (m.media || []).map(md => storagePath(md.url, DM_BUCKET)).filter(Boolean);
-  row.remove();
+  foldAway(row);
   threadDrop(otherId, m.id);
   inboxDrop(otherId, m.id);
   sb.from("messages").delete().eq("id", m.id).select("id").then(({ data, error }) => {
@@ -3610,7 +3629,7 @@ async function deleteDmMedia(row, i) {
   if (data && data.deleted) {
     threadDrop(row._other, m.id);
     inboxDrop(row._other, m.id);
-    row.remove();
+    foldAway(row);
   } else if (data && Array.isArray(data.media)) {
     const next = Object.assign({}, m, { media: data.media });
     row._sig = dmSig(next);
@@ -3767,6 +3786,18 @@ async function deleteChat(cv, inChat) {
   refreshBadge();
   if (inChat) back(); else render();
   toast("Chat deleted");
+}
+// the messages and the name of the other person are fetched first, so the chat opens already filled
+async function openDm(id) {
+  const k = "thread:" + sbUser.id + ":" + id;
+  const hit = cacheRead(k);
+  if (!(hit && Array.isArray(hit.v) && Date.now() - hit.t < 30000)) {
+    try {
+      const [rows] = await Promise.all([Promise.race([dmThread(id), new Promise((_, rej) => setTimeout(rej, 2500))]), acctsFor([id])]);
+      cacheWrite(k, rows.slice(-100));
+    } catch (e) {}
+  }
+  go({ r: "dm", id });
 }
 function dmV(c) {
   let busy = false, locked = "", tEl = null, tRaf = 0;
@@ -3940,9 +3971,9 @@ function dmV(c) {
     add: async m => { threadPush(c.id, m); await syncRows([m], {}); },
     drop: id => {
       const el = list.querySelector('[data-mid="' + String(id) + '"]');
-      if (el) el.remove();
+      const after = () => { if (!list.querySelector("[data-mid], .tmpm")) hint("No messages yet. Say hi."); };
       threadDrop(c.id, id);
-      if (!list.querySelector("[data-mid], .tmpm")) hint("No messages yet. Say hi.");
+      if (el) foldAway(el, after); else after();
     },
     typing,
     stop: () => { clearInterval(poll); document.removeEventListener("visibilitychange", onVis); cancelAnimationFrame(tRaf); sendTyping(c.id, false); }
@@ -3961,6 +3992,7 @@ function dmV(c) {
   refreshStatus();
   const hit = cacheRead(tkey);
   if (hit && Array.isArray(hit.v) && hit.v.length) syncRows(hit.v, { initial: true });
+  else if (hit && Array.isArray(hit.v)) hint("No messages yet. Say hi.");
   else hint("load");
   pull().then(() => { scrollEnd(); }).catch(() => { if (!list.querySelector("[data-mid], .tmpm")) hint("Could not load messages. Pull down to try again."); });
   sb.from("notifications").update({ read_at: new Date().toISOString() }).eq("user_id", me).eq("actor_id", c.id).eq("kind", "message").is("read_at", null).then(() => refreshBadge());
@@ -4056,7 +4088,7 @@ function searchV() {
     clearTimeout(timer);
     const d = seedNow();
     const mine = ++token;
-    info.textContent = "Suggested people. The list changes every 15 to 25 minutes.";
+    info.textContent = "Suggested people, refreshed often";
     const { data, error } = await sb.rpc("discover_accounts", { p_seed: d.seed, p_n: 12 });
     if (mine !== token) return;
     if (error) { list.textContent = ""; list.append(emptyState("user", "Could not load people.")); return; }
@@ -4120,7 +4152,7 @@ function dmRow(cv, body) {
   const mine = !!last && last.sender_id === sbUser.id;
   const sub = h("span", { class: "sub" }, !last ? "No messages" : dmGist(body, last.media, mine));
   if (typeIn.has(cv.other)) { sub.textContent = "typing..."; sub.classList.add("tp"); }
-  return h("div", { class: "lrow", "data-uid": cv.other, onclick: () => go({ r: "dm", id: cv.other }) },
+  return h("div", { class: "lrow", "data-uid": cv.other, onclick: () => openDm(cv.other) },
     rAv({ name: cv.name, avatar: cv.avatar }, 48),
     h("div", { class: "nm" }, h("b", {}, nickOf(cv.other) || cv.name), sub),
     last ? h("span", { class: "time" }, ago(Date.parse(last.created_at))) : null,
@@ -4139,12 +4171,6 @@ function dmGist(text, media, mine) {
   return t ? (mine ? "You: " : "") + t : "";
 }
 
-// "2 likes, 1 follow"
-function noteSummary(ns) {
-  const c = {};
-  ns.forEach(n => { c[n.kind] = (c[n.kind] || 0) + 1; });
-  return Object.keys(c).map(k => c[k] + " " + k + (c[k] > 1 ? "s" : "")).join(", ");
-}
 // a row that opens into the rows under it; which ones are open survives a repaint
 const openFolders = new Set();
 function folder(key, head, kids) {
@@ -4155,6 +4181,16 @@ function folder(key, head, kids) {
   head.setAttribute("aria-expanded", openFolders.has(key));
   box.append(head, h("div", { class: "kids" }, kids));
   return box;
+}
+// the row shrinks to nothing, then leaves the page
+function foldAway(el, done) {
+  el.style.height = el.offsetHeight + "px";
+  el.style.overflow = "hidden";
+  el.style.transition = "height .2s ease, opacity .2s ease";
+  void el.offsetHeight;
+  el.style.height = "0px";
+  el.style.opacity = "0";
+  setTimeout(() => { el.remove(); if (done) done(); }, 220);
 }
 // drag a row to the left to delete it: del() says whether the server removed it, gone() runs after the row is out
 function swipeRow(row, del, gone) {
@@ -4177,7 +4213,7 @@ function swipeRow(row, del, gone) {
     if (!moved) return;
     if (dx < -Math.min(120, wrap.offsetWidth * 0.35)) {
       row.style.transform = "translateX(-100%)";
-      if (await del()) { setTimeout(() => { wrap.remove(); if (gone) gone(); }, 160); return; }
+      if (await del()) { foldAway(wrap, gone); return; }
     }
     row.style.transform = "";
   };
@@ -4188,7 +4224,7 @@ function swipeRow(row, del, gone) {
 }
 const NOTE_WHAT = { follow: "followed you", reply: "replied to your post", like: "liked your post", repost: "reposted your post", message: "sent you a message" };
 function openNotif(n) {
-  if (n.kind === "message") { go({ r: "dm", id: n.actor_id }); return; }
+  if (n.kind === "message") { openDm(n.actor_id); return; }
   if (n.post_id) {
     const lp = S.posts.find(x => x.remote === n.post_id);
     if (lp) { go({ r: "thread", id: lp.id }); return; }
@@ -4209,28 +4245,17 @@ async function notifsV() {
   await acctsFor(rows.map(r => r.actor_id));
   list.textContent = "";
   if (!rows.length) { list.append(emptyState("bell", "No notifications yet.")); return; }
-  // one folder per person; a lone notification stays a plain row
-  const byPerson = new Map();
-  rows.forEach(n => { if (!byPerson.has(n.actor_id)) byPerson.set(n.actor_id, []); byPerson.get(n.actor_id).push(n); });
+  // every notification is its own row, newest first
   const checkEmpty = () => { if (!list.querySelector(".lrow")) list.append(emptyState("bell", "No notifications yet.")); };
-  byPerson.forEach((ns, id) => {
+  rows.forEach(n => {
+    const id = n.actor_id;
     const a = acctCache.get(id) || { username: "user", name: "user", avatar: null };
-    let box = null;
-    const one = (n, size) => swipeRow(h("div", { class: "lrow" + (n.read_at ? "" : " unread"), onclick: () => openNotif(n) },
-      rAv({ name: a.name, avatar: a.avatar }, size),
+    list.append(swipeRow(h("div", { class: "lrow" + (n.read_at ? "" : " unread"), onclick: () => openNotif(n) },
+      rAv({ name: a.name, avatar: a.avatar }, 40),
       h("div", { class: "nm" }, h("b", {}, nickOf(id) || a.name), h("span", { class: "sub" }, NOTE_WHAT[n.kind] || "")),
       h("span", { class: "time" }, ago(Date.parse(n.created_at)))),
       async () => { const { error } = await sb.from("notifications").delete().eq("id", n.id); if (error) { toast("Could not delete"); return false; } return true; },
-      () => { if (box && !box.querySelector(".swipe")) box.remove(); checkEmpty(); });
-    if (ns.length === 1) { list.append(one(ns[0], 40)); return; }
-    const unread = ns.filter(n => !n.read_at).length;
-    const head = h("div", { class: "lrow" + (unread ? " unread" : "") },
-      rAv({ name: a.name, avatar: a.avatar }, 40),
-      h("div", { class: "nm" }, h("b", {}, nickOf(id) || a.name), h("span", { class: "sub" }, noteSummary(ns))),
-      h("span", { class: "time" }, ago(Date.parse(ns[0].created_at))),
-      unread ? h("span", { class: "nbadge" }, String(unread)) : null);
-    box = folder("n:" + id, head, ns.map(n => one(n, 32)));
-    list.append(box);
+      checkEmpty));
   });
   sb.from("notifications").update({ read_at: new Date().toISOString() }).eq("user_id", sbUser.id).neq("kind", "message").is("read_at", null).then(() => refreshBadge());
 }
@@ -4241,7 +4266,7 @@ function onIncomingMsg(payload) {
   if (liveDm && liveDm.id === m.sender_id) { liveDm.add(m); return; }
   Promise.all([acctsFor([m.sender_id]), loadSocial()]).then(() => {
     const a = acctCache.get(m.sender_id) || { name: "user" };
-    openText(m.sender_id, m.body).then(t => alertMe(nickOf(m.sender_id) || a.name, dmGist(t, m.media, false), () => go({ r: "dm", id: m.sender_id })));
+    openText(m.sender_id, m.body).then(t => alertMe(nickOf(m.sender_id) || a.name, dmGist(t, m.media, false), () => openDm(m.sender_id)));
   });
 }
 function onIncomingNote(payload) {
@@ -4439,11 +4464,12 @@ async function boot() {
   } catch (e) {}
   const { data: sess } = await Promise.race([sb.auth.getSession().catch(() => ({ data: { session: null } })), new Promise(r => setTimeout(() => r({ data: { session: null } }), 6000))]);
   sbUser = sess && sess.session ? sess.session.user : null;
-  let ageHeld = false;
+  let ageHeld = false, ownAvatar = null;
   if (sbUser) {
     const { data: ban } = await sb.from("bans").select("user_id").eq("user_id", sbUser.id).maybeSingle();
     if (ban) { hist(true); showBanned(); return; }
-    const { data: acct, error: aerr } = await sb.from("accounts").select("id, deactivated, username").eq("id", sbUser.id).maybeSingle();
+    const { data: acct, error: aerr } = await sb.from("accounts").select("id, deactivated, username, avatar").eq("id", sbUser.id).maybeSingle();
+    if (acct) ownAvatar = acct.avatar || null;
     if (acct) { const { data: held } = await sb.rpc("my_age_hold"); acct.age_hold = held === true; }
     ageHeld = !!(acct && acct.age_hold);
     if (!aerr && (!acct || acct.deactivated)) { await sb.auth.signOut(); sbUser = null; }
@@ -4453,6 +4479,7 @@ async function boot() {
   if (!sbUser) { stack = [{ r: "auth" }]; scrolls.length = 0; }
   else if (ageHeld) { stack = [{ r: "age" }]; scrolls.length = 0; }
   else if (stack.some(x => x.r === "auth" || x.r === "banned")) { stack = [{ r: "home" }]; scrolls.length = 0; }
+  if (sbUser && !ageHeld) await preloadAvatars(ownAvatar);
   hist(true);
   render();
   if (RECOVERY && sbUser) newPasswordModal();

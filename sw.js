@@ -1,4 +1,4 @@
-const VERSION = "nook-3.2.27";
+const VERSION = "nook-3.2.28";
 const SHARE_CACHE = "nook-share";
 const SHELL = ["./", "index.html", "app.js", "update.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => {
@@ -44,16 +44,19 @@ self.addEventListener("push", e => {
   e.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     if (wins.some(w => w.visibilityState === "visible" && w.focused)) return;
-    await self.registration.showNotification(d.title || "Nook", {
+    const title = d.title || "Nook";
+    const opts = {
       body: d.body || "",
-      icon: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+      icon: "icon-192.png",
       badge: "icon-192.png",
       tag: d.tag || "nook",
       renotify: true,
-      silent: false,
       vibrate: [120, 60, 120],
       data: { open: d.open || "notifs" }
-    });
+    };
+    // a notification must always come out: if the phone refuses one of the extras, show it again with only the basics
+    try { await self.registration.showNotification(title, opts); }
+    catch (err) { await self.registration.showNotification(title, { body: opts.body, tag: opts.tag, data: opts.data }); }
   })());
 });
 self.addEventListener("notificationclick", e => {

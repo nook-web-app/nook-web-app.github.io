@@ -1272,3 +1272,20 @@ grant select, delete on public.account_links to authenticated;
 grant all on public.account_links to service_role;
 create policy account_links_select on public.account_links for select to authenticated using (a = (select auth.uid()));
 create policy account_links_delete on public.account_links for delete to authenticated using (a = (select auth.uid()) or b = (select auth.uid()));
+
+-- Zenith answers the owner's posts while the app is closed: every minute the same function runs in reply mode
+create or replace function public.nook_zenith_reply() returns void language plpgsql security definer set search_path to 'public' as $function$
+declare v_secret text;
+begin
+  v_secret := public.nook_purge_secret();
+  if v_secret is null then return; end if;
+  perform net.http_post(
+    url := 'https://cimyolsipjdpibzaebmx.supabase.co/functions/v1/zenith-tick',
+    body := '{"mode":"reply"}'::jsonb,
+    headers := jsonb_build_object('Content-Type', 'application/json', 'x-purge-secret', v_secret),
+    timeout_milliseconds := 50000);
+exception when others then
+  raise warning 'nook_zenith_reply failed: %', sqlerrm;
+end $function$;
+revoke all on function public.nook_zenith_reply() from public, anon, authenticated;
+select cron.schedule('nook-zenith-reply', '* * * * *', 'select public.nook_zenith_reply()');

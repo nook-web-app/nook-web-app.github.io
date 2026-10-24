@@ -155,7 +155,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.45";
+const APP_VERSION = "3.4.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1174,7 +1174,7 @@ function chatV() {
   const dmBox = h("div");
   main.append(dmBox);
   const paintInbox = async convos => {
-    const bodies = await Promise.all(convos.map(cv => (cv.last ? openText(cv.other, cv.last.body) : "")));
+    const bodies = await Promise.all(convos.map(cv => (cv.last ? openText(cv.other, cv.last.body).then(zUn) : "")));
     if (!dmBox.isConnected) return;
     dmBox.textContent = "";
     convos.forEach((cv, i) => dmBox.append(dmRow(cv, bodies[i])));
@@ -1623,7 +1623,7 @@ function zAsk(chat, list, bubble, m) {
       b.classList.remove("typing");
       b.textContent = shown;
       main.scrollTop = main.scrollHeight;
-      setTimeout(step, 38 + Math.random() * 6);
+      setTimeout(step, 10 + Math.random() * 3);
       return;
     }
     if (finished) { ai.text = full; persist(); return; }
@@ -1653,8 +1653,8 @@ async function zGen(system, text, imgs) {
   const j = await r.json();
   return ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).map(p => p.text || "").join("").replace(/\s*\n+\s*/g, " ").trim();
 }
-function zenPost(text, parent) {
-  const p = { id: uid(), text, t: Date.now(), imgs: [], parent: parent || null, ai: true, liked: false, reposted: false, saved: false, pinned: false };
+function zenPost(text, parent, id) {
+  const p = { id: id || uid(), text, t: Date.now(), imgs: [], parent: parent || null, ai: true, liked: false, reposted: false, saved: false, pinned: false };
   S.posts.push(p);
   return p;
 }
@@ -1670,8 +1670,10 @@ async function zenTick() {
     const fresh = p => p.t > z.since;
     for (let todo; (todo = S.posts.find(p => !p.ai && !p.ra && !p.parent && (p.text || p.imgs.length) && !p.zenReplied && fresh(p)));) {
       todo.zenReplied = true;
+      if (S.posts.some(x => x.ai && x.parent === todo.id)) continue;
+      const rid = todo.remote ? "zr" + todo.remote.replace(/-/g, "") : null;
       const text = await zGen(ZSYS_REPLY, "Post: " + (todo.text || "(photo only)"), todo.imgs);
-      if (text) zenPost(text, todo.id);
+      if (text && !S.posts.some(x => x.ai && x.parent === todo.id)) zenPost(text, todo.id, rid);
       persist(); zenRefresh();
     }
     for (let rr; (rr = S.posts.find(p => !p.ai && !p.ra && p.parent && !p.zenAnswered && fresh(p) && (byId(p.parent) || {}).ai));) {
@@ -1701,7 +1703,7 @@ function zenDocs() {
   const out = new Map();
   out.set("state:main", { z: S.zen });
   // the instructions for his own posts go along, so the server writes in the same voice while the app is closed
-  out.set("state:prompt", { post: ZSYS_POST, tz: (Intl.DateTimeFormat().resolvedOptions() || {}).timeZone || "Asia/Muscat" });
+  out.set("state:prompt", { post: ZSYS_POST, reply: ZSYS_REPLY, tz: (Intl.DateTimeFormat().resolvedOptions() || {}).timeZone || "Asia/Muscat" });
   S.posts.forEach(p => {
     if (p.ai) { const rest = Object.assign({}, p); delete rest.imgs; out.set("post:" + p.id, rest); }
     else if (p.zenReplied || p.zenAnswered || p.zenLikeChecked || p.zenLike) out.set("flag:" + (p.remote || p.id), { local: p.id, remote: p.remote || null, zenReplied: !!p.zenReplied, zenAnswered: !!p.zenAnswered, zenLikeChecked: !!p.zenLikeChecked, zenLike: !!p.zenLike });
@@ -1745,6 +1747,7 @@ async function zenPull() {
     if (r.kind === "post") {
       zenSeen.set(key, zenJson(d));
       if ((S.zen.gone || []).includes(d.id)) { sb.from("zenith_docs").delete().eq("owner_id", sbUser.id).eq("kind", "post").eq("doc_id", r.doc_id).then(() => { zenSeen.delete(key); }, () => {}); return; }
+      if (d.parentRemote) { const par = byRemote.get(d.parentRemote); if (!par) return; d.parent = par.id; if (!par.zenReplied) { par.zenReplied = true; changed = true; } }
       if (!byLocal.has(d.id)) { const p = Object.assign({ imgs: [], liked: false, reposted: false, saved: false, pinned: false }, d, { imgs: [], ai: true }); S.posts.push(p); byLocal.set(p.id, p); changed = true; }
     } else if (r.kind === "flag") {
       const p = (d.remote && byRemote.get(d.remote)) || byLocal.get(d.local);
@@ -4428,6 +4431,8 @@ async function sealText(otherId, text) {
   const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(text));
   return "e2e1:" + toB64(iv) + "." + toB64(new Uint8Array(ct));
 }
+const ZMARK = "\u2063Z\u2063";
+const zUn = t => typeof t === "string" && t.startsWith(ZMARK) ? t.slice(ZMARK.length) : t;
 async function openText(otherId, raw) {
   if (!raw || raw.slice(0, 5) !== "e2e1:") return raw || "";
   try {
@@ -4453,7 +4458,10 @@ function loadEncMedia(md, otherId) {
   return e2eEnc.get(md.url);
 }
 async function openRows(rows, otherId, waitFor) {
-  const out = await Promise.all(rows.map(async m => Object.assign({}, m, { text: await openText(otherId, m.body) })));
+  const out = await Promise.all(rows.map(async m => {
+    const t = await openText(otherId, m.body);
+    return Object.assign({}, m, { text: zUn(t) }, t.startsWith(ZMARK) ? { ai: true } : {});
+  }));
   // photos are opened before their bubbles show, so no grey box sits on the screen while they load (only the newest ones are waited for when there are many)
   const jobs = [];
   rows.slice(-(waitFor || rows.length)).forEach(m => (m.media || []).forEach(md => { if (md.iv && !/^video\//.test(md.type || "")) jobs.push(loadEncMedia(md, otherId).catch(() => {})); }));
@@ -4618,7 +4626,9 @@ function dmBubble(m, mine, otherId) {
     (msg.media || []).forEach((md, i) => row.append(dmMedia(md, otherId, () => openDmViewer(row, i))));
     const link = firstUrl(body);
     if (link) row.append(linkCard(link, true));
+    if (msg.ai && body) row.append(h("div", { class: "ztag" }, h("span", { class: "zav" }, "Z"), "Zenith AI"));
     if (body) row.append(h("div", { class: "bub" }, rich(body)));
+    row.classList.toggle("zdm", !!msg.ai);
     row.append(h("div", { class: "mmeta" }, h("div", { class: "mmi" }, h("span", {}, new Date(msg.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })))));
     row.classList.toggle("open", wasOpen);
   };
@@ -4782,7 +4792,11 @@ function dmV(c) {
   };
   const att = pickBtn("image", "Add photo", false, f => addMedia(f, pend, jobs, 4, draw), true);
   const lockNote = h("div", { class: "lockn", hidden: true });
-  const dock = h("div", { class: "cdock" }, lockNote, strip, h("div", { class: "cin" }, att, ta, send));
+  const zpop = h("button", { class: "zpop", type: "button" }, h("span", { class: "zav" }, "Z"), h("span", {}, h("b", {}, "Zenith AI")));
+  zpop.addEventListener("pointerdown", e => e.preventDefault());
+  zpop.addEventListener("click", () => { ta.value = ta.value.replace(/@\w*$/, "@zenith "); zpop.classList.remove("on"); sync(); ta.focus(); });
+  ta.addEventListener("input", () => zpop.classList.toggle("on", zOn() && /@\w*$/.test(ta.value)));
+  const dock = h("div", { class: "cdock" }, zpop, lockNote, strip, h("div", { class: "cin" }, att, ta, send));
   const applyLock = reason => {
     if (reason === locked) return;
     locked = reason;
@@ -4857,6 +4871,23 @@ function dmV(c) {
     if (added && (near || o.initial)) scrollEnd();
   };
 
+  // only the owner can call Zenith in a chat: the answer is sent as a normal message with a hidden mark inside the sealed text, so both people see it as Zenith
+  const zenInDm = async () => {
+    const hist = Array.from(list.querySelectorAll("[data-mid]")).map(r => r._m).filter(m => m && m.text).slice(-20)
+      .map(m => (m.ai ? "Zenith: " : m.sender_id === me ? "Person A: " : "Person B: ") + m.text.replace(/@zenith/gi, "Zenith")).join("\n");
+    const ghost = h("div", { class: "mrow zdm tmpm" }, h("div", { class: "ztag" }, h("span", { class: "zav" }, "Z"), "Zenith AI"), h("div", { class: "bub typing" }, h("i"), h("i"), h("i")));
+    pushRow(ghost);
+    try {
+      const reply = await zGen(ZSYS_REPLY + " This is a chat between two people, Person A and Person B, and Zenith is in it. Answer the last message that mentions Zenith.", hist);
+      ghost.remove();
+      if (!reply) return;
+      const saved = await sendDm(c.id, ZMARK + reply, [], []);
+      threadPush(c.id, saved);
+      const nb = dmBubble(Object.assign({}, saved, { text: reply, ai: true }), true, c.id);
+      nb.classList.add("new");
+      pushRow(nb);
+    } catch (e) { ghost.remove(); toast("Zenith is not reachable right now"); }
+  };
   const doSend = async () => {
     const text = cleanText(ta.value.trim());
     if ((!text && !pend.length) || jobs.length || busy || locked) return;
@@ -4882,6 +4913,7 @@ function dmV(c) {
       row.classList.remove("tmpm");
       row._sig = dmSig(saved);
       row._m = Object.assign({}, saved, { text });
+      if (zOn() && /@zenith/i.test(text)) zenInDm();
     } catch (e) {
       row.remove();
       if (!list.querySelector("[data-mid], .tmpm")) hint("No messages yet. Say hi.");
@@ -5210,7 +5242,7 @@ function onIncomingMsg(payload) {
   if (liveDm && liveDm.id === m.sender_id) { liveDm.add(m); return; }
   Promise.all([acctsFor([m.sender_id]), loadSocial()]).then(() => {
     const a = acctCache.get(m.sender_id) || { name: "user" };
-    openText(m.sender_id, m.body).then(t => alertMe(nickOf(m.sender_id) || a.name, dmGist(t, m.media, false), () => openDm(m.sender_id)));
+    openText(m.sender_id, m.body).then(zUn).then(t => alertMe(nickOf(m.sender_id) || a.name, dmGist(t, m.media, false), () => openDm(m.sender_id)));
   });
 }
 function onIncomingNote(payload) {

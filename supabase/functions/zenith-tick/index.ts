@@ -32,13 +32,14 @@ Deno.serve(async (req) => {
   const password = Deno.env.get("ZENITH_PASSWORD");
   if (!password) return json({ error: "no password" }, 500);
   // a dry run writes a post but saves nothing, to check that everything works
-  let dry = false;
-  try { dry = (await req.json()).dry === true; } catch { dry = false; }
+  let dry = false, mode = "";
+  try { const b = await req.json(); dry = b.dry === true; mode = b.mode === "reply" ? "reply" : ""; } catch { dry = false; }
 
   const { data: owner } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
   if (!owner) return json({ skipped: "no owner" });
   const id = owner.user_id as string;
   const { data: docs } = await admin.from("zenith_docs").select("doc_id, data").eq("owner_id", id).eq("kind", "state");
+  if (mode === "reply") return await replies(id, docs || [], password);
   const state = (docs || []).find((d) => d.doc_id === "main");
   const prompt = (docs || []).find((d) => d.doc_id === "prompt");
   const z = ((state && state.data && state.data.z) || {}) as { log?: number[]; next?: number };
@@ -71,3 +72,48 @@ Deno.serve(async (req) => {
   await admin.from("zenith_docs").upsert({ owner_id: id, kind: "state", doc_id: "main", data: Object.assign({}, state ? state.data : {}, { z: nextZ }), updated_at: new Date().toISOString() }, { onConflict: "owner_id,kind,doc_id" });
   return json({ ok: true, posted: pid });
 });
+
+const REPLY_FALLBACK = "You are Zenith. You are replying to a post. Keep it under 25 words, around 18 on average. Plain text only. No hashtags and no emojis. No asking user questions";
+
+async function ask(password: string, system: string, text: string): Promise<string> {
+  const r = await fetch(WORKER, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password, system, history: [{ role: "user", parts: [{ text }] }] }) });
+  if (!r.ok) return "";
+  const j = await r.json();
+  return ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).map((p: { text?: string }) => p.text || "").join("").replace(/\s*\n+\s*/g, " ").trim();
+}
+
+// the app answers the owner's posts at once while it is open; this runs every minute and only takes the posts the app left alone for a while (the app is closed)
+// deno-lint-ignore no-explicit-any
+async function replies(id: string, docs: { doc_id: string; data: any }[], password: string): Promise<Response> {
+  const state = docs.find((d) => d.doc_id === "main");
+  const prompt = docs.find((d) => d.doc_id === "prompt");
+  const since = Number(state && state.data && state.data.z && state.data.z.since) || 0;
+  const now = Date.now();
+  const from = new Date(Math.max(since, now - 6 * HOUR)).toISOString();
+  const old = new Date(now - 40000).toISOString();
+  const { data: posts } = await admin.from("posts").select("id, body, created_at, media_url").eq("user_id", id).is("parent_id", null).gt("created_at", from).lt("created_at", old).order("created_at", { ascending: true }).limit(5);
+  const todo = (posts || []).filter((p) => p.body && String(p.body).trim());
+  if (!todo.length) return json({ skipped: "nothing to answer" });
+  const { data: have } = await admin.from("zenith_docs").select("kind, doc_id").eq("owner_id", id).in("kind", ["post", "flag"]).limit(5000);
+  const done = new Set((have || []).map((r) => r.kind + ":" + r.doc_id));
+  const base = prompt && prompt.data && typeof prompt.data.reply === "string" && prompt.data.reply.trim() ? String(prompt.data.reply) : REPLY_FALLBACK;
+  const tz = prompt && prompt.data && typeof prompt.data.tz === "string" ? String(prompt.data.tz) : "Asia/Muscat";
+  let when = "";
+  try { when = new Date().toLocaleString("en-US", { dateStyle: "full", timeStyle: "short", timeZone: tz }); } catch { when = new Date().toISOString(); }
+  const system = base + " Never use line breaks. Write everything as one paragraph. Current local time: " + when + ". Only use it when the time or date is really needed, never bring it up on your own.";
+  let n = 0;
+  for (const p of todo) {
+    const rid = "zr" + String(p.id).replace(/-/g, "");
+    if (done.has("post:" + rid) || done.has("flag:" + p.id)) continue;
+    let text = "";
+    try { text = (await ask(password, system, "Post: " + String(p.body).slice(0, 2000))).slice(0, 600); } catch { text = ""; }
+    if (!text) continue;
+    const reply = { id: rid, text, t: Date.now(), parent: null, parentRemote: p.id, ai: true, liked: false, reposted: false, saved: false, pinned: false };
+    const stamp = new Date().toISOString();
+    const a = await admin.from("zenith_docs").upsert({ owner_id: id, kind: "post", doc_id: rid, data: reply, updated_at: stamp }, { onConflict: "owner_id,kind,doc_id" });
+    if (a.error) continue;
+    await admin.from("zenith_docs").upsert({ owner_id: id, kind: "flag", doc_id: String(p.id), data: { local: null, remote: p.id, zenReplied: true, zenAnswered: false, zenLikeChecked: false, zenLike: false }, updated_at: stamp }, { onConflict: "owner_id,kind,doc_id" });
+    n++;
+  }
+  return json({ ok: true, replied: n });
+}

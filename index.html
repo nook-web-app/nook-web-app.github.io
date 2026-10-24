@@ -1,4 +1,4 @@
-<!doctype html><html><head><meta charset=utf8><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' data: blob: https://cimyolsipjdpibzaebmx.supabase.co; connect-src 'self' data: blob: https://cimyolsipjdpibzaebmx.supabase.co wss://cimyolsipjdpibzaebmx.supabase.co https://www.youtube.com https://api.microlink.io https://api.allorigins.win https://api.pwnedpasswords.com; worker-src 'self'; manifest-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><link rel="manifest" href="manifest.webmanifest"><meta name="theme-color" content="#161e27"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Nook"><meta name="apple-mobile-web-app-status-bar-style" content="black"><link rel="icon" href="icon-192.png" type="image/png"><link rel="apple-touch-icon" href="icon-192.png"><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content"><style>img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<!doctype html><html><head><meta charset=utf8><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' data: blob: https://cimyolsipjdpibzaebmx.supabase.co; connect-src 'self' data: blob: https://cimyolsipjdpibzaebmx.supabase.co wss://cimyolsipjdpibzaebmx.supabase.co https://www.youtube.com https://api.microlink.io https://api.allorigins.win https://api.pwnedpasswords.com; worker-src 'self'; manifest-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><link rel="manifest" href="manifest.webmanifest"><meta name="theme-color" content="#161e27"><meta name="description" content="Nook is a small social app for adults. Post, follow people and message your friends."><meta property="og:type" content="website"><meta property="og:site_name" content="Nook"><meta property="og:title" content="Nook"><meta property="og:description" content="Post, follow people and message your friends."><meta property="og:url" content="https://nook-web-app.github.io/"><meta property="og:image" content="https://nook-web-app.github.io/og-image.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Nook"><meta name="twitter:image" content="https://nook-web-app.github.io/og-image.png"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Nook"><meta name="apple-mobile-web-app-status-bar-style" content="black"><link rel="icon" href="icon-192.png" type="image/png"><link rel="apple-touch-icon" href="icon-192.png"><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content"><style>img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
 <meta name="claude:viewport-fit-sides" content="cover">
 <title>Nook</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
@@ -38,6 +38,7 @@ textarea{resize:none}
 .cr .ib{width:var(--btn);color:var(--muted)}
 .av{position:relative;width:40px;height:40px;border-radius:50%;background:var(--accent);color:var(--on);display:flex;align-items:center;justify-content:center;font-weight:700;flex:none;overflow:hidden}
 .pic{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+.banner .pic{inset:-1px;width:calc(100% + 2px);height:calc(100% + 2px)}
 .avc{display:flex;flex-direction:column;align-items:center}
 .post.line{border-bottom:0}
 .post.line .avc::after{content:"";flex:1;width:2px;background:var(--line);margin-top:4px;border-radius:2px}
@@ -379,6 +380,11 @@ button:focus-visible,[role=button]:focus-visible,a:focus-visible,input:focus-vis
 .lb~.scrim{z-index:84}
 .lb~.sheet{z-index:85}
 .lrow.unread{background:color-mix(in srgb,var(--accent) 9%,transparent)}
+.swipe{position:relative;overflow:hidden;background:var(--bg)}
+.swipe .sbg{position:absolute;inset:0;display:flex;align-items:center;justify-content:flex-end;padding-right:22px;background:var(--danger);color:#fff}
+.swipe .lrow{position:relative;background:var(--bg);touch-action:pan-y}
+.swipe .lrow.unread{background:linear-gradient(color-mix(in srgb,var(--accent) 9%,transparent),color-mix(in srgb,var(--accent) 9%,transparent)),var(--bg)}
+.swipe .lrow.drag{transition:none}
 .dim-note{color:var(--muted);font-size:var(--fs-sm);margin:6px 0 0}
 #top:empty{border-bottom:0}
 .sbtn{text-align:center;text-decoration:none}

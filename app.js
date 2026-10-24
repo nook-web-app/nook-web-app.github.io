@@ -133,7 +133,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.2.25";
+const APP_VERSION = "3.2.26";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1275,9 +1275,10 @@ async function downloadBackup() {
     for (const src of p.imgs || []) rec.media.push(await zipMedia(files, src, "posts/images", p.id + "-" + (i++)));
     (p.parent ? replies : posts).push(rec);
   }
-  files.push({ name: "posts/posts.json", data: enc(JSON.stringify(posts, null, 2)) });
-  files.push({ name: "posts/comments/replies.json", data: enc(JSON.stringify(replies, null, 2)) });
+  if (posts.length) files.push({ name: "posts/posts.json", data: enc(JSON.stringify(posts, null, 2)) });
+  if (replies.length) files.push({ name: "posts/comments/replies.json", data: enc(JSON.stringify(replies, null, 2)) });
   for (let ci = 0; ci < S.chats.length; ci++) {
+    if (!S.chats[ci].msgs.length) continue;
     const c = S.chats[ci], folder = "messages/" + (ci + 1) + "-" + safeName(c.name), msgs = [];
     let mi = 0;
     for (const m of c.msgs) {
@@ -1293,13 +1294,21 @@ async function downloadBackup() {
   if (pr.avatar) profile.avatar = await zipMedia(files, pr.avatar, "profile", "avatar");
   if (pr.banner) profile.banner = await zipMedia(files, pr.banner, "profile", "banner");
   files.push({ name: "profile/settings.json", data: enc(JSON.stringify({ app: "nook", version: APP_VERSION, exported: new Date().toISOString(), profile, lists: S.lists, ui: S.ui }, null, 2)) });
-  const blob = makeZip(files);
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "nook-backup-" + new Date().toISOString().slice(0, 10) + ".zip";
-  document.body.append(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-  toast("Backup downloaded");
+  saveSheet(makeZip(files), "nook-backup-" + new Date().toISOString().slice(0, 10) + ".zip", files.length);
+}
+// our own "your file is ready" card; the phone still shows its usual download notice once the file is saved
+function saveSheet(blob, name, count) {
+  const url = URL.createObjectURL(blob);
+  const scrim = h("div", { class: "scrim", onclick: close });
+  const save = () => { const a = h("a", { href: url, download: name }); document.body.append(a); a.click(); a.remove(); toast("Saving " + name); };
+  const sh = h("div", { class: "sheet", role: "dialog" },
+    h("div", { class: "grab" }, h("i")),
+    h("div", { class: "st" }, "Your data is ready"),
+    h("p", { class: "note", style: "text-align:center" }, count + (count === 1 ? " file" : " files") + ", " + fmtSize(blob.size)),
+    h("div", { class: "sg" }, h("button", { class: "si plain", onclick: save }, h("span", {}, "Save to this device"))),
+    h("button", { class: "sx", onclick: close }, "Done"));
+  function close() { dismiss(scrim, sh); setTimeout(() => URL.revokeObjectURL(url), 60000); }
+  layer.append(scrim, sh);
 }
 const MIMES = { jpg: "image/jpeg", png: "image/png", gif: "image/gif", webp: "image/webp" };
 async function inflateRaw(raw) {
@@ -2736,7 +2745,10 @@ async function buildBanZip(j, say) {
   const uid = d.account && d.account.id;
   const enc = t => new TextEncoder().encode(t);
   const files = [];
-  const put = (name, data) => files.push({ name, data: typeof data === "string" ? enc(data) : data instanceof Uint8Array ? data : enc(JSON.stringify(data, null, 2)) });
+  // a file only exists when it has something in it
+  const put = (name, data) => { files.push({ name, data: typeof data === "string" ? enc(data) : data }); };
+  const putText = (name, lines) => { if (lines.length) put(name, lines.join("\n") + "\n"); };
+  const when = t => { const x = new Date(t); return isNaN(x) ? "" : x.toISOString().slice(0, 16).replace("T", " ") + " UTC"; };
   const got = new Map();
   let n = 0;
   for (const f of j.files || []) {
@@ -2744,49 +2756,60 @@ async function buildBanZip(j, say) {
     say("Getting your files " + (++n) + " of " + j.files.length);
   }
   const rel = u => { const m = /\/object\/(?:public|sign)\/[^/]+\/[0-9a-f-]{36}\/([^?#]+)/i.exec(u || ""); return m ? decodeURIComponent(m[1]) : null; };
-  const mediaOf = mu => {
+  const photosOf = mu => {
     let arr = [];
     if (mu) { try { arr = String(mu).trim().startsWith("[") ? JSON.parse(mu) : [mu]; } catch (e) { arr = [mu]; } }
-    return arr.map(rel).filter(n => n && got.has("media/" + n)).map(n => { put("posts/media/" + n, got.get("media/" + n)); return "posts/media/" + n; });
+    return arr.map(rel).filter(x => x && got.has("media/" + x)).map(x => { put("photos/posts/" + x, got.get("media/" + x)); return "photos/posts/" + x; });
   };
+  const block = (p, photos) => when(p.created_at) + "\n" + (p.text || "") + photos.map(x => "\n[photo: " + x + "]").join("");
   const posts = [], replies = [];
-  (d.posts || []).forEach(p => { (p.reply_to ? replies : posts).push({ id: p.id, text: p.text, created_at: p.created_at, reply_to: p.reply_to || undefined, media: mediaOf(p.media_url) }); });
-  put("posts/posts.json", posts);
-  put("posts/replies.json", replies);
-  const acc = Object.assign({}, d.account || {});
+  (d.posts || []).forEach(p => { (p.reply_to ? replies : posts).push(block(p, photosOf(p.media_url))); });
+  if (posts.length) put("posts.txt", posts.join("\n\n") + "\n");
+  if (replies.length) put("replies.txt", replies.join("\n\n") + "\n");
+
+  const acc = d.account || {};
+  const profile = ["Username: " + (acc.username || ""), "Name: " + (acc.display_name || ""), "Email: " + (d.email || ""), "Joined: " + when(acc.created_at)];
+  if (acc.bio) profile.push("Bio: " + acc.bio);
+  put("profile.txt", profile.join("\n") + "\n");
+  if (acc.avatar && /^data:/.test(acc.avatar)) { try { put("avatar." + extOf(acc.avatar), new Uint8Array(await (await fetch(acc.avatar)).arrayBuffer())); } catch (e) {} }
   const bn = rel(acc.banner);
-  if (bn && got.has("media/" + bn)) { put("profile/" + bn, got.get("media/" + bn)); acc.banner = "profile/" + bn; }
-  put("profile/profile.json", Object.assign({ email: d.email }, acc));
-  put("social.json", { following: d.following || [], followers: d.followers || [], likes: d.likes || [], reposts: d.reposts || [], nicknames: d.nicknames || [] });
+  if (bn && got.has("media/" + bn)) put("banner." + (bn.split(".").pop() || "jpg"), got.get("media/" + bn));
+
+  putText("following.txt", d.following || []);
+  putText("followers.txt", d.followers || []);
+  putText("likes.txt", d.likes || []);
+  putText("reposts.txt", d.reposts || []);
+  putText("nicknames.txt", (d.nicknames || []).map(x => x.person + ": " + x.nickname));
+
   let sealed = 0;
   for (const c of d.chats || []) {
+    if (!(c.messages || []).length) continue;
     const key = await banChatKey(uid, c.peer_public_key);
-    const folder = "messages/" + safeName(c.person);
-    const out = [];
+    const who = safeName(c.person);
+    const lines = [];
     let i = 0;
-    for (const m of c.messages || []) {
-      let text = m.text || "", note;
+    for (const m of c.messages) {
+      let text = m.text || "", note = "";
       if (text.slice(0, 5) === "e2e1:") {
         const parts = text.slice(5).split(".");
-        try { text = new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(parts[0]) }, key, fromB64(parts[1]))); } catch (e) { note = "encrypted"; sealed++; }
+        try { text = new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(parts[0]) }, key, fromB64(parts[1]))); } catch (e) { text = ""; note = " [could not be opened]"; sealed++; }
       }
-      const media = [];
+      const shots = [];
       for (const md of m.media || []) {
         const name = rel(md.url), raw = name && got.get("dm-media/" + name);
         if (!raw) continue;
         let bytes = raw, ext = extFromType(md.type);
         if (md.iv) { try { bytes = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(md.iv) }, key, raw)); } catch (e) { ext = "bin"; sealed++; } }
-        const path = folder + "/media/" + m.id + "-" + (i++) + "." + ext;
+        const path = "photos/messages/" + who + "/" + (++i) + "." + ext;
         put(path, bytes);
-        media.push(path);
+        shots.push("\n[photo: " + path + "]");
       }
-      out.push({ id: m.id, from: m.from_me ? "me" : c.person, text, created_at: m.created_at, media, note });
+      lines.push("[" + when(m.created_at) + "] " + (m.from_me ? "me" : c.person) + ": " + text + note + shots.join(""));
     }
-    put(folder + "/messages.json", { person: c.person, display_name: c.display_name, messages: out });
+    put("messages/" + who + ".txt", lines.join("\n") + "\n");
   }
-  put("README.txt", "Your Nook data\n\nBacked up on " + (j.banned_at || "") + ". Kept until " + (j.expires_at || "") + ".\n\nposts/       your posts, replies and their photos\nprofile/     your profile\nsocial.json  who you followed, your followers, likes and reposts\nmessages/    your chats, one folder per person\n" + (sealed ? "\n" + sealed + " item(s) in your chats are end to end encrypted and could not be opened here. Messages are only readable on the device that made them.\n" : "") );
-  put("everything.json", d);
-  return makeZip(files);
+  if (sealed) put("notes.txt", sealed + " item(s) in your chats are end to end encrypted and could not be opened here. Messages are only readable on the device that made them.\n");
+  return { blob: makeZip(files), count: files.length };
 }
 function bannedDownload() {
   const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "email", "aria-label": "Email" });
@@ -2809,14 +2832,9 @@ function bannedDownload() {
         let j = null;
         try { j = await r.json(); } catch (x) {}
         if (!r.ok || !j) { msg.textContent = (j && j.error) || "Could not get your data. Try again later."; return; }
-        const blob = await buildBanZip(j, t => { msg.textContent = t; });
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = "nook-data-" + new Date().toISOString().slice(0, 10) + ".zip";
-        document.body.append(a); a.click(); a.remove();
-        setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+        const zip = await buildBanZip(j, t => { msg.textContent = t; });
         close();
-        toast("Your data was downloaded");
+        saveSheet(zip.blob, "nook-data-" + new Date().toISOString().slice(0, 10) + ".zip", zip.count);
       } catch (x) {
         msg.textContent = "Something went wrong. Try again.";
       } finally { m.act.disabled = false; }
@@ -4093,6 +4111,36 @@ function folder(key, head, kids) {
   box.append(head, h("div", { class: "kids" }, kids));
   return box;
 }
+// drag a row to the left to delete it: del() says whether the server removed it, gone() runs after the row is out
+function swipeRow(row, del, gone) {
+  const wrap = h("div", { class: "swipe" }, h("div", { class: "sbg" }, ic("trash", 22)), row);
+  let x0 = null, y0 = 0, dx = 0, lock = null, moved = false;
+  row.addEventListener("pointerdown", e => { if (e.pointerType === "mouse" && e.button !== 0) return; x0 = e.clientX; y0 = e.clientY; dx = 0; lock = null; moved = false; });
+  row.addEventListener("pointermove", e => {
+    if (x0 == null) return;
+    const mx = e.clientX - x0, my = e.clientY - y0;
+    if (lock == null && (Math.abs(mx) > 8 || Math.abs(my) > 8)) lock = Math.abs(mx) > Math.abs(my) ? "x" : "y";
+    if (lock !== "x") return;
+    if (!moved) { moved = true; row.classList.add("drag"); try { row.setPointerCapture(e.pointerId); } catch (x) {} }
+    dx = Math.min(0, mx);
+    row.style.transform = "translateX(" + dx + "px)";
+  });
+  const end = async () => {
+    if (x0 == null) return;
+    x0 = null;
+    row.classList.remove("drag");
+    if (!moved) return;
+    if (dx < -Math.min(120, wrap.offsetWidth * 0.35)) {
+      row.style.transform = "translateX(-100%)";
+      if (await del()) { setTimeout(() => { wrap.remove(); if (gone) gone(); }, 160); return; }
+    }
+    row.style.transform = "";
+  };
+  row.addEventListener("pointerup", end);
+  row.addEventListener("pointercancel", end);
+  row.addEventListener("click", e => { if (moved) { e.stopImmediatePropagation(); e.preventDefault(); moved = false; } }, true);
+  return wrap;
+}
 const NOTE_WHAT = { follow: "followed you", reply: "replied to your post", like: "liked your post", repost: "reposted your post", message: "sent you a message" };
 function openNotif(n) {
   if (n.kind === "message") { go({ r: "dm", id: n.actor_id }); return; }
@@ -4119,12 +4167,16 @@ async function notifsV() {
   // one folder per person; a lone notification stays a plain row
   const byPerson = new Map();
   rows.forEach(n => { if (!byPerson.has(n.actor_id)) byPerson.set(n.actor_id, []); byPerson.get(n.actor_id).push(n); });
+  const checkEmpty = () => { if (!list.querySelector(".lrow")) list.append(emptyState("bell", "No notifications yet.")); };
   byPerson.forEach((ns, id) => {
     const a = acctCache.get(id) || { username: "user", name: "user", avatar: null };
-    const one = (n, size) => h("div", { class: "lrow" + (n.read_at ? "" : " unread"), onclick: () => openNotif(n) },
+    let box = null;
+    const one = (n, size) => swipeRow(h("div", { class: "lrow" + (n.read_at ? "" : " unread"), onclick: () => openNotif(n) },
       rAv({ name: a.name, avatar: a.avatar }, size),
       h("div", { class: "nm" }, h("b", {}, nickOf(id) || a.name), h("span", { class: "sub" }, NOTE_WHAT[n.kind] || "")),
-      h("span", { class: "time" }, ago(Date.parse(n.created_at))));
+      h("span", { class: "time" }, ago(Date.parse(n.created_at)))),
+      async () => { const { error } = await sb.from("notifications").delete().eq("id", n.id); if (error) { toast("Could not delete"); return false; } return true; },
+      () => { if (box && !box.querySelector(".swipe")) box.remove(); checkEmpty(); });
     if (ns.length === 1) { list.append(one(ns[0], 40)); return; }
     const unread = ns.filter(n => !n.read_at).length;
     const head = h("div", { class: "lrow" + (unread ? " unread" : "") },
@@ -4132,7 +4184,8 @@ async function notifsV() {
       h("div", { class: "nm" }, h("b", {}, nickOf(id) || a.name), h("span", { class: "sub" }, noteSummary(ns))),
       h("span", { class: "time" }, ago(Date.parse(ns[0].created_at))),
       unread ? h("span", { class: "nbadge" }, String(unread)) : null);
-    list.append(folder("n:" + id, head, ns.map(n => one(n, 32))));
+    box = folder("n:" + id, head, ns.map(n => one(n, 32)));
+    list.append(box);
   });
   sb.from("notifications").update({ read_at: new Date().toISOString() }).eq("user_id", sbUser.id).neq("kind", "message").is("read_at", null).then(() => refreshBadge());
 }

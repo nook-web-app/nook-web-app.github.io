@@ -139,7 +139,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.33";
+const APP_VERSION = "3.3.34";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -287,6 +287,112 @@ function flat(id, d, out) {
   kids(id).sort((a, b) => a.t - b.t).forEach(k => { out.push({ p: k, d }); flat(k.id, d + 1, out); });
   return out;
 }
+// home feed order. Everything is worked out on this phone from things the person did on purpose
+// (who they follow, what they liked, saved or replied to, "less like this") and never from time spent or scrolling
+const SCRIPTS = [
+  ["latin", "English and other Latin letters", /[A-Za-z\u00C0-\u024F]/g],
+  ["arabic", "Arabic", /[\u0600-\u06FF\u0750-\u077F]/g],
+  ["cjk", "Chinese or Japanese", /[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF]/g],
+  ["hangul", "Korean", /[\uAC00-\uD7AF\u1100-\u11FF]/g],
+  ["cyrillic", "Russian and Cyrillic", /[\u0400-\u04FF]/g],
+  ["devanagari", "Hindi", /[\u0900-\u097F]/g],
+  ["thai", "Thai", /[\u0E00-\u0E7F]/g],
+  ["hebrew", "Hebrew", /[\u0590-\u05FF]/g],
+  ["greek", "Greek", /[\u0370-\u03FF]/g]
+];
+const LANG_SCRIPT = { ar: "arabic", fa: "arabic", ur: "arabic", zh: "cjk", ja: "cjk", ko: "hangul", ru: "cyrillic", uk: "cyrillic", bg: "cyrillic", sr: "cyrillic", hi: "devanagari", mr: "devanagari", ne: "devanagari", th: "thai", he: "hebrew", el: "greek" };
+// which writing a text is in; null when it has too few letters to tell (a photo with a short caption is for everybody)
+function scriptOf(text) {
+  if (typeof text !== "string" || text.length < 3) return null;
+  let best = null, top = 2;
+  for (const s of SCRIPTS) { const n = (text.match(s[2]) || []).length; if (n > top) { top = n; best = s[0]; } }
+  return best;
+}
+// the writings this person reads: what they chose, or their phone's languages and what they wrote themselves
+function myScripts() {
+  const set = new Set();
+  if (S && S.ui && Array.isArray(S.ui.langs) && S.ui.langs.length) { S.ui.langs.forEach(x => set.add(x)); return set; }
+  (navigator.languages || [navigator.language || "en"]).forEach(l => set.add(LANG_SCRIPT[String(l).slice(0, 2).toLowerCase()] || "latin"));
+  S.posts.filter(p => !p.ra && !p.ai).slice(0, 30).forEach(p => { const s = scriptOf(p.text); if (s) set.add(s); });
+  if (!set.size) set.add("latin");
+  return set;
+}
+const STOP = new Set(["this", "that", "with", "have", "from", "they", "were", "what", "your", "about", "just", "will", "would", "there", "their", "been", "than", "then", "them", "into", "some", "when", "like", "more", "very", "also", "only", "over", "dont", "cant"]);
+const wordsOf = text => typeof text === "string" ? [...new Set((text.toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) || []).filter(w => !STOP.has(w)))].slice(0, 12) : [];
+const whoOf = p => p.ra ? p.ra.id : p.ai ? "zenith" : "me";
+let followSet = null;
+const getFollows = () => {
+  if (!followSet) { const c = sbUser ? cacheRead("follows:" + sbUser.id) : null; followSet = new Set((c && c.v) || []); }
+  return followSet;
+};
+const rankCache = new Map();
+function rankFeed(arr, tab) {
+  const less = (S.ui.less = S.ui.less || { a: {}, w: {} });
+  const hidden = new Set(S.ui.hidden || []);
+  const langs = myScripts();
+  const follows = getFollows();
+  const maxT = arr.reduce((m, p) => Math.max(m, p.t), 0);
+  const key = [tab, arr.length, maxT, hidden.size, Object.keys(less.a).length + ":" + Object.keys(less.w).length, [...langs].join(), follows.size].join("|");
+  const hit = rankCache.get(tab);
+  // the order stays the same while the posts, the follows and the choices stay the same, so likes do not shuffle the page
+  if (hit && hit.key === key) return hit.ids.map(id => byId(id)).filter(Boolean);
+  const aff = new Map();
+  const add = (id, v) => { if (id) aff.set(id, (aff.get(id) || 0) + v); };
+  S.posts.forEach(p => {
+    if (p.ra || p.ai) { const w = whoOf(p); if (p.liked) add(w, .25); if (p.saved) add(w, .4); if (p.reposted) add(w, .3); }
+    else if (p.parent) { const par = byId(p.parent); if (par && (par.ra || par.ai)) add(whoOf(par), .3); }
+  });
+  const now = Date.now();
+  const scored = arr.filter(p => !hidden.has(p.id)).map(p => {
+    const who = whoOf(p);
+    const rec = Math.pow(.5, Math.max(0, now - p.t) / 36e5 / 10);
+    const a = Math.min(1.5, aff.get(who) || 0);
+    const fol = follows.has(who) ? 1 : 0;
+    let s;
+    if (who === "me") s = rec * 1.4;
+    else s = rec * (1 + 2 * a + fol) + (!fol && !a ? .12 * rec : 0);
+    const sc = scriptOf(p.text);
+    if (sc && !langs.has(sc)) s *= .12;
+    if (less.a[who]) s *= Math.pow(.1, Math.min(2, less.a[who]));
+    const hitN = wordsOf(p.text).filter(w => less.w[w]).length;
+    if (hitN) s *= Math.max(.3, 1 - .25 * hitN);
+    return { p, s, who };
+  });
+  scored.sort((x, y) => y.s - x.s);
+  // no more than two in a row from one person
+  const out = [], rest = scored.slice();
+  while (rest.length) {
+    let i = 0;
+    const n = out.length;
+    if (n >= 2 && out[n - 1].who === out[n - 2].who) { i = rest.findIndex(x => x.who !== out[n - 1].who); if (i < 0) i = 0; }
+    out.push(rest.splice(i, 1)[0]);
+  }
+  rankCache.set(tab, { key, ids: out.map(x => x.p.id) });
+  return out.map(x => x.p);
+}
+// "less like this": the person goes down a lot, the words a little, and the post goes away now
+function lessLikeThis(p) {
+  const less = (S.ui.less = S.ui.less || { a: {}, w: {} });
+  const who = whoOf(p);
+  if (who !== "me") less.a[who] = Math.min(2, (less.a[who] || 0) + 1);
+  wordsOf(p.text).forEach(w => { less.w[w] = Math.min(3, (less.w[w] || 0) + 1); });
+  const ws = Object.keys(less.w);
+  if (ws.length > 300) ws.sort((x, y) => less.w[x] - less.w[y]).slice(0, ws.length - 300).forEach(w => delete less.w[w]);
+  S.ui.hidden = (S.ui.hidden || []).concat(p.id).slice(-300);
+  persist();
+  toast("You will see less like this");
+  render();
+}
+function langSheet() {
+  const cur = myScripts();
+  const auto = !(Array.isArray(S.ui.langs) && S.ui.langs.length);
+  const set = list => { S.ui.langs = list && list.length ? list : null; persist(); render(); setTimeout(langSheet, 150); };
+  const items = [{ label: "Automatic", on: auto, fn: () => set(null) }];
+  SCRIPTS.forEach(s => items.push({ label: s[1], on: !auto && cur.has(s[0]), fn: () => { const next = new Set(auto ? [] : cur); if (next.has(s[0])) next.delete(s[0]); else next.add(s[0]); set([...next]); } }));
+  items.push({ label: "Done", cancel: true });
+  sheet(items, "Languages I read");
+}
+const langText = () => { const auto = !(Array.isArray(S.ui.langs) && S.ui.langs.length); return auto ? "Automatic" : S.ui.langs.map(id => (SCRIPTS.find(s => s[0] === id) || [0, id])[1].split(" ")[0]).join(", "); };
 function feedPosts(f) {
   let a = S.posts.filter(p => !p.parent);
   if (f) {
@@ -762,7 +868,7 @@ function acts(p, big) {
     ab("like", "heart", p.lc || 0, p.liked, () => toggleRemoteLike(p, big), "Like", true),
     ab("bm", "bookmark", 0, p.saved, () => { p.saved = !p.saved; bump = p.id + "bm"; persist(); refresh(p, big); toast(p.saved ? "Saved" : "Removed from saved"); }, "Save", true),
     ab("sh", "share", 0, false, () => sharePost(p), "Share post"),
-    ab("mo", "dots", 0, false, () => sheet([...(typeof p.text === "string" && p.text ? [{ icon: "copy", label: "Copy post text", fn: () => copy(p.text || "") }] : []), { icon: "flag", label: "Report post", danger: true, fn: () => reportPost(p) }]), "More"));
+    ab("mo", "dots", 0, false, () => sheet([...(typeof p.text === "string" && p.text ? [{ icon: "copy", label: "Copy post text", fn: () => copy(p.text || "") }] : []), { icon: "eyeoff", label: "Less like this", fn: () => lessLikeThis(p) }, { icon: "flag", label: "Report post", danger: true, fn: () => reportPost(p) }]), "More"));
   return h("div", { class: "acts" + (big ? " big" : ""), "data-pid": p.id },
     ab("rl", "reply", n, false, () => openCompose({ parent: p.id }), "Reply"),
     ab("rp", "repost", p.ai ? 0 : p.rpc || 0, p.reposted, () => (p.remote ? toggleRemoteRepost(p, big) : (p.reposted = !p.reposted, bump = p.id + "rp", persist(), refresh(p, big))), "Repost"),
@@ -937,13 +1043,13 @@ function composerRow() {
 }
 
 function homeV() {
-  const tabs = [{ id: "latest", name: "Latest" }, { id: "photos", name: "Media" }];
+  const tabs = [{ id: "latest", name: "For you" }, { id: "photos", name: "Media" }];
   if (!tabs.some(t => t.id === S.ui.homeTab)) S.ui.homeTab = "latest";
   topEl.append(bar(menuBtn(), ttl("Nook"), bellBtn()));
   topEl.append(h("div", { class: "tabs", role: "tablist" }, tabs.map(t => h("button", { class: "tab" + (t.id === S.ui.homeTab ? " on" : ""), role: "tab", onclick: () => { S.ui.homeTab = t.id; persist(); render("root"); } }, h("span", {}, t.name)))));
   main.append(composerRow());
   const photos = S.ui.homeTab === "photos";
-  main.append(postList(feedPosts(photos ? { media: true } : null), { empty: emptyState("smile", photos ? "No media posts yet." : "No posts yet. Write your first one.") }));
+  main.append(postList(rankFeed(feedPosts(photos ? { media: true } : null), photos ? "photos" : "latest"), { empty: emptyState("smile", photos ? "No media posts yet." : "No posts yet. Write your first one.") }));
 }
 
 function mainPost(p) {
@@ -1701,6 +1807,8 @@ function settingsV() {
     row(ic("pass", 22), "Change password", "Needs your current password.", () => changePassV()),
     row(ic("mail", 22), "Change email", "We send a link to the new address.", () => changeEmailV()),
     totpRow, keyRow));
+  main.append(sec("Feed"));
+  main.append(h("div", { class: "group" }, row(ic("list", 22), "Languages I read", langText(), langSheet)));
   main.append(sec("Notifications"));
   const pushRowEl = row(ic("bell", 24), "Phone notifications", rowSubs.push || "Checking...", async () => {
     const cur = await pushSub();
@@ -2034,15 +2142,17 @@ async function loadFeed() {
   const pend = new Set(S.pendDel || []);
   if (S.pendDel && S.pendDel.length) { try { await deleteRemote(S.pendDel.map(r => ({ remote: r }))); } catch (e) {} }
   const ids = posts.filter(p => !p.parent_id).map(p => p.id);
-  const [{ data: myLikes }, { data: myReposts }, { data: blocksOut }, { data: blocksIn }, { data: likeRows }, { data: repostRows }, { data: meRow }] = await Promise.all([
+  const [{ data: myLikes }, { data: myReposts }, { data: blocksOut }, { data: blocksIn }, { data: likeRows }, { data: repostRows }, { data: meRow }, { data: myFollows }] = await Promise.all([
     sb.from("likes").select("post_id").eq("user_id", sbUser.id),
     sb.from("reposts").select("post_id").eq("user_id", sbUser.id),
     sb.from("blocks").select("blocked_id").eq("blocker_id", sbUser.id),
     sb.from("blocks").select("blocker_id").eq("blocked_id", sbUser.id),
     ids.length ? sb.from("likes").select("post_id").in("post_id", ids) : { data: [] },
     ids.length ? sb.from("reposts").select("post_id").in("post_id", ids) : { data: [] },
-    sb.from("accounts").select(ACC_COLS).eq("id", sbUser.id).maybeSingle()
+    sb.from("accounts").select(ACC_COLS).eq("id", sbUser.id).maybeSingle(),
+    sb.from("follows").select("followee_id").eq("follower_id", sbUser.id).limit(1000)
   ]);
+  if (myFollows) { followSet = new Set(myFollows.map(r => r.followee_id)); cacheWrite("follows:" + sbUser.id, [...followSet]); }
   if (meRow) {
     let changed = false;
     const take = (k, v) => { if (v != null && v !== "" && S.profile[k] !== v) { S.profile[k] = v; changed = true; } };
@@ -2599,7 +2709,7 @@ function editProfile() {
           sb.from("accounts").update({ bio: pr.bio, display_name: pr.name, banner_theme: pr.bannerTheme }).eq("id", uid0).then(({ error }) => { if (error) toast("Could not save profile: " + error.message); });
           avatarValue(pr.avatar).then(small => {
             if (small === undefined) { toast("Could not upload profile photo"); return; }
-            if (sbUser) sb.from("accounts").update({ avatar: small }).eq("id", uid0).then(() => loadFeed());
+            if (sbUser) sb.from("accounts").update({ avatar: small }).eq("id", uid0).then(() => { loadFeed(); if (sbUser && sbUser.id === uid0) rememberAccount({ username: pr.handle, name: pr.name || pr.handle, avatar: small }).catch(() => {}); });
           });
           const src = pr.banner;
           bannerUrl(src).then(url => {
@@ -2609,6 +2719,7 @@ function editProfile() {
           });
         }
         persist(); close(); render(); toast("Profile saved");
+        if (sbUser) rememberAccount({ username: pr.handle, name: pr.name || pr.handle, avatar: pr.avatar }).catch(() => {});
       } finally { m.act.disabled = false; }
     }
   });
@@ -3158,11 +3269,13 @@ async function forgetAccount(id) {
   await acctDel("snap:" + id).catch(() => {});
 }
 async function saveSnap(id) { await acctPut("snap:" + id, JSON.stringify(S)); }
-async function loadSnap(id) {
+async function loadSnap(id, entry) {
   let next = null;
   try { const raw = await acctGet("snap:" + id); next = raw ? JSON.parse(raw) : null; } catch (e) {}
   noSave = false;
   S = next || freshState();
+  // an account that was never opened here starts with its real name, handle and picture, not "Me"
+  if (!next && entry) { S.profile = Object.assign({}, S.profile, { handle: entry.username || S.profile.handle, name: entry.name || entry.username || S.profile.name, avatar: entry.avatar || null }); }
   normalize();
   await flush();
 }
@@ -3172,7 +3285,7 @@ async function enterAccount(entry) {
   try {
     const { data, error } = await sb.auth.refreshSession({ refresh_token: entry.rt });
     if (error || !data || !data.session) { await forgetAccount(entry.id); return false; }
-    await loadSnap(entry.id);
+    await loadSnap(entry.id, entry);
     try { localStorage.setItem(LOCAL_UID, entry.id); } catch (e) {}
     location.reload();
     return true;
@@ -3298,8 +3411,27 @@ function addAccountModal() {
     }
   });
 }
+// the name, handle and picture of every account on this phone, read fresh so a changed picture shows at once
+async function refreshAcctEntries(list) {
+  const { data } = await sb.from("accounts").select("id, username, display_name, avatar").in("id", list.map(a => a.id));
+  if (!data) return list;
+  let changed = false;
+  data.forEach(r => {
+    const a = list.find(x => x.id === r.id);
+    if (!a) return;
+    const av = typeof r.avatar === "string" && r.avatar.length < 400000 ? r.avatar : null;
+    const name = r.display_name || r.username;
+    if (a.username !== r.username || a.name !== name || (a.avatar || null) !== av) { a.username = r.username; a.name = name; a.avatar = av; changed = true; }
+  });
+  if (changed) await acctPut("list", list);
+  return list;
+}
+const wait = ms => new Promise(r => setTimeout(r, ms));
 async function openAccounts() {
-  const all = await acctList();
+  const all0 = await acctList();
+  const all = await Promise.race([refreshAcctEntries(all0).catch(() => all0), wait(700).then(() => all0)]);
+  // the pictures are loaded before the sheet opens, so no letter circle shows first
+  await Promise.race([Promise.all(all.map(a => a.avatar ? new Promise(res => { const i = new Image(); i.onload = i.onerror = () => res(); i.src = view(a.avatar); }) : null)), wait(600)]);
   const list = all.filter(a => a.username);
   const nm = a => a.name || a.username || "Account";
   const items = list.map(a => ({ av: { name: nm(a), avatar: a.avatar || null }, label: a.username ? "@" + a.username : nm(a), on: a.id === sbUser.id, fn: a.id === sbUser.id ? null : () => switchAccount(a.id) }));

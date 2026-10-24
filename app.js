@@ -155,7 +155,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.39";
+const APP_VERSION = "3.3.40";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -3416,6 +3416,8 @@ function newAccountModal() {
   const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "off", "aria-label": "Email" });
   const pw = pwField("Password");
   const msg = h("p", { class: "note", role: "alert" });
+  // the message also shows as a toast, because the keyboard can cover the line under the fields
+  const say = t => { msg.textContent = t; if (t) toast(t); };
   const go1 = h("button", { class: "pri" }, "Create account");
   const m = modal({
     title: "",
@@ -3432,26 +3434,26 @@ function newAccountModal() {
   const create = async close => {
       msg.textContent = "";
       const n = dn.value.trim(), u = user.value.trim(), e = email.value.trim(), p = pw.input.value;
-      if (!n) { msg.textContent = "Enter a display name"; return; }
-      if (!/^[A-Za-z0-9._]{1,15}$/.test(u)) { msg.textContent = "Username: letters, numbers, dots or underscores, max 15"; return; }
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e)) { msg.textContent = "That email does not look right. Check for typos"; return; }
-      if (p.length < 8) { msg.textContent = "Password needs at least 8 characters"; return; }
+      if (!n) { say("Enter a display name"); return; }
+      if (!/^[A-Za-z0-9._]{1,15}$/.test(u)) { say("Username: letters, numbers, dots or underscores, max 15"); return; }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e)) { say("That email does not look right. Check for typos"); return; }
+      if (p.length < 8) { say("Password needs at least 8 characters"); return; }
       go1.disabled = true;
       try {
         const { data: taken } = await sb.from("accounts").select("id").eq("username", u).maybeSingle();
-        if (taken) { msg.textContent = "That username is taken"; return; }
-        if (await pwnedPassword(p)) { msg.textContent = PWNED_MSG; return; }
+        if (taken) { say("That username is taken"); return; }
+        if (await pwnedPassword(p)) { say(PWNED_MSG); return; }
         const sr = await callFn("signin", { action: "signup", email: e, password: p }).catch(() => null);
-        if (!sr) { msg.textContent = "Could not reach Nook. Check your connection"; return; }
-        if (!sr.ok) { msg.textContent = sr.body.error === "signup_failed" ? authMsg({ code: sr.body.code, message: sr.body.message, status: sr.body.status }) : signinMsg(sr); return; }
-        if (!sr.body.session) { msg.textContent = "Check your email to confirm, then add it with Add account"; return; }
+        if (!sr) { say("Could not reach Nook. Check your connection"); return; }
+        if (!sr.ok) { say(sr.body.error === "signup_failed" ? authMsg({ code: sr.body.code, message: sr.body.message, status: sr.body.status }) : signinMsg(sr)); return; }
+        if (!sr.body.session) { say("Check your email to confirm, then add it with Add account"); return; }
         // a separate connection, so the account that is open keeps its own login
         const tmp = window.supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
         const { data: sd, error: se } = await tmp.auth.setSession({ access_token: sr.body.session.access_token, refresh_token: sr.body.session.refresh_token });
-        if (se || !sd.user) { msg.textContent = "Could not set it up. Try again"; return; }
+        if (se || !sd.user) { say("Could not set it up. Try again"); return; }
         const id = sd.user.id;
         const ins = await tmp.from("accounts").insert({ id, username: u, display_name: n });
-        if (ins.error) { msg.textContent = ins.error.code === "23505" ? "That username is taken" : "Could not save the account: " + ins.error.message; return; }
+        if (ins.error) { say(ins.error.code === "23505" ? "That username is taken" : "Could not save the account: " + ins.error.message); return; }
         // its message key is made now and saved locked with the password, like for any new account
         try {
           const rec = await makeKeyPair();
@@ -3463,11 +3465,11 @@ function newAccountModal() {
         } catch (x) {}
         const list = await acctList();
         await acctPut("list", list.filter(x => x.id !== id).concat({ id, rt: sr.body.session.refresh_token, username: u, name: n, avatar: null, main: false }));
-        await linkSavedAccounts(id, sr.body.session.access_token);
+        linkSavedAccounts(id, sr.body.session.access_token).catch(() => {});
         close();
         toast("Account created");
         setTimeout(openAccounts, 350);
-      } catch (x) { msg.textContent = "Something went wrong. Try again"; } finally { go1.disabled = false; }
+      } catch (x) { say("Something went wrong. Try again"); } finally { go1.disabled = false; }
   };
 }
 function addAccountModal() {
@@ -3475,6 +3477,8 @@ function addAccountModal() {
   const pass = h("input", { class: "in", type: "password", placeholder: "Password", autocomplete: "current-password", "aria-label": "Password", style: "padding-right:60px" });
   const eye = h("button", { type: "button", class: "tbtn", "aria-label": "Show password", style: "position:absolute;right:14px;top:50%;transform:translateY(-50%);padding:6px 0;color:var(--muted);font-size:var(--fs-md);font-weight:600", onclick: () => { const show = pass.type === "password"; pass.type = show ? "text" : "password"; eye.textContent = show ? "Hide" : "Show"; eye.setAttribute("aria-label", show ? "Hide password" : "Show password"); } }, "Show");
   const msg = h("p", { class: "note", role: "alert" });
+  // the message also shows as a toast, because the keyboard can cover the line under the fields
+  const say = t => { msg.textContent = t; if (t) toast(t); };
   const m = modal({
     title: "Add account",
     action: "Add",
@@ -3482,22 +3486,22 @@ function addAccountModal() {
     onAction: async close => {
       msg.textContent = "";
       const e = email.value.trim();
-      if (!e || !pass.value) { msg.textContent = "Enter the email and password"; return; }
+      if (!e || !pass.value) { say("Enter the email and password"); return; }
       m.act.disabled = true;
       try {
         const r = await callFn("signin", { email: e, password: pass.value }).catch(() => null);
-        if (!r) { msg.textContent = "Could not reach Nook. Check your connection"; return; }
-        if (r.body && r.body.error === "banned") { msg.textContent = "That account is banned"; return; }
-        if (!r.ok) { msg.textContent = signinMsg(r); return; }
+        if (!r) { say("Could not reach Nook. Check your connection"); return; }
+        if (r.body && r.body.error === "banned") { say("That account is banned"); return; }
+        if (!r.ok) { say(signinMsg(r)); return; }
         const { data: u } = await sb.auth.getUser(r.body.session.access_token);
-        if (!u || !u.user) { msg.textContent = "Could not sign in. Try again"; return; }
-        if (u.user.id === sbUser.id) { msg.textContent = "That is the account you are in"; return; }
+        if (!u || !u.user) { say("Could not sign in. Try again"); return; }
+        if (u.user.id === sbUser.id) { say("That is the account you are in"); return; }
         // the name, handle and picture are public, so they are read before the account is shown anywhere
         const { data: info } = await sb.from("accounts").select("id, username, display_name, avatar").eq("id", u.user.id).maybeSingle();
-        if (!info || !info.username) { msg.textContent = "Could not load that account. Try again"; return; }
+        if (!info || !info.username) { say("Could not load that account. Try again"); return; }
         const list = await acctList();
         await acctPut("list", list.filter(a => a.id !== info.id).concat({ id: info.id, rt: r.body.session.refresh_token, username: info.username, name: info.display_name || info.username, avatar: typeof info.avatar === "string" && info.avatar.length < 400000 ? info.avatar : null, main: false }));
-        await linkSavedAccounts(info.id, r.body.session.access_token);
+        linkSavedAccounts(info.id, r.body.session.access_token).catch(() => {});
         close();
         toast("Account added");
         setTimeout(openAccounts, 350);
@@ -3544,19 +3548,21 @@ async function linkSavedAccounts(newId, newToken) {
 function linkedLoginModal(x) {
   const pw = pwField("Password");
   const msg = h("p", { class: "note", role: "alert" });
+  // the message also shows as a toast, because the keyboard can cover the line under the fields
+  const say = t => { msg.textContent = t; if (t) toast(t); };
   const m = modal({
     title: "@" + x.username,
     action: "Switch",
     body: [pw.wrap, msg],
     onAction: async close => {
       msg.textContent = "";
-      if (!pw.input.value) { msg.textContent = "Enter the password"; return; }
+      if (!pw.input.value) { say("Enter the password"); return; }
       m.act.disabled = true;
       try {
         const r = await callFn("signin", { action: "linked", target: x.id, password: pw.input.value }).catch(() => null);
-        if (!r) { msg.textContent = "Could not reach Nook. Check your connection"; return; }
-        if (r.body && r.body.error === "banned") { msg.textContent = "That account is banned"; return; }
-        if (!r.ok) { msg.textContent = r.body && r.body.error === "not_linked" ? "That account is not linked anymore" : signinMsg(r); return; }
+        if (!r) { say("Could not reach Nook. Check your connection"); return; }
+        if (r.body && r.body.error === "banned") { say("That account is banned"); return; }
+        if (!r.ok) { say(r.body && r.body.error === "not_linked" ? "That account is not linked anymore" : signinMsg(r)); return; }
         const list = await acctList();
         await acctPut("list", list.filter(a => a.id !== x.id).concat({ id: x.id, rt: r.body.session.refresh_token, username: x.username, name: x.name, avatar: x.avatar, main: false }));
         close(() => switchAccount(x.id));
@@ -3924,7 +3930,7 @@ function signinMsg(r) {
 async function callFn(name, body) {
   const { data } = await sb.auth.getSession();
   const tok = data && data.session ? data.session.access_token : null;
-  const r = await fetch(SB_URL + "/functions/v1/" + name, { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: JSON.stringify(body || {}) });
+  const r = await fetch(SB_URL + "/functions/v1/" + name, { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: JSON.stringify(body || {}), signal: AbortSignal.timeout ? AbortSignal.timeout(25000) : undefined });
   let j = null;
   try { j = await r.json(); } catch (e) {}
   return { ok: r.ok, status: r.status, body: j || {} };

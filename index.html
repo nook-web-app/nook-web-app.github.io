@@ -1,6 +1,7 @@
 <!doctype html><html lang="en"><head><meta charset=utf8><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https://cimyolsipjdpibzaebmx.supabase.co; connect-src 'self' data: blob: https://cimyolsipjdpibzaebmx.supabase.co wss://cimyolsipjdpibzaebmx.supabase.co https://www.youtube.com https://api.microlink.io https://api.allorigins.win https://api.pwnedpasswords.com; worker-src 'self'; manifest-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><link rel="manifest" href="manifest.webmanifest"><meta name="theme-color" content="#161e27"><meta name="description" content="Nook is a small social app for adults. Post, follow people and message your friends."><meta property="og:type" content="website"><meta property="og:site_name" content="Nook"><meta property="og:title" content="Nook"><meta property="og:description" content="Post, follow people and message your friends."><meta property="og:url" content="https://nook-web-app.github.io/"><meta property="og:image" content="https://nook-web-app.github.io/og-image.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Nook"><meta name="twitter:image" content="https://nook-web-app.github.io/og-image.png"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Nook"><meta name="apple-mobile-web-app-status-bar-style" content="black"><link rel="icon" href="icon-192.png" type="image/png"><link rel="apple-touch-icon" href="icon-192.png"><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content"><style>img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
 <meta name="claude:viewport-fit-sides" content="cover">
 <title>Nook</title>
+<script src="boot.js"></script>
 <style>
 @font-face{font-family:'Inter';font-style:normal;font-weight:400 700;font-display:swap;src:url(fonts/inter-cyrillic-ext.woff2) format('woff2');unicode-range:U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F}
 @font-face{font-family:'Inter';font-style:normal;font-weight:400 700;font-display:swap;src:url(fonts/inter-cyrillic.woff2) format('woff2');unicode-range:U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116}
@@ -27,6 +28,10 @@ textarea{resize:none}
 #top{position:relative;flex:none;z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
 #main{overflow-anchor:none;contain:layout paint;position:relative;flex:1;min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
 #rail{display:none}
+.bar.sk,#nav .sk{display:none}
+html.hs .bar.sk{display:grid}
+html.hs #nav .sk{display:flex;flex:1;height:54px;align-items:center;justify-content:center}
+.skb,.skn i{width:26px;height:26px;border-radius:8px;background:var(--bg2);justify-self:center}
 .bar{display:grid;grid-template-columns:44px 1fr 44px;align-items:center;height:54px}
 .bar>.ib:first-child{margin-left:-10px}
 .bar>.ib:last-child{margin-right:-10px}
@@ -437,9 +442,9 @@ button:focus-visible,[role=button]:focus-visible,a:focus-visible,input:focus-vis
 .auth .note{text-align:center;padding:0}
 .auth .note:empty{display:none}
 </style>
-<header id="top"></header>
+<header id="top"><div class="bar sk" aria-hidden="true"><span class="skb"></span><div class="ttl">Nook</div><span class="skb"></span></div></header>
 <main id="main"></main>
-<nav id="nav"></nav>
+<nav id="nav"><span class="sk skn" aria-hidden="true"><i></i></span><span class="sk skn" aria-hidden="true"><i></i></span><span class="sk skn" aria-hidden="true"><i></i></span><span class="sk skn" aria-hidden="true"><i></i></span></nav>
 <aside id="rail" aria-label="Quick panel"></aside>
 <div id="fabs"></div>
 <div id="layer"></div>

@@ -1241,3 +1241,34 @@ alter table public.key_backups add primary key (user_id, mode);
 alter table public.key_backups alter column pub drop not null;
 
 -- audit fixes: run supabase/audit_fixes_1.sql once (server set message and report times, edit gaps, notification column grants, net schema lock, caps)
+
+-- Zenith posts while the app is closed: the cron job calls the zenith-tick function every 30 minutes, it posts when his schedule says one is due
+create or replace function public.nook_zenith_tick() returns void language plpgsql security definer set search_path to 'public' as $function$
+declare v_secret text;
+begin
+  v_secret := public.nook_purge_secret();
+  if v_secret is null then return; end if;
+  perform net.http_post(
+    url := 'https://cimyolsipjdpibzaebmx.supabase.co/functions/v1/zenith-tick',
+    body := '{}'::jsonb,
+    headers := jsonb_build_object('Content-Type', 'application/json', 'x-purge-secret', v_secret),
+    timeout_milliseconds := 20000);
+exception when others then
+  raise warning 'nook_zenith_tick failed: %', sqlerrm;
+end $function$;
+revoke all on function public.nook_zenith_tick() from public, anon, authenticated;
+select cron.schedule('nook-zenith-tick', '*/30 * * * *', 'select public.nook_zenith_tick()');
+
+-- account links (switching between accounts): written by the link-accounts function, read by the owner of the row
+create table if not exists public.account_links (
+  a uuid not null references public.accounts(id) on delete cascade,
+  b uuid not null references public.accounts(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (a, b),
+  check (a <> b)
+);
+alter table public.account_links enable row level security;
+grant select, delete on public.account_links to authenticated;
+grant all on public.account_links to service_role;
+create policy account_links_select on public.account_links for select to authenticated using (a = (select auth.uid()));
+create policy account_links_delete on public.account_links for delete to authenticated using (a = (select auth.uid()) or b = (select auth.uid()));

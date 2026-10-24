@@ -1,4 +1,4 @@
-const VERSION = "nook-3.2.26";
+const VERSION = "nook-3.2.27";
 const SHARE_CACHE = "nook-share";
 const SHELL = ["./", "index.html", "app.js", "update.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => {

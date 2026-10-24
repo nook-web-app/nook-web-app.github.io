@@ -33,11 +33,11 @@ Deno.serve(async (req) => {
   try { body = await req.json(); } catch { return json({ error: "Bad request" }, 400); }
   if (typeof body.email !== "string" || typeof body.password !== "string") return json({ error: "Enter your email and password" }, 400);
 
-  const { data: uid, error: le } = await admin.rpc("nook_ban_login", { p_email: body.email, p_password: body.password });
-  if (le) {
-    if (/locked/i.test(le.message || "")) return json({ error: "Too many tries. Wait 15 minutes and try again." }, 429);
-    return json({ error: "Something went wrong. Try again later." }, 500);
-  }
+  const { data: chk, error: le } = await admin.rpc("nook_ban_check", { p_email: body.email, p_password: body.password });
+  if (le) return json({ error: "Something went wrong. Try again later." }, 500);
+  const res = Array.isArray(chk) ? chk[0] : chk;
+  if (res && res.locked_until) return json({ error: "locked", until: new Date(res.locked_until).toISOString() }, 429);
+  const uid = res ? res.uid : null;
   if (!uid) return json({ error: "Wrong email or password, or there is no backup for this account." }, 401);
 
   const { data: row, error: re } = await admin.from("ban_archive").select("data, expires_at, banned_at").eq("user_id", uid).maybeSingle();

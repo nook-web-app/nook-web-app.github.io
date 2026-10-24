@@ -133,7 +133,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.2.26";
+const APP_VERSION = "3.2.27";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2577,8 +2577,14 @@ function editProfile() {
   });
 }
 
-function verifyPassword(pw) {
-  return sb.auth.signInWithPassword({ email: sbUser.email, password: pw }).then(({ error }) => !error);
+// checks the current password through the signin function so the same limit applies; { ok, msg }
+async function verifyPassword(pw) {
+  const r = await callFn("signin", { check: true, password: pw }).catch(() => null);
+  if (!r) return { ok: false, msg: "Could not reach Nook. Check your connection" };
+  if (r.ok) return { ok: true };
+  const e = r.body && r.body.error;
+  if (e === "wrong_password") return { ok: false, msg: "Current password is wrong" + (r.body.left > 0 ? ". " + r.body.left + (r.body.left === 1 ? " try" : " tries") + " left before a wait" : "") };
+  return { ok: false, msg: signinMsg(r) };
 }
 function changePassV() {
   const cur = h("input", { class: "in", type: "password", placeholder: "Current password", autocomplete: "current-password", "aria-label": "Current password" });
@@ -2598,10 +2604,11 @@ function changePassV() {
       if (nw.value === cur.value) { msg.textContent = "Pick a different password"; return; }
       busy = true;
       try {
-        if (!(await verifyPassword(cur.value))) { msg.textContent = "Current password is wrong"; return; }
+        const vp = await verifyPassword(cur.value);
+        if (!vp.ok) { msg.textContent = vp.msg; return; }
         if (await pwnedPassword(nw.value)) { msg.textContent = PWNED_MSG; return; }
         const { error } = await sb.auth.updateUser({ password: nw.value });
-        if (error) { msg.textContent = error.message; return; }
+        if (error) { msg.textContent = authMsg(error); return; }
         close();
         toast("Password changed");
       } finally { busy = false; }
@@ -2625,9 +2632,10 @@ function changeEmailV() {
       if (e === (sbUser.email || "").toLowerCase()) { msg.textContent = "That is already your email"; return; }
       busy = true;
       try {
-        if (!(await verifyPassword(cur.value))) { msg.textContent = "Current password is wrong"; return; }
+        const vp = await verifyPassword(cur.value);
+        if (!vp.ok) { msg.textContent = vp.msg; return; }
         const { error } = await sb.auth.updateUser({ email: e });
-        if (error) { msg.textContent = error.message; return; }
+        if (error) { msg.textContent = authMsg(error); return; }
         close();
         toast("Confirmation link sent to " + e);
       } finally { busy = false; }
@@ -2649,7 +2657,6 @@ function openDrawer() {
 }
 
 const BAN_EMAIL = "nook-banned-email";
-const isBanErr = e => !!e && (e.code === "user_banned" || /banned/i.test(e.message || ""));
 // what is saved on this phone (posts, chats, profile picture) belongs to the account that used it last
 const LOCAL_UID = "nook-local-uid";
 async function foreignLocalData(acct) {
@@ -2831,7 +2838,7 @@ function bannedDownload() {
         const r = await fetch(SB_URL + "/functions/v1/ban-export", { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY }, body: JSON.stringify({ email: e, password: pw.value }) });
         let j = null;
         try { j = await r.json(); } catch (x) {}
-        if (!r.ok || !j) { msg.textContent = (j && j.error) || "Could not get your data. Try again later."; return; }
+        if (!r.ok || !j) { msg.textContent = j && j.error === "locked" ? lockedMsg(j.until) : (j && j.error) || "Could not get your data. Try again later."; return; }
         const zip = await buildBanZip(j, t => { msg.textContent = t; });
         close();
         saveSheet(zip.blob, "nook-data-" + new Date().toISOString().slice(0, 10) + ".zip", zip.count);
@@ -2995,7 +3002,7 @@ function newPasswordModal() {
       try {
         if (await pwnedPassword(pw.value)) { msg.textContent = PWNED_MSG; return; }
         const { error } = await sb.auth.updateUser({ password: pw.value });
-        if (error) { msg.textContent = error.message; return; }
+        if (error) { msg.textContent = authMsg(error); return; }
         close();
         toast("Password changed");
       } finally { m.act.disabled = false; }
@@ -3127,7 +3134,10 @@ function authV() {
   btn.addEventListener("click", async () => {
     msg.textContent = "";
     const e = email.value.trim(), p = pass.value, u = user.value.trim();
-    if (!e || !p) { msg.textContent = "Enter email and password"; return; }
+    if (!e && !p) { msg.textContent = "Enter your email and password"; return; }
+    if (!e) { msg.textContent = "Enter your email"; return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e)) { msg.textContent = "That email does not look right. Check for typos"; return; }
+    if (!p) { msg.textContent = "Enter your password"; return; }
     btn.disabled = true;
     try {
       if (up) {
@@ -3138,7 +3148,7 @@ function authV() {
         if (p.length < 8) { msg.textContent = "Password needs at least 8 characters"; return; }
         if (await pwnedPassword(p)) { msg.textContent = PWNED_MSG; return; }
         const { data, error } = await sb.auth.signUp({ email: e, password: p });
-        if (error) { msg.textContent = error.message; return; }
+        if (error) { msg.textContent = authMsg(error); return; }
         if (!data.session) { msg.textContent = "Check your email to confirm, then sign in"; return; }
         const { error: ie } = await sb.from("accounts").insert({ id: data.user.id, username: u, display_name: dn });
         if (ie) {
@@ -3150,12 +3160,11 @@ function authV() {
         sbUser = data.user;
         await new Promise(r => setTimeout(r, 400));
       } else {
-        const { error } = await sb.auth.signInWithPassword({ email: e, password: p });
-        if (error) {
-          if (isBanErr(error)) { showBanned(e); return; }
-          msg.textContent = error.message;
-          return;
-        }
+        const r = await callFn("signin", { email: e, password: p }).catch(() => ({ ok: false, body: {} }));
+        if (r.body && r.body.error === "banned") { showBanned(e); return; }
+        if (!r.ok) { msg.textContent = signinMsg(r); return; }
+        const { error } = await sb.auth.setSession({ access_token: r.body.session.access_token, refresh_token: r.body.session.refresh_token });
+        if (error) { msg.textContent = "Could not sign in. Try again"; return; }
         try { localStorage.removeItem(BAN_EMAIL); } catch (x) {}
         await sb.rpc("set_my_deactivated", { flag: false });
       }
@@ -3295,6 +3304,42 @@ async function pwnedPassword(pw) {
   } catch (e) { return false; }
 }
 const PWNED_MSG = "That password was found in a data leak. Pick another one";
+// "at 9:45 AM" or "tomorrow at 9:45 AM", in the time zone of the phone
+function untilText(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return "a bit later";
+  const now = new Date(), tm = new Date(now.getTime() + 864e5);
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (d.toDateString() === now.toDateString()) return "at " + time;
+  if (d.toDateString() === tm.toDateString()) return "tomorrow at " + time;
+  return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) + " at " + time;
+}
+const lockedMsg = until => "Too many tries. Try again " + untilText(until);
+// what went wrong, in plain words, for an error from the sign up or account calls
+function authMsg(error) {
+  const c = String((error && error.code) || ""), m = String((error && error.message) || "");
+  if (c === "user_already_exists" || c === "email_exists" || /already (been )?registered/i.test(m)) return "An account with this email already exists. Sign in instead";
+  if (c === "weak_password" || (/password/i.test(m) && /(short|least|weak|characters)/i.test(m))) return "That password is too weak. Use 8 or more characters";
+  if (c === "same_password" || /different from the old/i.test(m)) return "Pick a password you are not using now";
+  if (c === "validation_failed" || c === "email_address_invalid" || (/email/i.test(m) && /(invalid|valid)/i.test(m))) return "That email does not look right. Check for typos";
+  if (c === "over_email_send_rate_limit" || c === "over_request_rate_limit" || (error && error.status === 429)) return "Too many tries. Wait a few minutes and try again";
+  if (c === "signup_disabled") return "New accounts are closed for now";
+  if (/network|fetch/i.test(m)) return "Could not reach Nook. Check your connection";
+  return m || "Something went wrong. Try again";
+}
+// the answer of the signin function turned into words; gives "" for no problem
+function signinMsg(r) {
+  const e = r.body && r.body.error;
+  if (r.ok) return "";
+  if (e === "locked") return lockedMsg(r.body.until);
+  if (e === "no_account") return "No account uses this email. Check the spelling or make an account";
+  if (e === "wrong_password") return "Wrong password for this email." + (r.body.left > 0 ? " " + r.body.left + (r.body.left === 1 ? " try" : " tries") + " left before a wait." : "") + " You can tap Forgot password";
+  if (e === "bad_email") return "That email does not look right. Check for typos";
+  if (e === "not_confirmed") return "This email is not confirmed yet. Open the link we sent you";
+  if (e === "no_email") return "Enter your email";
+  if (e === "no_password") return "Enter your password";
+  return "Could not sign in. Check your connection and try again";
+}
 async function callFn(name, body) {
   const { data } = await sb.auth.getSession();
   const tok = data && data.session ? data.session.access_token : null;

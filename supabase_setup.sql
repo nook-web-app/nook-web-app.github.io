@@ -1035,3 +1035,115 @@ begin
   end if;
   return new;
 end $$;
+
+-- v3.2.27 a ban keeps the chats: the account row stays (hidden) and only the rest is removed
+create or replace function public.nook_purge_banned_rows(p_user uuid) returns void language plpgsql security definer set search_path = public as $$
+begin
+  delete from public.posts where user_id = p_user;
+  delete from public.likes where user_id = p_user;
+  delete from public.reposts where user_id = p_user;
+  delete from public.follows where follower_id = p_user or followee_id = p_user;
+  delete from public.blocks where blocker_id = p_user or blocked_id = p_user;
+  delete from public.nicknames where owner_id = p_user or target_id = p_user;
+  delete from public.notifications where user_id = p_user or actor_id = p_user;
+  delete from public.push_subs where user_id = p_user;
+  delete from public.reports where reporter_id = p_user;
+  delete from public.mod_notices where user_id = p_user;
+  delete from public.zenith_docs where owner_id = p_user;
+  delete from public.app_owner where user_id = p_user;
+  delete from public.totp_secrets where user_id = p_user;
+  update public.accounts set deactivated = true where id = p_user;
+end $$;
+revoke all on function public.nook_purge_banned_rows(uuid) from public, anon, authenticated;
+grant execute on function public.nook_purge_banned_rows(uuid) to service_role;
+
+create or replace function public.nook_on_user_banned() returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.banned_until is not null and new.banned_until > now() and (old.banned_until is null or old.banned_until <= now()) then
+    insert into public.bans (user_id, email) values (new.id, new.email)
+      on conflict (user_id) do update set banned_at = now(), email = excluded.email;
+    perform public.nook_archive_user(new.id);
+    perform set_config('nook.keep_media', '1', true);
+    perform public.nook_archive_storage(new.id);
+    perform public.nook_purge_banned_rows(new.id);
+  elsif (new.banned_until is null or new.banned_until <= now()) and old.banned_until is not null and old.banned_until > now() then
+    perform public.nook_drop_ban_row(new.id);
+  end if;
+  return new;
+end $$;
+
+-- v3.2.27 login limit: 5 free tries per email, then waits of 45 min, 90 min, 3 h ... up to 48 h (functions/signin and functions/ban-export use these)
+create table if not exists public.login_limits (
+  key text primary key,
+  fails int not null default 0,
+  strikes int not null default 0,
+  locked_until timestamptz,
+  updated_at timestamptz not null default now()
+);
+alter table public.login_limits enable row level security;
+revoke all on public.login_limits from anon, authenticated;
+grant all on public.login_limits to service_role;
+create or replace function public.nook_login_lock(p_key text, p_first int, p_cap int) returns timestamptz language sql security definer set search_path = public as $$
+  update public.login_limits
+     set strikes = strikes + 1, fails = 0, updated_at = now(),
+         locked_until = now() + least(p_first * power(2, strikes), p_cap) * interval '1 minute'
+   where key = p_key
+  returning locked_until $$;
+create or replace function public.nook_login_gate(p_key text, p_max int default 5, p_first int default 45, p_cap int default 2880) returns timestamptz language plpgsql security definer set search_path = public as $$
+declare r public.login_limits%rowtype;
+begin
+  perform pg_advisory_xact_lock(hashtext('nook-login:' || p_key));
+  select * into r from public.login_limits where key = p_key;
+  if not found then
+    insert into public.login_limits (key, fails) values (p_key, 1);
+    return null;
+  end if;
+  if r.locked_until is not null and r.locked_until > now() then return r.locked_until; end if;
+  if r.updated_at < now() - interval '7 days' then
+    update public.login_limits set fails = 0, strikes = 0, locked_until = null where key = p_key;
+    r.fails := 0;
+  end if;
+  if r.fails >= p_max then return public.nook_login_lock(p_key, p_first, p_cap); end if;
+  update public.login_limits set fails = fails + 1, locked_until = null, updated_at = now() where key = p_key;
+  return null;
+end $$;
+create or replace function public.nook_login_fail(p_key text, p_max int default 5, p_first int default 45, p_cap int default 2880) returns table(locked_until timestamptz, used int) language plpgsql security definer set search_path = public as $$
+declare r public.login_limits%rowtype; v timestamptz;
+begin
+  perform pg_advisory_xact_lock(hashtext('nook-login:' || p_key));
+  select * into r from public.login_limits where key = p_key;
+  if not found then return query select null::timestamptz, 0; return; end if;
+  if r.locked_until is not null and r.locked_until > now() then return query select r.locked_until, r.fails; return; end if;
+  if r.fails >= p_max then
+    v := public.nook_login_lock(p_key, p_first, p_cap);
+    return query select v, p_max;
+    return;
+  end if;
+  return query select null::timestamptz, r.fails;
+end $$;
+create or replace function public.nook_login_ok(p_key text) returns void language sql security definer set search_path = public as $$
+  update public.login_limits set fails = 0, strikes = 0, locked_until = null, updated_at = now() where key = p_key $$;
+revoke all on function public.nook_login_lock(text, int, int) from public, anon, authenticated;
+revoke all on function public.nook_login_gate(text, int, int, int) from public, anon, authenticated;
+revoke all on function public.nook_login_fail(text, int, int, int) from public, anon, authenticated;
+revoke all on function public.nook_login_ok(text) from public, anon, authenticated;
+grant execute on function public.nook_login_lock(text, int, int) to service_role;
+grant execute on function public.nook_login_gate(text, int, int, int) to service_role;
+grant execute on function public.nook_login_fail(text, int, int, int) to service_role;
+grant execute on function public.nook_login_ok(text) to service_role;
+
+-- the backup download of a banned account uses the same limit
+create or replace function public.nook_ban_check(p_email text, p_password text) returns table(uid uuid, locked_until timestamptz) language plpgsql security definer set search_path = public, extensions as $$
+declare v_key text := 'b:' || lower(btrim(coalesce(p_email, ''))); v_id uuid; v_hash text; v_until timestamptz; v_good boolean;
+begin
+  if length(v_key) <= 2 or p_password is null or p_password = '' or length(p_password) > 200 then return query select null::uuid, null::timestamptz; return; end if;
+  v_until := public.nook_login_gate(v_key);
+  if v_until is not null then return query select null::uuid, v_until; return; end if;
+  select u.id, u.encrypted_password into v_id, v_hash from auth.users u join public.ban_archive a on a.user_id = u.id where lower(u.email) = substr(v_key, 3) and a.expires_at > now() limit 1;
+  if v_hash is null then v_hash := crypt('nook-dummy', gen_salt('bf', 10)); v_id := null; end if;
+  v_good := (crypt(p_password, v_hash) = v_hash) and v_id is not null;
+  if v_good then perform public.nook_login_ok(v_key); return query select v_id, null::timestamptz; return; end if;
+  return query select null::uuid, f.locked_until from public.nook_login_fail(v_key) f;
+end $$;
+revoke all on function public.nook_ban_check(text, text) from public, anon, authenticated;
+grant execute on function public.nook_ban_check(text, text) to service_role;

@@ -133,7 +133,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.3.4";
+const APP_VERSION = "3.3.5";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1644,15 +1644,7 @@ function settingsV() {
   main.append(sec("Appearance"));
   main.append(h("div", { class: "seg" }, [["system", "System"], ["dark", "Dark"], ["light", "Light"]].map(t => h("button", { class: S.ui.theme === t[0] ? "on" : "", onclick: () => { S.ui.theme = t[0]; applyTheme(); persist(); render(); } }, t[1]))));
   main.append(sec("Account"));
-  // the picture of another saved account sits in the switch row
   const swRow = row(ic("user", 22), "Switch account", "Add or switch account", openAccounts);
-  acctList().then(list => {
-    const other = list.find(a => a.id !== sbUser.id);
-    if (!other) return;
-    swRow.replaceChild(rAv({ name: other.name || other.username || "?", avatar: other.avatar || null }, 36), swRow.firstChild);
-    const sub = swRow.querySelector(".sub");
-    if (sub) sub.textContent = other.username ? "@" + other.username + " is saved here" : "Another account is saved here";
-  }).catch(() => {});
   main.append(h("div", { class: "group" }, row(avatar(36), "Edit profile", "@" + S.profile.handle, editProfile), swRow, row(ic("user", 22), "Sign out", "Log out of this device.", async () => { await pushDetach().catch(() => {}); await leaveThisAccount(); })));
   main.append(sec("Login"));
   const totpRow = row(ic("lock", 22), "Authenticator app", "Checking...", async () => {
@@ -3116,9 +3108,13 @@ async function rememberAccount(info) {
   const list = await acctList();
   const old = list.find(a => a.id === sbUser.id) || {};
   const av = info && typeof info.avatar === "string" && info.avatar.length < 400000 ? info.avatar : (info ? null : old.avatar || null);
-  const entry = { id: sbUser.id, rt: ss.refresh_token, username: (info && info.username) || old.username || "", name: (info && info.name) || old.name || "", avatar: av };
-  await acctPut("list", list.filter(a => a.id !== sbUser.id).concat(entry));
+  // the first account saved on this phone is the main one and cannot be removed from the list
+  const entry = { id: sbUser.id, rt: ss.refresh_token, username: (info && info.username) || old.username || "", name: (info && info.name) || old.name || "", avatar: av, main: old.main === true || (!list.some(a => a.id === sbUser.id) && list.length === 0) };
+  const at = list.findIndex(a => a.id === sbUser.id);
+  if (at >= 0) list[at] = entry; else list.push(entry);
+  await acctPut("list", list);
 }
+const mainAccountId = list => ((list.find(a => a.main) || list[0]) || {}).id;
 async function forgetAccount(id) {
   const list = await acctList();
   await acctPut("list", list.filter(a => a.id !== id));
@@ -3171,12 +3167,13 @@ async function leaveThisAccount() {
 }
 function addAccountModal() {
   const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "email", "aria-label": "Email" });
-  const pass = h("input", { class: "in", type: "password", placeholder: "Password", autocomplete: "current-password", "aria-label": "Password" });
+  const pass = h("input", { class: "in", type: "password", placeholder: "Password", autocomplete: "current-password", "aria-label": "Password", style: "padding-right:60px" });
+  const eye = h("button", { type: "button", class: "tbtn", "aria-label": "Show password", style: "position:absolute;right:14px;top:50%;transform:translateY(-50%);padding:6px 0;color:var(--muted);font-size:var(--fs-md);font-weight:600", onclick: () => { const show = pass.type === "password"; pass.type = show ? "text" : "password"; eye.textContent = show ? "Hide" : "Show"; eye.setAttribute("aria-label", show ? "Hide password" : "Show password"); } }, "Show");
   const msg = h("p", { class: "note", role: "alert" });
   const m = modal({
     title: "Add account",
     action: "Add",
-    body: [h("p", { class: "note" }, "Sign in to the other account. Its login stays on this phone only."), h("div", { class: "fld" }, email), h("div", { class: "fld" }, pass), msg],
+    body: [h("p", { class: "note" }, "Sign in to the other account. Its login stays on this phone only."), h("div", { class: "fld" }, email), h("div", { class: "fld", style: "position:relative" }, pass, eye), msg],
     onAction: async close => {
       msg.textContent = "";
       const e = email.value.trim();
@@ -3190,20 +3187,35 @@ function addAccountModal() {
         const { data: u } = await sb.auth.getUser(r.body.session.access_token);
         if (!u || !u.user) { msg.textContent = "Could not sign in. Try again"; return; }
         if (u.user.id === sbUser.id) { msg.textContent = "That is the account you are in"; return; }
+        // the name, handle and picture are public, so they are read before the account is shown anywhere
+        const { data: info } = await sb.from("accounts").select("id, username, display_name, avatar").eq("id", u.user.id).maybeSingle();
+        if (!info || !info.username) { msg.textContent = "Could not load that account. Try again"; return; }
         const list = await acctList();
-        await acctPut("list", list.filter(a => a.id !== u.user.id).concat({ id: u.user.id, rt: r.body.session.refresh_token, username: "", name: "", avatar: null }));
+        await acctPut("list", list.filter(a => a.id !== info.id).concat({ id: info.id, rt: r.body.session.refresh_token, username: info.username, name: info.display_name || info.username, avatar: typeof info.avatar === "string" && info.avatar.length < 400000 ? info.avatar : null, main: false }));
         close();
-        await switchAccount(u.user.id);
+        toast("Account added");
+        setTimeout(openAccounts, 350);
       } finally { m.act.disabled = false; }
     }
   });
 }
 async function openAccounts() {
-  const list = await acctList();
+  const all = await acctList();
+  const list = all.filter(a => a.username);
   const nm = a => a.name || a.username || "Account";
   const items = list.map(a => ({ av: { name: nm(a), avatar: a.avatar || null }, label: a.username ? "@" + a.username : nm(a), on: a.id === sbUser.id, fn: a.id === sbUser.id ? null : () => switchAccount(a.id) }));
-  items.push({ icon: "plus", label: "Add account", fn: addAccountModal }, { label: "Cancel", cancel: true });
+  items.push({ icon: "plus", label: "Add account", fn: addAccountModal });
+  // an added account can be taken off this phone; the main one and the open one cannot
+  const mid = mainAccountId(all);
+  const removable = list.filter(a => a.id !== mid && a.id !== sbUser.id);
+  if (removable.length) items.push({ icon: "close", label: "Remove an account", fn: () => removeAccountSheet(removable) });
+  items.push({ label: "Cancel", cancel: true });
   sheet(items, "Accounts on this phone");
+}
+function removeAccountSheet(list) {
+  const items = list.map(a => ({ av: { name: a.name || a.username, avatar: a.avatar || null }, label: "@" + a.username, danger: true, fn: () => confirmSheet("Remove @" + a.username + " from this phone? You need its password to add it again.", "Remove", async () => { await forgetAccount(a.id); toast("Account removed"); }) }));
+  items.push({ label: "Cancel", cancel: true });
+  sheet(items, "Remove which account?");
 }
 function handleOpen(v) {
   if (!sbUser || !v) return;
@@ -4677,7 +4689,13 @@ async function boot() {
     ageHeld = !!(acct && acct.age_hold);
     if (!aerr && (!acct || acct.deactivated)) { await sb.auth.signOut(); sbUser = null; }
     else if (sbUser && await foreignLocalData(acct)) { await wipeLocal(true); try { localStorage.setItem(LOCAL_UID, sbUser.id); } catch (e) {} location.reload(); return; }
-    if (sbUser && acct) rememberAccount({ username: acct.username, name: acct.display_name, avatar: acct.avatar }).catch(() => {});
+    if (sbUser && acct) {
+      // no "Me" while the profile loads: the real name, handle and picture are in place before the first screen
+      if (acct.username) S.profile.handle = acct.username;
+      if (acct.display_name) S.profile.name = acct.display_name;
+      if (acct.avatar) S.profile.avatar = acct.avatar;
+      rememberAccount({ username: acct.username, name: acct.display_name, avatar: acct.avatar }).catch(() => {});
+    }
     if (sbUser) sb.auth.onAuthStateChange((ev, session) => {
       if (switching || !session || !sbUser) return;
       // another tab switched accounts: this one follows

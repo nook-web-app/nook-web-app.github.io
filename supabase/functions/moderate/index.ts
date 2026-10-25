@@ -9,7 +9,6 @@ async function geminiKey(): Promise<string> {
   keyCache = { v: typeof data === "string" ? data : "", at: Date.now() };
   return keyCache.v;
 }
-const MODEL = Deno.env.get("ZENITH_MODEL") || "gemini-3.5-flash-lite";
 const MAX_IMG = 12 * 1024 * 1024;
 const PER_SWEEP = 5;
 
@@ -108,7 +107,7 @@ function readVerdict(j: any): Verdict {
 
 // when the AI service cannot answer (quota, outage) a post is NOT given up on: it stays waiting until the service is back
 let aiDown = false;
-const MODELS = [MODEL, "gemini-3.1-flash-lite", "gemma-4-26b-a4b-it"];
+const MODELS = ["gemma-4-26b-a4b-it"];
 async function ask(parts: unknown[], system = SYSTEM): Promise<Verdict> {
   const key = await geminiKey();
   if (!key) { lastNote = "no gemini key in the vault"; aiDown = true; return null; }

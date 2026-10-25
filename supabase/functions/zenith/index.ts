@@ -25,7 +25,7 @@ function json(body: unknown, status = 200): Response {
 const okUntil = new Map<string, number>();
 
 // the answer comes straight from Gemini; when a model has no quota left (429) or is overloaded the next one in the list answers
-const MODELS = [MODEL, "gemini-3.1-flash-lite", "gemma-4-26b-a4b-it"];
+const MODELS = [MODEL, "gemini-3.1-flash-lite"];
 async function gemini(key: string, system: unknown, history: unknown, stream: boolean): Promise<Response> {
   let last: Response | null = null;
   for (const model of MODELS) {

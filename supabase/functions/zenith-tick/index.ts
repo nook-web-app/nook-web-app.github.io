@@ -17,7 +17,7 @@ async function geminiKey(): Promise<string> {
 const MODEL = Deno.env.get("ZENITH_MODEL") || "gemini-3.5-flash-lite";
 
 // straight to Gemini with the key from the vault; a model without quota hands over to the next one
-const MODELS = [MODEL, "gemini-3.1-flash-lite", "gemma-4-26b-a4b-it"];
+const MODELS = [MODEL, "gemini-3.1-flash-lite"];
 async function generate(_password: string, system: string, history: unknown): Promise<Response> {
   const key = await geminiKey();
   if (!key) return new Response("no gemini key in the vault", { status: 500 });

@@ -115,22 +115,40 @@ function readVerdict(j: any): Verdict {
 
 // moderation only uses Gemma 4 (high daily limit); the 31B one takes over when the 26B one is out of tokens for the minute or the day. Zenith has its own models so they never share this quota
 const MODELS = ["gemma-4-26b-a4b-it", "gemma-4-31b-it"];
+// checks take turns between the models; one that answered "busy" rests for a short while, and when every model is resting
+// the check waits for the first one to be free (or stays queued for the next sweep when that takes too long)
+const busyUntil: Record<string, number> = {};
+const REST_MS = 20000, WAIT_MS = 15000;
+let turn = 0;
+const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 async function ask(parts: unknown[], system = SYSTEM): Promise<Verdict> {
   const key = await geminiKey();
   if (!key) { C().lastNote = "no gemini key in the vault"; C().aiDown = true; return null; }
   try {
     let r: Response | null = null;
-    for (const model of MODELS) {
-      const call = (think: boolean) => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: [{ role: "user", parts }], generationConfig: { temperature: 0, maxOutputTokens: 400, ...(think ? { thinkingConfig: { thinkingLevel: "low" } } : {}) } }),
-      });
-      r = await call(true);
-      if (r.status === 400) r = await call(false);
-      // a model whose quota is used up or that is overloaded hands over to the next one
-      if (r.status === 429 || r.status >= 500) continue;
-      break;
+    for (let round = 0; round < 3; round++) {
+      const now = Date.now();
+      const start = turn++;
+      const free = MODELS.map((_, i) => MODELS[(start + i) % MODELS.length]).filter((m) => (busyUntil[m] || 0) <= now);
+      if (!free.length) {
+        const wait = Math.min(...MODELS.map((m) => busyUntil[m] || 0)) - now;
+        if (wait > WAIT_MS) break;
+        await sleep(Math.max(wait, 200));
+        continue;
+      }
+      for (const model of free) {
+        const call = (think: boolean) => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-goog-api-key": key },
+          body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: [{ role: "user", parts }], generationConfig: { temperature: 0, maxOutputTokens: 400, ...(think ? { thinkingConfig: { thinkingLevel: "low" } } : {}) } }),
+        });
+        r = await call(true);
+        if (r.status === 400) r = await call(false);
+        // a model whose quota is used up or that is overloaded rests and the next one takes the check
+        if (r.status === 429 || r.status >= 500) { busyUntil[model] = Date.now() + (r.status === 429 ? REST_MS : 5000); continue; }
+        break;
+      }
+      if (r && r.status !== 429 && r.status < 500) break;
     }
     if (!r || !r.ok) { C().lastNote = "gemini " + (r ? r.status : "none") + " " + (r ? (await r.text()).slice(0, 120) : ""); if (!r || r.status === 429 || r.status >= 500) C().aiDown = true; return null; }
     const j = await r.json();

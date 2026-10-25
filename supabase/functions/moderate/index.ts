@@ -96,7 +96,7 @@ function readVerdict(j: any): Verdict {
   const c = j && j.candidates && j.candidates[0];
   if (!c) return null;
   // deno-lint-ignore no-explicit-any
-  const t = ((c.content && c.content.parts) || []).map((p: any) => p.text || "").join(" ").trim();
+  const t = ((c.content && c.content.parts) || []).filter((p: any) => !p.thought).map((p: any) => p.text || "").join(" ").trim();
   const first = (t.split(/\s+/)[0] || "").replace(/[^A-Za-z]/g, "").toUpperCase();
   if (first === "SEXUAL" || first === "UNSAFE") { why = "the AI said: " + t.slice(0, 200); return "sexual"; }
   if (first === "RULES") { why = t.replace(/^\S+\s*/, "").slice(0, 120) || "it breaks the rules"; return "rules"; }
@@ -108,7 +108,7 @@ function readVerdict(j: any): Verdict {
 
 // when the AI service cannot answer (quota, outage) a post is NOT given up on: it stays waiting until the service is back
 let aiDown = false;
-const MODELS = [MODEL, "gemini-3.1-flash-lite"];
+const MODELS = [MODEL, "gemini-3.1-flash-lite", "gemma-4-26b-a4b-it"];
 async function ask(parts: unknown[], system = SYSTEM): Promise<Verdict> {
   const key = await geminiKey();
   if (!key) { lastNote = "no gemini key in the vault"; aiDown = true; return null; }

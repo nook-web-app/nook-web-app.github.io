@@ -24,19 +24,27 @@ function json(body: unknown, status = 200): Response {
 // an owner check that was already done for this login is remembered for a few minutes, so a message does not wait for it again
 const okUntil = new Map<string, number>();
 
-// the answer comes straight from Gemini
+// the answer comes straight from Gemini; when a model has no quota left (429) or is overloaded the next one in the list answers
+const MODELS = [MODEL, "gemini-3.1-flash-lite", "gemma-4-26b-a4b-it"];
 async function gemini(key: string, system: unknown, history: unknown, stream: boolean): Promise<Response> {
-  const url = "https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + (stream ? ":streamGenerateContent?alt=sse" : ":generateContent");
-  const make = () => fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": key },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: String(system || "") }] },
-      contents: history,
-      generationConfig: { temperature: 1, maxOutputTokens: 220, thinkingConfig: { thinkingLevel: "minimal" } },
-    }),
-  });
-  return await make();
+  let last: Response | null = null;
+  for (const model of MODELS) {
+    const url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + (stream ? ":streamGenerateContent?alt=sse" : ":generateContent");
+    const call = (think: boolean) => fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: String(system || "") }] },
+        contents: history,
+        generationConfig: { temperature: 1, maxOutputTokens: 220, ...(think ? { thinkingConfig: { thinkingLevel: "minimal" } } : {}) },
+      }),
+    });
+    let r = await call(true);
+    if (r.status === 400) r = await call(false);
+    if (r.status === 429 || r.status >= 500) { last = r; continue; }
+    return r;
+  }
+  return last as Response;
 }
 
 // the app owner talks to Zenith through here, so the Gemini key never reaches the phone

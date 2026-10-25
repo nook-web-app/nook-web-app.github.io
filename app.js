@@ -167,7 +167,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.32";
+const APP_VERSION = "3.4.33";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1650,7 +1650,7 @@ async function zStream(history, onText) {
       if (!ln.startsWith("data:")) continue;
       try {
         const j = JSON.parse(ln.slice(5));
-        const t = ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).map(p => p.text || "").join("");
+        const t = ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).filter(p => !p.thought).map(p => p.text || "").join("");
         if (t) { out += t; onText(out); }
       } catch (e) {}
     }
@@ -1726,7 +1726,7 @@ async function zGen(system, text, imgs) {
   const r = await zFetch({ system: zNow(system), history: [{ role: "user", parts }] });
   if (!r.ok) throw new Error("zenith " + r.status);
   const j = await r.json();
-  return ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).map(p => p.text || "").join("").replace(/\s*\n+\s*/g, " ").trim();
+  return ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).filter(p => !p.thought).map(p => p.text || "").join("").replace(/\s*\n+\s*/g, " ").trim();
 }
 function zenPost(text, parent, id) {
   const p = { id: id || uid(), text, t: Date.now(), imgs: [], parent: parent || null, ai: true, liked: false, reposted: false, saved: false, pinned: false };

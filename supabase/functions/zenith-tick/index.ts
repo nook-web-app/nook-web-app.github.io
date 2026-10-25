@@ -16,16 +16,24 @@ async function geminiKey(): Promise<string> {
 }
 const MODEL = Deno.env.get("ZENITH_MODEL") || "gemini-3.5-flash-lite";
 
-// straight to Gemini with the key from the vault
+// straight to Gemini with the key from the vault; a model without quota hands over to the next one
+const MODELS = [MODEL, "gemini-3.1-flash-lite", "gemma-4-26b-a4b-it"];
 async function generate(_password: string, system: string, history: unknown): Promise<Response> {
   const key = await geminiKey();
   if (!key) return new Response("no gemini key in the vault", { status: 500 });
-  const make = () => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + ":generateContent", {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": key },
-    body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: history, generationConfig: { temperature: 1, maxOutputTokens: 220, thinkingConfig: { thinkingLevel: "minimal" } } }),
-  });
-  return await make();
+  let last: Response | null = null;
+  for (const model of MODELS) {
+    const call = (think: boolean) => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: history, generationConfig: { temperature: 1, maxOutputTokens: 220, ...(think ? { thinkingConfig: { thinkingLevel: "minimal" } } : {}) } }),
+    });
+    let r = await call(true);
+    if (r.status === 400) r = await call(false);
+    if (r.status === 429 || r.status >= 500) { last = r; continue; }
+    return r;
+  }
+  return last as Response;
 }
 
 let cached: string | null = null;
@@ -86,7 +94,7 @@ Deno.serve(async (req) => {
     const r = await generate(password, system, [{ role: "user", parts: [{ text: "Write your next post." }] }]);
     if (!r.ok) return json({ error: "gemini " + r.status }, 502);
     const j = await r.json();
-    text = ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).map((p: { text?: string }) => p.text || "").join("").replace(/\s*\n+\s*/g, " ").trim();
+    text = ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).filter((p: { thought?: boolean }) => !p.thought).map((p: { text?: string }) => p.text || "").join("").replace(/\s*\n+\s*/g, " ").trim();
   } catch { return json({ error: "gemini unreachable" }, 502); }
   if (!text) return json({ skipped: "empty answer" });
   text = text.slice(0, 600);
@@ -107,7 +115,7 @@ async function ask(password: string, system: string, text: string): Promise<stri
   const r = await generate(password, system, [{ role: "user", parts: [{ text }] }]);
   if (!r.ok) return "";
   const j = await r.json();
-  return ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).map((p: { text?: string }) => p.text || "").join("").replace(/\s*\n+\s*/g, " ").trim();
+  return ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).filter((p: { thought?: boolean }) => !p.thought).map((p: { text?: string }) => p.text || "").join("").replace(/\s*\n+\s*/g, " ").trim();
 }
 
 // the app answers the owner's posts at once while it is open; this runs every minute and only takes the posts the app left alone for a while (the app is closed)

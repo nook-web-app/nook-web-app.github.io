@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.9.1";
+const APP_VERSION = "3.9.2";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1229,9 +1229,11 @@ function listSheet(p) {
   sheet(items, "Add to list");
 }
 
+// one prompt per visit, so the box does not change every time the page is drawn
+const PH_NOW = PH[Math.floor(Math.random() * PH.length)];
 function composerRow() {
   return h("div", { class: "cr" }, avatar(40),
-    h("button", { class: "ph", onclick: () => openCompose() }, PH[Math.floor(Math.random() * PH.length)]),
+    h("button", { class: "ph", onclick: () => openCompose() }, PH_NOW),
     pickBtn("camera", "Take a photo", true, files => openCompose({ files })),
     pickBtn("image", "Add photos", false, files => openCompose({ files }), true));
 }
@@ -3031,7 +3033,7 @@ function openCompose(o) {
   const jobs = [];
   const draftText = !ed && !parent && S.draft && Date.now() - S.draft.t < 120000 ? S.draft.text : "";
   const startText = ed ? ed.text : o.prefix ? o.prefix : draftText;
-  const ta = h("textarea", { class: "cta", id: "ctext", maxlength: "5000", placeholder: parent ? "Write your reply" : PH[Math.floor(Math.random() * PH.length)], "aria-label": "Post text" });
+  const ta = h("textarea", { class: "cta", id: "ctext", maxlength: "5000", placeholder: parent ? "Write your reply" : PH_NOW, "aria-label": "Post text" });
   ta.value = startText;
   const grid = h("div", { class: "cimgs" });
   const bCam = pickBtn("camera", "Take a photo", true, files => addFiles(files));

@@ -83,7 +83,6 @@ const P = {
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/>',
-  paste: '<rect x="5" y="5" width="14" height="16" rx="2.5"/><path d="M9 5V4.2A1.2 1.2 0 0 1 10.200 3h3.6A1.2 1.2 0 0 1 15 4.2V5"/><path d="M9 12l2 2 4-4.500"/>',
   image: '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.5"/><path d="M21 16l-5-5-8 8"/>',
   camera: '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
   reply: '<path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/>',
@@ -176,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.11.0";
+const APP_VERSION = "3.11.1";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1440,8 +1439,7 @@ function convV(c) {
     strip.hidden = !pend.length && !jobs.length;
     sync();
   };
-  const att = pickBtn("image", "Add photo", false, f => addMedia(f, pend, jobs, 4, draw));
-  const pst = pasteBtn(f => addMedia(f, pend, jobs, 4, draw));
+  const att = pickBtn("image", "Add photo", false, f => addMedia(f, pend, jobs, 4, draw), false, f => addMedia(f, pend, jobs, 4, draw));
   onPastePics(ta, f => addMedia(f, pend, jobs, 4, draw));
   ta.addEventListener("input", sync);
   send.addEventListener("click", () => {
@@ -1466,7 +1464,7 @@ function convV(c) {
   const zpop = h("button", { class: "zpop", type: "button" }, zenAv(34), h("span", {}, h("b", {}, "Zenith AI")));
   zpop.addEventListener("pointerdown", e => e.preventDefault());
   zpop.addEventListener("click", () => { ta.value = ta.value.replace(/@\w*$/, "@zenith "); zpop.classList.remove("on"); chat.draft = ta.value; persist(); sync(); ta.focus(); });
-  const dock = h("div", { class: "cdock" }, zpop, strip, h("div", { class: "cin" }, att, pst, ta, send));
+  const dock = h("div", { class: "cdock" }, zpop, strip, h("div", { class: "cin" }, att, ta, send));
   ta.addEventListener("input", () => { chat.draft = ta.value; persist(); zpop.classList.toggle("on", zOn() && /@\w*$/.test(ta.value)); });
   sync();
   send.addEventListener("pointerdown", e => e.preventDefault());
@@ -2322,23 +2320,19 @@ function onPastePics(ta, take) {
     take(fs);
   });
 }
-// the copied photo is read from the clipboard when the button is tapped; the phone asks once whether to allow it
-function pasteBtn(onFiles) {
-  const b = h("button", { class: "ib", type: "button", title: "Paste photo", "aria-label": "Paste photo" }, ic("paste", 24));
-  b.addEventListener("click", async () => {
-    try {
-      const files = [];
-      for (const it of await navigator.clipboard.read()) {
-        const t = it.types.find(x => /^image\//.test(x));
-        if (t) files.push(new File([await it.getType(t)], "pasted." + (t.split("/")[1] || "png"), { type: t }));
-      }
-      if (!files.length) { toast("No copied photo found"); return; }
-      await onFiles(files);
-    } catch (e) { toast("Could not paste. Allow paste and try again"); }
-  });
-  return b;
+// the copied photo is read from the clipboard on a double tap of the photo button; the phone asks once whether to allow it
+async function clipboardPics() {
+  try {
+    const files = [];
+    for (const it of await navigator.clipboard.read()) {
+      const t = it.types.find(x => /^image\//.test(x));
+      if (t) files.push(new File([await it.getType(t)], "pasted." + (t.split("/")[1] || "png"), { type: t }));
+    }
+    if (!files.length) toast("No copied photo found");
+    return files;
+  } catch (e) { toast("Could not paste. Allow paste and try again"); return []; }
 }
-function pickBtn(icon, label, camera, onFiles, multi) {
+function pickBtn(icon, label, camera, onFiles, multi, onPaste) {
   const inp = h("input", { type: "file", accept: "image/*", class: "vh", multiple: !camera && multi ? true : null, "aria-label": label });
   if (camera) inp.setAttribute("capture", "environment");
   inp.addEventListener("change", () => {
@@ -2346,7 +2340,18 @@ function pickBtn(icon, label, camera, onFiles, multi) {
     if (!f.length) return;
     Promise.resolve(onFiles(f)).then(() => { inp.value = ""; }, () => { inp.value = ""; });
   });
-  return h("label", { class: "ib", title: label }, ic(icon, 24), inp);
+  const lab = h("label", { class: "ib", title: label }, ic(icon, 24), inp);
+  // one tap opens the picker (after a short wait), two quick taps paste the copied photo
+  if (onPaste) {
+    let t = 0;
+    lab.addEventListener("click", e => {
+      if (!e.isTrusted) return;
+      e.preventDefault();
+      if (t) { clearTimeout(t); t = 0; clipboardPics().then(fs => { if (fs.length) onPaste(fs); }); return; }
+      t = setTimeout(() => { t = 0; inp.click(); }, 260);
+    });
+  }
+  return lab;
 }
 
 const isVideo = f => /^video\//.test(f.type) || /\.(mp4|mov|m4v|webm|3gp|mkv|avi)$/i.test(f.name || "");
@@ -3066,8 +3071,7 @@ function openCompose(o) {
   ta.value = startText;
   const grid = h("div", { class: "cimgs" });
   const bCam = pickBtn("camera", "Take a photo", true, files => addFiles(files));
-  const bImg = pickBtn("image", "Add photos", false, files => addFiles(files), true);
-  const bPst = pasteBtn(files => addFiles(files));
+  const bImg = pickBtn("image", "Add photos", false, files => addFiles(files), true, files => addFiles(files));
   onPastePics(ta, files => addFiles(files));
   const keepDraft = () => { if (!ed && !parent && ta.value.trim()) { S.draft = { text: ta.value, t: Date.now() }; persist(); } };
   const kind = ed ? "Save" : parent ? "Reply" : "Post";
@@ -3080,7 +3084,7 @@ function openCompose(o) {
       h("div", { class: "crow" }, avatar(40), ta),
       grid
     ],
-    foot: h("div", { class: "cfoot" }, bCam, bImg, bPst),
+    foot: h("div", { class: "cfoot" }, bCam, bImg),
     onCancel: close => {
       const dirty = ta.value !== startText || imgs.length !== (ed ? ed.imgs.length : 0);
       if (dirty) sheet([{ label: "Discard", danger: true, fn: () => { S.draft = null; persist(); close(); } }, { label: "Keep editing", cancel: true }], "Discard this post?");
@@ -3116,7 +3120,6 @@ function openCompose(o) {
     m.act.disabled = jobs.length > 0 || (!ta.value.trim() && !imgs.length);
     const full = imgs.length + jobs.length >= 4;
     [bCam, bImg].forEach(b => { b.classList.toggle("off", full); b.querySelector("input").disabled = full; });
-    bPst.classList.toggle("off", full); bPst.disabled = full;
     ta.style.height = "auto";
     ta.style.height = Math.max(130, ta.scrollHeight) + "px";
   }
@@ -5672,15 +5675,14 @@ function dmV(c) {
     strip.hidden = !pend.length && !jobs.length;
     sync();
   };
-  const att = pickBtn("image", "Add photo", false, f => addMedia(f, pend, jobs, 4, draw), true);
-  const pst = pasteBtn(f => addMedia(f, pend, jobs, 4, draw));
+  const att = pickBtn("image", "Add photo", false, f => addMedia(f, pend, jobs, 4, draw), true, f => addMedia(f, pend, jobs, 4, draw));
   onPastePics(ta, f => addMedia(f, pend, jobs, 4, draw));
   const lockNote = h("div", { class: "lockn", hidden: true });
   const zpop = h("button", { class: "zpop", type: "button" }, zenAv(34), h("span", {}, h("b", {}, "Zenith AI")));
   zpop.addEventListener("pointerdown", e => e.preventDefault());
   zpop.addEventListener("click", () => { ta.value = ta.value.replace(/@\w*$/, "@zenith "); zpop.classList.remove("on"); sync(); ta.focus(); });
   ta.addEventListener("input", () => zpop.classList.toggle("on", zOn() && /@\w*$/.test(ta.value)));
-  const dock = h("div", { class: "cdock" }, zpop, lockNote, strip, h("div", { class: "cin" }, att, pst, ta, send));
+  const dock = h("div", { class: "cdock" }, zpop, lockNote, strip, h("div", { class: "cin" }, att, ta, send));
   const applyLock = reason => {
     if (reason === locked) return;
     locked = reason;

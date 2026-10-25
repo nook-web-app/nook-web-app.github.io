@@ -167,7 +167,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.30";
+const APP_VERSION = "3.4.31";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -945,7 +945,7 @@ async function sharePost(p) {
   sheet([
     { icon: "edit", label: "Post", fn: async () => { const b = await pic(); if (b) openCompose({ files: [new File([b], "nook-post.png", { type: "image/png" })] }); } },
     ...(targets.length ? [{ icon: "chat", label: "Message", fn: () => chooseTarget(targets, async t => {
-      if (p.ai && t.kind === "user") { try { await sendDm(t.id, ZPOST + JSON.stringify({ x: p.text, t: p.t }), [], []); toast("Sent to " + t.name); } catch (e) { toast("Could not send"); } return; }
+      if (p.ai && t.kind === "user") { try { const pu = await zenPfpUrl(); await sendDm(t.id, ZPOST + JSON.stringify({ x: p.text, t: p.t, ...(pu ? { a: pu } : {}) }), [], []); toast("Sent to " + t.name); } catch (e) { toast("Could not send"); } return; }
       if (p.remote && t.kind === "user") { try { await sendDm(t.id, RPOST + JSON.stringify({ id: p.remote, u: p.ra ? p.ra.id : sbUser.id }), [], []); toast("Sent to " + t.name); } catch (e) { toast("Could not send. " + plainErr(e, "Try again")); } return; }
       const b = await pic(); if (b) sendPicTo(t, b, true);
     }) }] : []),
@@ -1929,6 +1929,7 @@ function zenEdit() {
       if (bnVal === "avatar" && pfp) S.zen.bn = "avatar"; else delete S.zen.bn;
       S.zen.pfpAt = Date.now();
       persist(); close(); render();
+      if (pfp) zenPfpUrl();
     }
   });
 }
@@ -4810,6 +4811,22 @@ function loadRPost(id, hint) {
   }
   return rpCache.get(id);
 }
+// a gif plays by itself while it is on the screen and is let go when it leaves, so old phones are not kept busy by animations nobody sees
+const isGifSrc = s => /^data:image\/gif/i.test(s) || /\.gif(\?|#|$)/i.test(s);
+const GIF_IDLE = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+function autoGif(im, src) {
+  if (!isGifSrc(src) || !("IntersectionObserver" in window)) return;
+  const real = im.src;
+  // the box keeps its shape while the animation is let go, so the chat never jumps
+  let ready = false;
+  const fix = () => { if (im.src === real && im.naturalWidth) { im.style.aspectRatio = im.naturalWidth + " / " + im.naturalHeight; ready = true; } };
+  if (im.complete) fix(); else im.addEventListener("load", fix, { once: true });
+  const io = new IntersectionObserver(es => es.forEach(e => {
+    if (!im.isConnected) { io.disconnect(); return; }
+    if (e.isIntersecting) { if (im.src !== real) im.src = real; } else if (ready && im.src === real) im.src = GIF_IDLE;
+  }), { threshold: 0.2 });
+  io.observe(im);
+}
 function fillRCard(box, d, big, all) {
   box.textContent = "";
   if (!d) { box.append(h("div", { class: "zct", style: "color:var(--muted)" }, "This post is not available")); return; }
@@ -4818,7 +4835,7 @@ function fillRCard(box, d, big, all) {
   // in the chat only the first photo shows; the opened post shows them all
   const shown = all ? d.imgs : d.imgs.slice(0, 1);
   if (shown.length) {
-    const g = h("div", { class: "zimgs" }, shown.map(s => { const im = mkImg(s); im.loading = "eager"; return im; }));
+    const g = h("div", { class: "zimgs" }, shown.map(s => { const im = mkImg(s); im.loading = "eager"; autoGif(im, s); return im; }));
     if (!all && d.imgs.length > 1) g.append(h("span", { class: "zmore" }, "+" + (d.imgs.length - 1)));
     box.append(g);
   }
@@ -4840,10 +4857,27 @@ function viewRPost(id, hint) {
 }
 function zPostOf(t) {
   if (typeof t !== "string" || !t.startsWith(ZPOST)) return null;
-  try { const j = JSON.parse(t.slice(ZPOST.length)); return j && typeof j.x === "string" ? { x: j.x.slice(0, 600), t: Number(j.t) || Date.now() } : null; } catch (e) { return null; }
+  try {
+    const j = JSON.parse(t.slice(ZPOST.length));
+    // his picture only counts when it is a file of this app's own storage
+    const a = j && typeof j.a === "string" && j.a.startsWith(SB_URL + "/storage/v1/object/public/media/") && j.a.length < 400 ? j.a : null;
+    return j && typeof j.x === "string" ? { x: j.x.slice(0, 600), t: Number(j.t) || Date.now(), a } : null;
+  } catch (e) { return null; }
+}
+// his picture as a small link other people can load; made once per picture
+async function zenPfpUrl() {
+  if (!S.zen.pfp) return null;
+  if (S.zen.pfpUrl && S.zen.pfpUrlAt === S.zen.pfpAt) return S.zen.pfpUrl;
+  try {
+    const urls = await uploadMedia([S.zen.pfp]);
+    if (!urls) return null;
+    S.zen.pfpUrl = urls[0]; S.zen.pfpUrlAt = S.zen.pfpAt; persist();
+    return urls[0];
+  } catch (e) { return null; }
 }
 function zCard(zp, big) {
-  return h("div", { class: "zcard" + (big ? " big" : "") }, h("div", { class: "zch" }, zenAv(big ? 44 : 34), h("div", { class: "nm" }, h("b", {}, "Zenith"), h("span", {}, "@zenith"))),
+  const av = zp.a ? (() => { const d = h("div", { class: "av zenav" }); const im = h("img", { alt: "", decoding: "async" }); im.src = zp.a; im.onerror = () => { d.textContent = ""; d.innerHTML = ZEN_SVG; }; d.append(im); d.style.width = d.style.height = (big ? 44 : 34) + "px"; return d; })() : zenAv(big ? 44 : 34);
+  return h("div", { class: "zcard" + (big ? " big" : "") }, h("div", { class: "zch" }, av, h("div", { class: "nm" }, h("b", {}, "Zenith"), h("span", {}, "@zenith"))),
     h("div", { class: "zct" }, rich(zp.x)), h("div", { class: "zcd" }, new Date(zp.t).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })));
 }
 function viewZPost(zp) {

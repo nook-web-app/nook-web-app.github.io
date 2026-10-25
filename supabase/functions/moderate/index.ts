@@ -106,21 +106,32 @@ function readVerdict(j: any): Verdict {
   return null;
 }
 
+// when the AI service cannot answer (quota, outage) a post is NOT given up on: it stays waiting until the service is back
+let aiDown = false;
+const MODELS = [MODEL, "gemini-3.1-flash-lite"];
 async function ask(parts: unknown[], system = SYSTEM): Promise<Verdict> {
   const key = await geminiKey();
-  if (!key) { lastNote = "no gemini key in the vault"; return null; }
+  if (!key) { lastNote = "no gemini key in the vault"; aiDown = true; return null; }
   try {
-    const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + ":generateContent", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": key },
-      body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: [{ role: "user", parts }], generationConfig: { temperature: 0, maxOutputTokens: 400, thinkingConfig: { thinkingLevel: "low" } } }),
-    });
-    if (!r.ok) { lastNote = "gemini " + r.status + " " + (await r.text()).slice(0, 120); return null; }
+    let r: Response | null = null;
+    for (const model of MODELS) {
+      const call = (think: boolean) => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: [{ role: "user", parts }], generationConfig: { temperature: 0, maxOutputTokens: 400, ...(think ? { thinkingConfig: { thinkingLevel: "low" } } : {}) } }),
+      });
+      r = await call(true);
+      if (r.status === 400) r = await call(false);
+      // a model whose quota is used up or that is overloaded hands over to the next one
+      if (r.status === 429 || r.status >= 500) continue;
+      break;
+    }
+    if (!r || !r.ok) { lastNote = "gemini " + (r ? r.status : "none") + " " + (r ? (await r.text()).slice(0, 120) : ""); if (!r || r.status === 429 || r.status >= 500) aiDown = true; return null; }
     const j = await r.json();
     const v = readVerdict(j);
     if (v === null) lastNote = "unreadable answer " + JSON.stringify(j).slice(0, 200);
     return v;
-  } catch (e) { lastNote = "fetch failed " + String((e as Error).message || e); return null; }
+  } catch (e) { lastNote = "fetch failed " + String((e as Error).message || e); aiDown = true; return null; }
 }
 
 // what the bytes really are, whatever the file name or declared type says
@@ -203,7 +214,7 @@ async function runText(id: string): Promise<boolean> {
   let v: Verdict = "safe";
   if (body) v = await ask([{ text: (await contextFor(id, p.user_id)) + "Post text between the quotes: \"" + body.slice(0, 5000).replace(/"/g, "'") + "\"" }], TEXT_SYSTEM);
   // the AI is down for an hour: stop retrying, the post stays
-  if (v === null && Date.now() - Date.parse(p.created_at) > GIVE_UP_MS) v = "safe";
+  if (v === null && !aiDown && Date.now() - Date.parse(p.created_at) > GIVE_UP_MS) v = "safe";
   if (v === null) return false;
   // a text the AI service refused to read counts as breaking the rules
   if (v === "sexual") v = "rules";
@@ -324,6 +335,7 @@ async function finish(id: string, v: Verdict, checked: string | null) {
 
 const GIVE_UP_MS = 60 * 60 * 1000;
 async function run(id: string) {
+  aiDown = false;
   try { await runText(id); } catch (_e) { /* stays pending, the next sweep tries again */ }
   try {
     const { data: before } = await admin.from("posts").select("media_url").eq("id", id).maybeSingle();
@@ -332,7 +344,7 @@ async function run(id: string) {
     // a file nobody can read (broken upload, AI down for an hour) is taken down instead of hiding forever
     if (v === null) {
       const { data: p } = await admin.from("posts").select("created_at, mod_status").eq("id", id).maybeSingle();
-      if (p && p.mod_status === "pending" && Date.now() - Date.parse(p.created_at) > GIVE_UP_MS) v = "big";
+      if (!aiDown && p && p.mod_status === "pending" && Date.now() - Date.parse(p.created_at) > GIVE_UP_MS) v = "big";
     }
     await finish(id, v, checked);
   } catch (_e) { /* stays pending, the next sweep tries again */ }

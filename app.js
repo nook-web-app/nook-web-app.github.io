@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.5.0";
+const APP_VERSION = "3.5.1";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2098,8 +2098,9 @@ function settingsV() {
     row(ic("eyeoff", 22), "Privacy Policy", "What we keep and why.", () => go({ r: "privacy" })),
     row(ic("check", 22), "Terms of Use", "The rules for using Nook.", () => go({ r: "terms" }))));
   main.append(sec("Danger zone"));
-  main.append(h("div", { class: "group" }, row(ic("trash", 22), "Delete account", "Deletes your account and its data", () => {
-    const ask = () => confirmLogin("Delete account", "Deletes your account, posts and messages for good.", "Delete", async () => {
+  main.append(h("div", { class: "group" }, row(ic("trash", 22), "Delete account", "Kept for 30 days, then deleted for good", () => {
+    const ask = () => confirmLogin("Delete account", "Your account is hidden and kept for 30 days. Sign in any time in that period to get it back. After that it is deleted for good.", "Delete", async () => {
+      await pushDetach().catch(() => {});
       const r = await callFn("delete-account");
       if (!r.ok) return failText(r, "Could not delete the account. Try again");
       await wipeLocal();
@@ -2770,13 +2771,10 @@ async function loadPostLock() {
   } catch (e) {}
 }
 const lockLeft = () => (postLock && postLock.until > Date.now() ? postLock.until - Date.now() : 0);
+// always counted in hours, so 14 days reads as 336 hours
 function lockText(ms) {
-  const m = Math.ceil(ms / 60000);
-  if (m < 60) return m + (m === 1 ? " minute" : " minutes");
-  const hr = Math.ceil(ms / 36e5);
-  if (hr < 48) return hr + (hr === 1 ? " hour" : " hours");
-  const d = Math.ceil(ms / 864e5);
-  return d + " days";
+  const hr = Math.max(1, Math.ceil(ms / 36e5));
+  return hr + (hr === 1 ? " hour" : " hours");
 }
 function postLockedSheet() {
   const scrim = h("div", { class: "scrim" });
@@ -4014,6 +4012,7 @@ const LEGAL = {
     ["Keeping and deleting your data", [
       "We keep your data until you delete it or delete your account.",
       "You can delete your account in Settings. You are offered a download of your data first, and you confirm with your email and password.",
+      "A deleted account is hidden and kept for 30 days. If you sign in during that time it is restored. After 30 days it is deleted for good.",
       "The count of removed posts tied to your email is kept after deletion, so pauses and bans cannot be dodged by making a new account."]],
     ["Security", [
       "We protect your data with reasonable measures, but no system is completely secure."]],
@@ -4045,7 +4044,7 @@ const LEGAL = {
       "Trying to break, probe or get into Nook without permission."]],
     ["Removed posts and pauses", [
       "Aegis, Nook's automated reviewer, checks content. Content that breaks these terms is removed. Aegis can make mistakes.",
-      "Each removed post pauses your posting: 6 hours the first time, 24 hours the second, 72 hours the third, 7 days the fourth and 14 days the fifth. The sixth gets your account banned.",
+      "Each removed post pauses your posting: 6 hours the first time, 24 hours the second, 72 hours the third, 168 hours the fourth and 336 hours the fifth. The sixth gets your account banned.",
       "The count is tied to your email. Deleting your account and making a new one does not reset it.",
       "A banned account can download its data.",
       "We may also warn, restrict or ban accounts that break these terms in other ways."]],
@@ -4057,7 +4056,7 @@ const LEGAL = {
     ["Our responsibility", [
       "As far as the law allows, we are not responsible for lost data, indirect losses, or what other users post."]],
     ["Ending your use", [
-      "You can stop using Nook and delete your account at any time.",
+      "You can stop using Nook and delete your account at any time. A deleted account is kept for 30 days and can be restored by signing in.",
       "We may suspend or end your access if you break these terms."]],
     ["If part of these terms is invalid", [
       "The rest still applies."]],
@@ -4154,7 +4153,8 @@ function authV() {
         try { localStorage.removeItem(BAN_EMAIL); } catch (x) {}
         // the typed password opens the saved chat key on a new phone, and locks it for this account when none is saved yet; both run at once and never hold the sign in for long
         if (sd && sd.user) sbUser = sd.user;
-        await Promise.race([Promise.all([Promise.resolve(sb.rpc("set_my_deactivated", { flag: false })).catch(() => {}), sd && sd.user ? loginBackup(p).catch(() => {}) : null]), wait(10000)]);
+        // an account that was deleted less than 30 days ago comes back here; the plain wake up runs after it for older setups
+        await Promise.race([Promise.all([Promise.resolve(sb.rpc("nook_restore_account")).then(a => { if (a && a.data === true) { try { sessionStorage.setItem("nook-welcome-back", "1"); } catch (x) {} } }).catch(() => {}).then(() => sb.rpc("set_my_deactivated", { flag: false })).catch(() => {}), sd && sd.user ? loginBackup(p).catch(() => {}) : null]), wait(10000)]);
       }
       location.reload();
     } finally { btn.disabled = false; }
@@ -6223,6 +6223,7 @@ async function boot() {
   warmInbox().catch(() => {});
   checkModNotices().catch(() => {});
   loadPostLock().catch(() => {});
+  try { if (sessionStorage.getItem("nook-welcome-back")) { sessionStorage.removeItem("nook-welcome-back"); toast("Welcome back. Your account was restored"); } } catch (e) {}
   setTimeout(maybeInstallPrompt, 6000);
   zenStart().catch(() => {});
   refreshBadge();

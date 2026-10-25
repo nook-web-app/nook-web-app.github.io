@@ -276,14 +276,16 @@ textarea{resize:none}
 .grab i{width:38px;height:4px;border-radius:var(--r-xs);background:var(--line)}
 .st{padding:0 12px 12px;text-align:center;color:var(--muted);font-size:var(--fs-md)}
 .sg{overflow:hidden;max-height:52vh;overflow-y:auto}
-.si{display:flex;align-items:center;gap:14px;width:100%;padding:12px 14px;background:none;border:0;font-size:var(--fs-lg);font-weight:500;text-align:left;color:var(--fg)}
+.si{border-radius:var(--r-m);display:flex;align-items:center;gap:14px;width:100%;padding:12px 14px;background:none;border:0;font-size:var(--fs-lg);font-weight:500;text-align:left;color:var(--fg)}
 .si.plain{justify-content:center;padding:15px 14px;font-weight:600}
 .sic{width:36px;height:36px;display:flex;align-items:center;justify-content:center;color:var(--accent);flex:none}
 .si.danger{color:var(--danger)}
 .si.danger .sic{color:var(--danger)}
 .si .trail{margin-left:auto;color:var(--muted);display:flex}
-.si.on{background:var(--bg2);border-radius:var(--r-m);font-weight:700}
-.sx{display:block;width:100%;padding:15px;border:0;background:none;color:var(--fg);font-weight:700;font-size:var(--fs-lg)}
+.si.on{background:var(--bg2);font-weight:700}
+.si .trail.ck{opacity:0;color:var(--accent)}
+.si.on .trail.ck{opacity:1}
+.sx{border-radius:var(--r-m);display:block;width:100%;padding:15px;border:0;background:none;color:var(--fg);font-weight:700;font-size:var(--fs-lg)}
 .sx:active{background:var(--bg2)}
 .lb{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.94);display:flex;align-items:center;justify-content:center}
 .lb img{max-width:100%;max-height:100%;object-fit:contain}
@@ -357,7 +359,9 @@ textarea{resize:none}
 .mrow.tap .bub,.mrow.tap .imgs,.mrow.tap .lc{animation:tapPop .34s cubic-bezier(.3,1.5,.5,1)}
 .mrow:active .bub{transform:scale(.97)}
 .bub{transition:transform .12s}
-.dm:active,.lrow:active{background-color:var(--bg2)}
+.lrow,.dm{position:relative;isolation:isolate}
+.lrow::before,.dm::before{content:"";position:absolute;inset:3px 6px;border-radius:var(--r-m);z-index:-1;pointer-events:none;transition:background-color .15s}
+.dm:active::before,.lrow:active::before{background-color:var(--bg2)}
 .si:active{background-color:var(--bg2)}
 }
 :focus-visible{outline:none}
@@ -391,6 +395,11 @@ button:focus-visible,[role=button]:focus-visible,a:focus-visible,input:focus-vis
 @keyframes slideIn{from{opacity:0;transform:translateX(-14px)}to{opacity:1;transform:none}}
 .mrow.them.new{animation:fadeIn .18s ease-out}
 @media (prefers-reduced-motion: no-preference){
+@keyframes sendWait{0%,100%{opacity:.62}50%{opacity:.9}}
+@keyframes landPop{0%{transform:scale(.96)}55%{transform:scale(1.035)}100%{transform:none}}
+.mrow:not(.zdm):not(.ai).tmpm .bub,.mrow:not(.zdm):not(.ai).tmpm .dmm,.mrow:not(.zdm):not(.ai).tmpm .lc{animation:sendWait 1s ease-in-out infinite}
+.mrow.landed .bub,.mrow.landed .dmm,.mrow.landed .lc{animation:landPop .4s cubic-bezier(.3,1.5,.5,1);transform-origin:100% 100%}
+@media (prefers-reduced-motion:reduce){.mrow.tmpm .bub,.mrow.tmpm .dmm,.mrow.tmpm .lc,.mrow.landed .bub,.mrow.landed .dmm,.mrow.landed .lc{animation:none}}
 @keyframes sendPop{from{opacity:0;transform:translateY(16px) scale(.86)}to{opacity:1;transform:none}}
 .mrow:not(.them):not(.ai).new{animation:sendPop .34s cubic-bezier(.2,1.25,.4,1);transform-origin:100% 100%}
 }
@@ -410,11 +419,11 @@ button:focus-visible,[role=button]:focus-visible,a:focus-visible,input:focus-vis
 .lb .d{top:calc(12px + env(safe-area-inset-top,0px));left:12px}
 .lb~.scrim{z-index:84}
 .lb~.sheet{z-index:85}
-.lrow.unread{background:color-mix(in srgb,var(--accent) 9%,transparent)}
+.lrow.unread::before{background-color:color-mix(in srgb,var(--accent) 9%,transparent)}
 .swipe{position:relative;overflow:hidden;background:var(--bg)}
 .swipe .sbg{position:absolute;inset:0;display:flex;align-items:center;justify-content:flex-end;padding-right:22px;background:var(--danger);color:#fff}
 .swipe .lrow{position:relative;background:var(--bg);touch-action:pan-y}
-.swipe .lrow.unread{background:linear-gradient(color-mix(in srgb,var(--accent) 9%,transparent),color-mix(in srgb,var(--accent) 9%,transparent)),var(--bg)}
+
 .swipe .lrow.drag{transition:none}
 .dim-note{color:var(--muted);font-size:var(--fs-sm);margin:6px 0 0}
 #top:empty{border-bottom:0}

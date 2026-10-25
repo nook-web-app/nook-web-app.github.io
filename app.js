@@ -167,7 +167,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.33";
+const APP_VERSION = "3.4.34";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -442,13 +442,15 @@ function lessLikeThis(p) {
 }
 function langSheet() {
   const ids = new Set(LANGS.map(l => l[0]));
-  const auto = !(Array.isArray(S.ui.langs) && S.ui.langs.some(x => ids.has(x)));
-  const cur = myLangs();
-  const set = list => { S.ui.langs = list && list.length ? list : null; persist(); render(); setTimeout(langSheet, 150); };
-  const items = [{ label: "Automatic", on: auto, fn: () => set(null) }];
-  LANGS.forEach(l => items.push({ label: l[1], on: !auto && cur.has(l[0]), fn: () => { const next = new Set(auto ? [] : cur); if (next.has(l[0])) next.delete(l[0]); else next.add(l[0]); set([...next]); } }));
+  const sel = new Set(Array.isArray(S.ui.langs) ? S.ui.langs.filter(x => ids.has(x)) : []);
+  let changed = false;
+  // tapping a language adds or removes it and the sheet stays open, so more than one can be picked
+  const paint = b => [...b.parentElement.children].forEach((r, k) => r.classList.toggle("on", k === 0 ? !sel.size : sel.has(LANGS[k - 1][0])));
+  const save = b => { S.ui.langs = sel.size ? [...sel] : null; changed = true; persist(); paint(b); };
+  const items = [{ label: "Automatic", keep: true, on: !sel.size, fn: b => { sel.clear(); save(b); } }];
+  LANGS.forEach(l => items.push({ label: l[1], keep: true, on: sel.has(l[0]), fn: b => { if (sel.has(l[0])) sel.delete(l[0]); else sel.add(l[0]); save(b); } }));
   items.push({ label: "Done", cancel: true });
-  sheet(items, "Languages I read");
+  sheet(items, "Languages I read (pick as many as you like)", () => { if (changed) render(); });
 }
 const langText = () => { const ids = new Set(LANGS.map(l => l[0])); const l = Array.isArray(S.ui.langs) ? S.ui.langs.filter(x => ids.has(x)) : []; return l.length ? l.map(id => LANGS.find(x => x[0] === id)[1]).sort().join(", ") : "Automatic"; };
 // a very long text is cut with a Show more button, so one huge post can never fill the page
@@ -540,11 +542,13 @@ function copy(text) {
   else fb();
 }
 
-function sheet(items, title) {
+function sheet(items, title, onDone) {
   const scrim = h("div", { class: "scrim", onclick: () => close() });
   // the sheet is a layer like a modal: the Back button closes it first, and what an item does starts once it is closed
-  const closeS = trackLayer(() => dismiss(scrim, sh), () => dismiss(scrim, sh));
-  const row = i => h("button", { class: "si" + (i.danger ? " danger" : "") + (i.on ? " on" : "") + (i.icon || i.av ? "" : " plain"), onclick: () => close(i.fn ? () => i.fn() : undefined) }, i.av ? h("span", { class: "sic" }, rAv(i.av, 32)) : i.icon ? h("span", { class: "sic" }, ic(i.icon, 20)) : null, h("span", {}, i.label), i.trail ? h("span", { class: "trail" }, i.trail) : null);
+  const gone = () => { dismiss(scrim, sh); if (onDone) setTimeout(onDone, 0); };
+  const closeS = trackLayer(gone, gone);
+  // an item with keep stays open when tapped, so several can be chosen one after another
+  const row = i => h("button", { class: "si" + (i.danger ? " danger" : "") + (i.on ? " on" : "") + (i.icon || i.av ? "" : " plain"), onclick: e => { if (i.keep) i.fn(e.currentTarget); else close(i.fn ? () => i.fn() : undefined); } }, i.av ? h("span", { class: "sic" }, rAv(i.av, 32)) : i.icon ? h("span", { class: "sic" }, ic(i.icon, 20)) : null, h("span", {}, i.label), i.trail ? h("span", { class: "trail" }, i.trail) : null, i.keep ? h("span", { class: "trail ck" }, ic("check", 18)) : null);
   const grab = h("div", { class: "grab" }, h("i"));
   const sh = h("div", { class: "sheet", role: "dialog", "aria-label": title || "Options" }, grab, title ? h("div", { class: "st" }, title) : null,
     h("div", { class: "sg" }, items.filter(i => !i.cancel).map(row)),
@@ -3893,30 +3897,96 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("mess
 
 const LEGAL = {
   privacy: { title: "Privacy Policy", body: [
-    ["Information we keep", "We keep your account details and email, profile, posts and messages. We also keep the push addresses of your devices for alerts, records of login tries, and a marker of your age check. We do not sell your data and we do not show ads."],
-    ["Messages", "Messages are end to end encrypted: only you and the recipient can read them, with a key that lives on your devices."],
-    ["Message key backup", "Nook keeps a copy of your message key, locked with your login password, so a new phone can open your messages. Our server sees your password when you sign in, so it could in theory unlock the copy. You can turn this off in Settings."],
-    ["Posts", "Posts, photos, profile pictures, banners, names and bios are checked by an automated system for content that violates our terms. Photos remain hidden until the check is complete."],
-    ["Links", "When a link shows a preview card, the link is sent to a preview service, and the picture loads from the linked site. This also applies to links in messages."],
-    ["Age", "You must be 18 or older. If you say you are under 18, or the automated check finds a sign of it, the account is locked or banned. A copy of a banned account is kept for 30 days so it can be downloaded, then deleted."],
-    ["Service providers", "We use Supabase, GitHub Pages, an AI service and your phone's push service to operate Nook. They receive only the data needed to provide their service. New passwords are checked against known leaks with Have I Been Pwned, without sending the password itself."],
-    ["Retention and deletion", "We keep your data until you delete it or your account. You may delete your account at any time in Settings."],
+    ["Scope", [
+      "This Policy governs the collection and use of information by Nook, the application and its related services.",
+      "By using Nook you acknowledge this Policy."]],
+    ["Information collected", [
+      "Account: email address, username, display name, bio, profile photo and banner. Your password is stored only in hashed form.",
+      "Content: posts, photos, replies, likes, follows, blocks and reports you submit.",
+      "Messages: stored in encrypted form. The content cannot be read by us. The sender, the recipient and the time are retained.",
+      "Devices: push notification addresses of the devices you enable.",
+      "Security: records of sign-in attempts and a marker showing the result of the age check.",
+      "On your device: settings, drafts and feed preferences are kept on your device."]],
+    ["Use of information", [
+      "Information is used to operate the service, deliver notifications, enforce the Terms of Use and protect the security of accounts.",
+      "We do not sell personal data. We do not display advertising. We do not track time spent or scrolling."]],
+    ["Messages and key backup", [
+      "Messages are end to end encrypted. The key is held on your devices.",
+      "A copy of the message key, protected by your login password, is stored so that a new device can open your messages. The server receives your password at sign-in and could in theory open that copy.",
+      "The backup may be turned off in Settings."]],
+    ["Automated review", [
+      "Posts, photos, profile pictures, banners, usernames, display names and bios are reviewed by an automated system for content that violates the Terms of Use.",
+      "Content under review is sent to Google for analysis. Photos remain hidden until the review is complete.",
+      "Automated decisions may be mistaken."]],
+    ["Links", [
+      "When a link shows a preview card, the link is sent to a preview service and the image is loaded from the linked site. This includes links sent in messages."]],
+    ["Age", [
+      "Use of Nook is restricted to persons aged 18 or older.",
+      "An account that states an age below 18, or that is found by the automated review to show such a sign, is locked or banned.",
+      "A copy of a banned account is retained for 30 days for download, then deleted."]],
+    ["Service providers", [
+      "Supabase: authentication, database, file storage and server functions.",
+      "GitHub Pages: delivery of the application.",
+      "Google: automated review of content.",
+      "Your device vendor's push service: delivery of notifications.",
+      "Have I Been Pwned: new passwords are checked against known leaks without transmitting the password itself.",
+      "Each provider receives only the data required to perform its service."]],
+    ["Retention and deletion", [
+      "Data is retained until you delete it or delete your account.",
+      "An account may be deleted at any time in Settings. Deletion requires your email address and password."]],
+    ["Security", [
+      "Reasonable measures are used to protect data. No system is completely secure and no absolute guarantee is given."]],
+    ["Changes", [
+      "This Policy may be amended. Continued use after an amendment constitutes acceptance."]],
   ] },
   terms: { title: "Terms of Use", body: [
-    ["Acceptance", "By using Nook you agree to these terms and the Privacy Policy."],
-    ["Eligibility", "You must be 18 or older. You are responsible for your account and your password."],
-    ["Your content", "You keep ownership of your posts. You allow Nook to store and display them on the service."],
-    ["Rules", "Do not post nudity, sexual content, illegal material, threats, harassment, spam or private information of others. Content involving minors will be reported."],
-    ["Enforcement", "We may remove content or ban accounts that break these rules."],
-    ["No warranty", "Nook is provided as is. We are not liable for lost data or for content posted by users."],
-    ["Changes", "We may update these terms. Continued use means you accept the changes."],
+    ["Acceptance", [
+      "By using Nook you agree to these Terms and to the Privacy Policy.",
+      "If you do not agree, you must not use Nook."]],
+    ["Eligibility", [
+      "You must be 18 years of age or older.",
+      "Nook may be used only where its use is lawful."]],
+    ["Account", [
+      "You shall provide accurate information.",
+      "You are responsible for your password and for all activity on your account."]],
+    ["Your content", [
+      "You retain ownership of your content.",
+      "You grant Nook a limited licence to store, display and transmit your content as required to operate the service.",
+      "You warrant that you hold the rights necessary to post your content."]],
+    ["Prohibited conduct", [
+      "Nudity or sexual content.",
+      "Threats, incitement to violence, or praise of violence against people.",
+      "Hate against persons on the basis of race, religion, gender, orientation, disability or origin.",
+      "Harassment or bullying.",
+      "Disclosure of private information of others.",
+      "Spam, scams and illegal material, including the sale of illegal goods.",
+      "Content that encourages self-harm.",
+      "Any content involving minors in a sexual context. Such content will be reported to the competent authorities.",
+      "Attempts to disrupt, probe or gain unauthorised access to the service."]],
+    ["Enforcement", [
+      "Content that breaches these Terms may be removed. Accounts may be warned, restricted, locked or banned.",
+      "Review is carried out by an automated system. Decisions may be mistaken."]],
+    ["AI-generated content", [
+      "Content marked as AI-generated is produced by an automated system and does not represent a person."]],
+    ["Disclaimer", [
+      "Nook is provided as is and as available, without warranties of any kind.",
+      "We do not warrant that the service will be uninterrupted or error free."]],
+    ["Limitation of liability", [
+      "To the extent permitted by law, we are not liable for lost data, indirect or consequential loss, or for content posted by users."]],
+    ["Termination", [
+      "You may stop using Nook and delete your account at any time.",
+      "We may suspend or terminate access where these Terms are breached."]],
+    ["Severability", [
+      "If a provision is found unenforceable, the remaining provisions continue in force."]],
+    ["Changes", [
+      "These Terms may be amended. Continued use after an amendment constitutes acceptance."]],
   ] },
 };
 function legalV(c) {
   const doc = LEGAL[c.r];
   topEl.append(bar(backBtn(), ttl(doc.title)));
   if (!sbUser) navEl.hidden = true;
-  main.append(h("div", { class: "legal" }, h("p", { class: "upd" }, "Last updated October 2026"), ...doc.body.map(sec => h("div", {}, h("h2", {}, sec[0]), h("p", {}, sec[1])))));
+  main.append(h("div", { class: "legal" }, h("p", { class: "upd" }, "Last updated 25 October 2026"), ...doc.body.map((sec, i) => h("div", {}, h("h2", {}, (i + 1) + ". " + sec[0]), ...sec[1].map((t, j) => h("p", {}, (i + 1) + "." + (j + 1) + "  " + t))))));
 }
 const legalLink = (r, label) => h("a", { role: "link", tabindex: "0", onclick: () => go({ r }), onkeydown: e => { if (e.key === "Enter") go({ r }); } }, label);
 
@@ -5406,6 +5476,9 @@ function dmV(c) {
       row.dataset.mid = String(saved.id);
       list.querySelectorAll('[data-mid="' + saved.id + '"]').forEach(d => { if (d !== row) d.remove(); });
       row.classList.remove("tmpm");
+      // the little pop only plays when the chat was open while this message was on its way
+      row.classList.add("landed");
+      setTimeout(() => row.classList.remove("landed"), 450);
       row._sig = dmSig(saved);
       row._m = Object.assign({}, saved, { text });
     };

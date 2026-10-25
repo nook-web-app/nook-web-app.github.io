@@ -167,7 +167,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.24";
+const APP_VERSION = "3.4.25";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -451,13 +451,25 @@ function langSheet() {
   sheet(items, "Languages I read");
 }
 const langText = () => { const ids = new Set(LANGS.map(l => l[0])); const l = Array.isArray(S.ui.langs) ? S.ui.langs.filter(x => ids.has(x)) : []; return l.length ? l.map(id => LANGS.find(x => x[0] === id)[1]).sort().join(", ") : "Automatic"; };
+// a very long text is cut with a Show more button, so one huge post can never fill the page
+function txBody(text, extra) {
+  const box = h("div", { class: "tx" + extra });
+  const LIMIT = 700;
+  if (String(text).length <= LIMIT) { box.append(rich(text)); return box; }
+  const more = h("button", { class: "tbtn", type: "button", style: "padding:6px 0;color:var(--lnk)", onclick: e => { e.stopPropagation(); box.textContent = ""; box.append(rich(text)); } }, "Show more");
+  box.append(rich(String(text).slice(0, 600) + "…"), h("div", {}, more));
+  return box;
+}
 function feedPosts(f) {
   let a = S.posts.filter(p => !p.parent);
   if (f) {
     if (f.media) a = a.filter(p => p.imgs.length);
     if (f.q) {
       const q = f.q.toLowerCase();
-      a = a.filter(p => p.text.toLowerCase().includes(q));
+      // a hashtag matches the whole tag only: #cat does not find #category
+      const esc = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const tag = q.startsWith("#") ? new RegExp("(^|[^\\p{L}\\p{N}_])" + esc + "(?![\\p{L}\\p{N}_])", "iu") : null;
+      a = a.filter(p => tag ? tag.test(p.text) : p.text.toLowerCase().includes(q));
     }
   }
   return a.sort((x, y) => y.t - x.t);
@@ -969,7 +981,7 @@ function postCard(p, o) {
   const pname = p.ai ? "Zenith" : p.ra ? p.ra.name : S.profile.name, phand = p.ai ? "@zenith" : "@" + (p.ra ? p.ra.handle : S.profile.handle);
   col.append(h("div", { class: "ph2" }, pname ? h("span", { class: "pn" }, pname) : null, h("span", { class: "pu" }, phand), h("span", { class: "pt" }, ago(p.t))));
   if (o.replyTo && p.parent) { const par = byId(p.parent); col.append(h("div", { class: "rt" }, ic("reply", 14), "Replying to " + (!par ? "a post" : par.ai ? "@zenith" : "@" + (par.ra ? par.ra.handle : S.profile.handle)))); }
-  if (p.text) col.append(h("div", { class: "tx" }, rich(p.text)));
+  if (p.text) col.append(txBody(p.text, ""));
   if (p.imgs.length) col.append(imgGrid(p.imgs));
   else if (firstUrl(p.text)) col.append(linkCard(firstUrl(p.text)));
   if (!o.compact) col.append(acts(p));
@@ -1153,7 +1165,7 @@ function mainPost(p) {
     h("div", { class: "mp" },
       p.pinned ? h("div", { class: "rt", style: "margin-bottom:8px" }, ic("pin", 14), "Pinned post") : null,
       h("div", { class: "mh" }, pfp, h("div", { class: "nm" }, h("b", {}, p.ai ? "Zenith" : p.ra ? p.ra.name : S.profile.name), h("span", {}, p.ai ? "@zenith" : "@" + (p.ra ? p.ra.handle : S.profile.handle)))),
-      p.text ? h("div", { class: "tx big" }, rich(p.text)) : null,
+      p.text ? txBody(p.text, " big") : null,
       p.imgs.length ? imgGrid(p.imgs) : firstUrl(p.text) ? linkCard(firstUrl(p.text)) : null,
       h("div", { class: "when" }, new Date(p.t).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) + (p.edited ? " · edited" : ""))),
     st.length ? h("div", { class: "stats" }, st) : null,
@@ -5264,13 +5276,7 @@ function dmV(c) {
     const row = dmBubble(tmp, true, c.id);
     row.classList.add("new", "tmpm");
     pushRow(row);
-    try {
-      // a link is sent after its preview is ready, so the other person gets the card at once
-      const lk = firstUrl(text);
-      if (lk && !(S.previews[lk] && S.previews[lk].v)) await Promise.race([getPreview(lk), new Promise(r => setTimeout(r, 4500))]);
-      const sentP = sendDm(c.id, text, srcs, dims);
-      if (zOn() && /@zenith/i.test(text)) zenInDm(text, sentP);
-      const saved = await sentP;
+    const landed = saved => {
       threadPush(c.id, saved);
       // keep the bubble that is already on screen: no re-render, no flash
       row.dataset.mid = String(saved.id);
@@ -5278,7 +5284,24 @@ function dmV(c) {
       row.classList.remove("tmpm");
       row._sig = dmSig(saved);
       row._m = Object.assign({}, saved, { text });
+    };
+    try {
+      // a link is sent after its preview is ready, so the other person gets the card at once
+      const lk = firstUrl(text);
+      if (lk && !(S.previews[lk] && S.previews[lk].v)) await Promise.race([getPreview(lk), new Promise(r => setTimeout(r, 4500))]);
+      const sentP = sendDm(c.id, text, srcs, dims);
+      if (zOn() && /@zenith/i.test(text)) zenInDm(text, sentP);
+      const saved = await sentP;
+      landed(saved);
     } catch (e) {
+      // the answer may have been lost after the server saved the message: the chat is checked before the text is given back, so it is never sent twice
+      if (!srcs.length) {
+        try {
+          const rows = await withTimeout(dmThread(c.id), 6000);
+          const recent = rows.filter(m => m.sender_id === me && Date.now() - Date.parse(m.created_at) < 120000 && !list.querySelector('[data-mid="' + m.id + '"]'));
+          for (const m of recent.reverse()) { if ((await openText(c.id, m.body)) === text) { landed(m); busy = false; draw(); return; } }
+        } catch (x) {}
+      }
       row.remove();
       if (!list.querySelector("[data-mid], .tmpm")) hint("No messages yet. Say hi.");
       // what was typed in the meantime is never overwritten
@@ -5710,15 +5733,30 @@ async function maybeInstallPrompt() {
     h("button", { class: "sx", onclick: () => { hide(7); close(); } }, "Not now"));
   layer.append(scrim, sh);
 }
+let rtBackoff = 2000, rtTimer = null;
 function startRealtime() {
   if (!sbUser || rtChan) return;
-  rtChan = sb.channel("nook-" + sbUser.id)
+  // a dropped connection is opened again by itself, a little later each time it fails
+  const ch = sb.channel("nook-" + sbUser.id)
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: "recipient_id=eq." + sbUser.id }, onIncomingMsg)
     .on("postgres_changes", { event: "DELETE", schema: "public", table: "messages" }, onDeletedMsg)
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications", filter: "user_id=eq." + sbUser.id }, onIncomingNote)
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "bans", filter: "user_id=eq." + sbUser.id }, () => showBanned())
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "mod_notices", filter: "user_id=eq." + sbUser.id }, p => showModNotice(p.new))
-    .subscribe();
+    .subscribe(st => {
+      if (st === "SUBSCRIBED") { rtBackoff = 2000; return; }
+      if ((st === "CHANNEL_ERROR" || st === "TIMED_OUT" || st === "CLOSED") && rtChan === ch && !rtTimer) {
+        rtTimer = setTimeout(() => {
+          rtTimer = null;
+          if (rtChan !== ch || !sbUser) return;
+          try { sb.removeChannel(ch); } catch (e) {}
+          rtChan = null;
+          rtBackoff = Math.min(30000, rtBackoff * 2);
+          startRealtime();
+        }, rtBackoff);
+      }
+    });
+  rtChan = ch;
   tpChan = sb.channel("tp-" + sbUser.id)
     .on("broadcast", { event: "typing" }, ({ payload }) => onTyping(payload && payload.from, payload ? payload.on : undefined))
     .subscribe();

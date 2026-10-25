@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { AsyncLocalStorage } from "node:async_hooks";
 // Aegis is the name of the moderation AI (it means protection); Zenith is the owner-only AI, they use separate models
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
@@ -11,7 +12,9 @@ async function geminiKey(): Promise<string> {
   return keyCache.v;
 }
 const MAX_IMG = 12 * 1024 * 1024;
-const PER_SWEEP = 5;
+// a sweep runs every minute: up to 25 posts a minute, checked 4 at a time so Gemma is not flooded
+const PER_SWEEP = 25;
+const AT_ONCE = 4;
 
 // the same rules judge the words of a post and any words written inside a picture
 const RULE_LIST = "explicit sexual talk or sexual content; anything sexual about a child; threats or calls for violence; justifying, praising or celebrating the killing of civilians or an attack on a group of people, no matter which government, army or side does it; hate against people for their race, religion, gender, orientation, disability or origin; harassing or bullying a person; sharing private info such as a home address, phone number or password; scams or spam; selling or promoting illegal drugs, weapons or other illegal things; pushing someone to hurt or kill themselves";
@@ -86,32 +89,35 @@ async function gifFrames(buf: Uint8Array): Promise<Uint8Array[]> {
 }
 
 type Verdict = "safe" | "sexual" | "rules" | "minor" | "big" | null;
-let lastNote = "";
+// the state of one check (why it was refused, whether the AI was down) belongs to that check alone, because several run at the same time
+type Ctx = { why: string; aiDown: boolean; lastNote: string };
+const als = new AsyncLocalStorage<Ctx>();
+const loose: Ctx = { why: "", aiDown: false, lastNote: "" };
+const C = (): Ctx => als.getStore() || loose;
+const fresh = (): Ctx => ({ why: "", aiDown: false, lastNote: "" });
 
 // why the last "sexual" answer was given, saved with the warning so a wrong call can be understood
-let why = "";
 // deno-lint-ignore no-explicit-any
 function readVerdict(j: any): Verdict {
-  if (j && j.promptFeedback && j.promptFeedback.blockReason) { why = "blocked by the AI service: " + j.promptFeedback.blockReason; return "sexual"; }
+  if (j && j.promptFeedback && j.promptFeedback.blockReason) { C().why = "blocked by the AI service: " + j.promptFeedback.blockReason; return "sexual"; }
   const c = j && j.candidates && j.candidates[0];
   if (!c) return null;
   // deno-lint-ignore no-explicit-any
   const t = ((c.content && c.content.parts) || []).filter((p: any) => !p.thought).map((p: any) => p.text || "").join(" ").trim();
   const first = (t.split(/\s+/)[0] || "").replace(/[^A-Za-z]/g, "").toUpperCase();
-  if (first === "SEXUAL" || first === "UNSAFE") { why = "the AI said: " + t.slice(0, 200); return "sexual"; }
-  if (first === "RULES") { why = t.replace(/^\S+\s*/, "").slice(0, 120) || "it breaks the rules"; return "rules"; }
-  if (first === "MINOR") { why = t.replace(/^\S+\s*/, "").slice(0, 120) || "Nook is for people aged 18 and older."; return "minor"; }
+  if (first === "SEXUAL" || first === "UNSAFE") { C().why = "the AI said: " + t.slice(0, 200); return "sexual"; }
+  if (first === "RULES") { C().why = t.replace(/^\S+\s*/, "").slice(0, 120) || "it breaks the rules"; return "rules"; }
+  if (first === "MINOR") { C().why = t.replace(/^\S+\s*/, "").slice(0, 120) || "Nook is for people aged 18 and older."; return "minor"; }
   if (first === "SAFE") return "safe";
-  if (c.finishReason && /SAFETY|PROHIBITED|BLOCKLIST|IMAGE_SAFETY/i.test(String(c.finishReason))) { why = "stopped by the AI service: " + c.finishReason; return "sexual"; }
+  if (c.finishReason && /SAFETY|PROHIBITED|BLOCKLIST|IMAGE_SAFETY/i.test(String(c.finishReason))) { C().why = "stopped by the AI service: " + c.finishReason; return "sexual"; }
   return null;
 }
 
 // when the AI service cannot answer (quota, outage) a post is NOT given up on: it stays waiting until the service is back
-let aiDown = false;
 const MODELS = ["gemma-4-26b-a4b-it"];
 async function ask(parts: unknown[], system = SYSTEM): Promise<Verdict> {
   const key = await geminiKey();
-  if (!key) { lastNote = "no gemini key in the vault"; aiDown = true; return null; }
+  if (!key) { C().lastNote = "no gemini key in the vault"; C().aiDown = true; return null; }
   try {
     let r: Response | null = null;
     for (const model of MODELS) {
@@ -126,12 +132,12 @@ async function ask(parts: unknown[], system = SYSTEM): Promise<Verdict> {
       if (r.status === 429 || r.status >= 500) continue;
       break;
     }
-    if (!r || !r.ok) { lastNote = "gemini " + (r ? r.status : "none") + " " + (r ? (await r.text()).slice(0, 120) : ""); if (!r || r.status === 429 || r.status >= 500) aiDown = true; return null; }
+    if (!r || !r.ok) { C().lastNote = "gemini " + (r ? r.status : "none") + " " + (r ? (await r.text()).slice(0, 120) : ""); if (!r || r.status === 429 || r.status >= 500) C().aiDown = true; return null; }
     const j = await r.json();
     const v = readVerdict(j);
-    if (v === null) lastNote = "unreadable answer " + JSON.stringify(j).slice(0, 200);
+    if (v === null) C().lastNote = "unreadable answer " + JSON.stringify(j).slice(0, 200);
     return v;
-  } catch (e) { lastNote = "fetch failed " + String((e as Error).message || e); aiDown = true; return null; }
+  } catch (e) { C().lastNote = "fetch failed " + String((e as Error).message || e); C().aiDown = true; return null; }
 }
 
 // what the bytes really are, whatever the file name or declared type says
@@ -214,13 +220,13 @@ async function runText(id: string): Promise<boolean> {
   let v: Verdict = "safe";
   if (body) v = await ask([{ text: (await contextFor(id, p.user_id)) + "Post text between the quotes: \"" + body.slice(0, 5000).replace(/"/g, "'") + "\"" }], TEXT_SYSTEM);
   // the AI is down for an hour: stop retrying, the post stays
-  if (v === null && !aiDown && Date.now() - Date.parse(p.created_at) > GIVE_UP_MS) v = "safe";
+  if (v === null && !C().aiDown && Date.now() - Date.parse(p.created_at) > GIVE_UP_MS) v = "safe";
   if (v === null) return false;
   // a text the AI service refused to read counts as breaking the rules
   if (v === "sexual") v = "rules";
   if (v === "rules") {
     const gone = await admin.from("posts").delete().eq("id", id).eq("text_pending", true).eq("body", p.body).select("user_id");
-    if (gone.data && gone.data.length) await admin.from("mod_notices").insert({ user_id: gone.data[0].user_id, kind: "rules", post_id: id, note: why });
+    if (gone.data && gone.data.length) await admin.from("mod_notices").insert({ user_id: gone.data[0].user_id, kind: "rules", post_id: id, note: C().why });
     return true;
   }
   if (v === "minor") {
@@ -230,7 +236,7 @@ async function runText(id: string): Promise<boolean> {
       const gone = await admin.from("posts").delete().eq("id", id).eq("text_pending", true).eq("body", p.body).select("user_id");
       if (gone.data && gone.data.length) {
         const uid = gone.data[0].user_id;
-        if (await holdAccount(uid)) await admin.from("mod_notices").insert({ user_id: uid, kind: "minor", post_id: id, note: why });
+        if (await holdAccount(uid)) await admin.from("mod_notices").insert({ user_id: uid, kind: "minor", post_id: id, note: C().why });
       }
       return true;
     }
@@ -270,7 +276,7 @@ async function runProfile(id: string, field: "avatar" | "banner") {
   if (v === "safe") { await holds(admin.from("accounts").update({ [field + "_mod"]: "safe" }).eq("id", id).eq(field + "_mod", "pending"), field, value); return; }
   // whoever clears the picture first gives the warning, so two checks at once do not warn twice
   const done = await holds(admin.from("accounts").update({ [field]: null, [field + "_mod"]: "safe" }).eq("id", id).eq(field + "_mod", "pending"), field, value).select("id");
-  if (done.data && done.data.length) await admin.from("mod_notices").insert({ user_id: id, kind: field + (v === "big" ? "_toolarge" : v === "rules" ? "_rules" : ""), note: v === "big" ? "could not be checked" : why });
+  if (done.data && done.data.length) await admin.from("mod_notices").insert({ user_id: id, kind: field + (v === "big" ? "_toolarge" : v === "rules" ? "_rules" : ""), note: v === "big" ? "could not be checked" : C().why });
 }
 
 // username, display name and bio, each read on its own; a bad one is cleared (a username becomes user plus random letters)
@@ -285,8 +291,8 @@ async function runProfileText(id: string) {
     if (!s) continue;
     const v = await ask([{ text: "This is the " + kind + " on someone's profile. It is between the quotes: \"" + s.slice(0, 600).replace(/"/g, "'") + "\"" }], TEXT_SYSTEM);
     if (v === null) return;
-    if (v === "rules" || v === "sexual") bad.push({ kind, col, note: why });
-    if (v === "minor") { minor = why; bad.push({ kind, col, note: why }); }
+    if (v === "rules" || v === "sexual") bad.push({ kind, col, note: C().why });
+    if (v === "minor") { minor = C().why; bad.push({ kind, col, note: C().why }); }
   }
   const patch: Record<string, unknown> = { text_pending: false };
   for (const b of bad) patch[b.col] = b.col === "username" ? "user" + Array.from(crypto.getRandomValues(new Uint8Array(4)), (x) => (x % 36).toString(36)).join("") : b.col === "bio" ? "" : null;
@@ -323,19 +329,19 @@ async function finish(id: string, v: Verdict, checked: string | null) {
     const gone = await sameMedia(admin.from("posts").delete().eq("id", id).eq("mod_status", "pending"), checked).select("user_id");
     if (gone.data && gone.data.length) {
       const uid = gone.data[0].user_id;
-      if (await holdAccount(uid)) await admin.from("mod_notices").insert({ user_id: uid, kind: "minor", post_id: id, note: why });
+      if (await holdAccount(uid)) await admin.from("mod_notices").insert({ user_id: uid, kind: "minor", post_id: id, note: C().why });
     }
     return;
   }
   if (v === "sexual" || v === "rules" || v === "big") {
     const gone = await sameMedia(admin.from("posts").delete().eq("id", id).eq("mod_status", "pending"), checked).select("user_id");
-    if (gone.data && gone.data.length) await admin.from("mod_notices").insert({ user_id: gone.data[0].user_id, kind: v === "big" ? "toolarge" : v, post_id: id, note: v === "big" ? "could not be checked" : why });
+    if (gone.data && gone.data.length) await admin.from("mod_notices").insert({ user_id: gone.data[0].user_id, kind: v === "big" ? "toolarge" : v, post_id: id, note: v === "big" ? "could not be checked" : C().why });
   }
 }
 
 const GIVE_UP_MS = 60 * 60 * 1000;
 async function run(id: string) {
-  aiDown = false;
+  C().aiDown = false;
   try { await runText(id); } catch (_e) { /* stays pending, the next sweep tries again */ }
   try {
     const { data: before } = await admin.from("posts").select("media_url").eq("id", id).maybeSingle();
@@ -344,7 +350,7 @@ async function run(id: string) {
     // a file nobody can read (broken upload, AI down for an hour) is taken down instead of hiding forever
     if (v === null) {
       const { data: p } = await admin.from("posts").select("created_at, mod_status").eq("id", id).maybeSingle();
-      if (!aiDown && p && p.mod_status === "pending" && Date.now() - Date.parse(p.created_at) > GIVE_UP_MS) v = "big";
+      if (!C().aiDown && p && p.mod_status === "pending" && Date.now() - Date.parse(p.created_at) > GIVE_UP_MS) v = "big";
     }
     await finish(id, v, checked);
   } catch (_e) { /* stays pending, the next sweep tries again */ }
@@ -358,27 +364,29 @@ Deno.serve(async (req) => {
   try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
   if (body.ping) return json({ ok: true });
   if (body.post_id && (body as { debug?: boolean }).debug) {
-    lastNote = "";
+    C().lastNote = "";
     let v: Verdict = null;
-    try { v = await judge(body.post_id); } catch (e) { lastNote = "judge threw " + String((e as Error).message || e); }
+    try { v = await judge(body.post_id); } catch (e) { C().lastNote = "judge threw " + String((e as Error).message || e); }
     let textErr = "";
     try { await runText(body.post_id); } catch (e) { textErr = String((e as Error).message || e); }
-    return json({ verdict: v, note: lastNote, textErr });
+    return json({ verdict: v, note: C().lastNote, textErr });
   }
   if (body.account_id && (body as { debug?: boolean }).debug) {
-    lastNote = "";
+    C().lastNote = "";
     let err = "";
     try { await runProfileText(body.account_id); } catch (e) { err = String((e as Error).message || e); }
-    return json({ note: lastNote, err, why });
+    return json({ note: C().lastNote, err, why: C().why });
   }
   const job = (async () => {
-    if (typeof body.post_id === "string" && /^[0-9a-f-]{36}$/i.test(body.post_id)) { await run(body.post_id); return; }
-    if (typeof body.account_id === "string" && /^[0-9a-f-]{36}$/i.test(body.account_id)) { await runAccount(body.account_id); return; }
+    if (typeof body.post_id === "string" && /^[0-9a-f-]{36}$/i.test(body.post_id)) { await als.run(fresh(), () => run(body.post_id)); return; }
+    if (typeof body.account_id === "string" && /^[0-9a-f-]{36}$/i.test(body.account_id)) { await als.run(fresh(), () => runAccount(body.account_id)); return; }
     if (body.sweep) {
       const { data } = await admin.from("posts").select("id").or("mod_status.eq.pending,text_pending.eq.true").order("created_at", { ascending: true }).limit(PER_SWEEP);
-      for (const r of data || []) await run(r.id);
+      const todo = data || [];
+      for (let i = 0; i < todo.length; i += AT_ONCE) await Promise.all(todo.slice(i, i + AT_ONCE).map((r) => als.run(fresh(), () => run(r.id))));
       const { data: accs } = await admin.from("accounts").select("id").or("avatar_mod.eq.pending,banner_mod.eq.pending,text_pending.eq.true").limit(PER_SWEEP);
-      for (const r of accs || []) await runAccount(r.id);
+      const accTodo = accs || [];
+      for (let i = 0; i < accTodo.length; i += AT_ONCE) await Promise.all(accTodo.slice(i, i + AT_ONCE).map((r) => als.run(fresh(), () => runAccount(r.id))));
     }
   })();
   // answer at once, finish the check in the background

@@ -12,7 +12,15 @@ function startFail(why) {
   b.className = "pri";
   b.textContent = "Try again";
   b.onclick = () => { try { navigator.serviceWorker.getRegistrations().then(rs => Promise.all(rs.map(r => r.unregister()))).then(() => caches.keys()).then(ks => Promise.all(ks.map(k => caches.delete(k)))).finally(() => location.reload()); } catch (e) { location.reload(); } };
-  box.append(p, b);
+  const r = document.createElement("button");
+  r.className = "tbtn";
+  r.textContent = "Reset this phone";
+  r.onclick = () => {
+    if (!confirm("This clears the saved copy of Nook on this phone. Your account and posts stay safe on the server. Continue?")) return;
+    try { Object.keys(localStorage).filter(k => k === "tiny-posts-v3" || k.indexOf("nook-cache:") === 0).forEach(k => localStorage.removeItem(k)); sessionStorage.removeItem("nook-route"); } catch (e) {}
+    try { const q = indexedDB.deleteDatabase("tiny-posts"); q.onsuccess = q.onerror = q.onblocked = () => location.reload(); setTimeout(() => location.reload(), 2500); } catch (e) { location.reload(); }
+  };
+  box.append(p, b, r);
   m.append(box);
 }
 window.addEventListener("error", e => setTimeout(() => startFail(String((e && e.message) || "")), 300));
@@ -150,13 +158,16 @@ function view(src) {
 }
 function mkImg(src, cls, on) {
   const i = h("img", { src: view(src), alt: "", decoding: "async", loading: "lazy", class: cls || null });
-  i.onerror = () => { i.onerror = null; i.src = src; };
+  i.onerror = () => {
+    i.onerror = () => { if (!cls && i.parentNode) i.replaceWith(h("div", { class: "dmgone" }, "Photo not available")); };
+    i.src = src;
+  };
   if (on) i.addEventListener("click", on);
   return i;
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.17";
+const APP_VERSION = "3.4.18";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -647,7 +658,7 @@ function lightbox(imgs, i, cap, opts) {
     holder.textContent = "";
     const src = imgs[n];
     let el;
-    { el = h("img", { alt: "" }); el.onerror = () => { el.onerror = null; el.src = src; }; el.src = view(src); }
+    { el = h("img", { alt: "" }); el.onerror = () => { el.onerror = () => { holder.textContent = ""; holder.append(h("p", { class: "note", style: "color:#fff;text-align:center" }, "Photo not available")); }; el.src = src; }; el.src = view(src); }
     el.addEventListener("click", e => e.stopPropagation());
     holder.append(el);
     l.hidden = n === 0 || imgs.length < 2; r.hidden = n === imgs.length - 1 || imgs.length < 2;
@@ -1111,6 +1122,12 @@ function composerRow() {
     pickBtn("image", "Add photos", false, files => openCompose({ files }), true));
 }
 
+// an empty home is only called empty after the server answered; before that it says loading, and after a failure it offers another try
+function feedEmpty(photos) {
+  if (feedStatus === "ok" || !sbUser) return emptyState("smile", photos ? "No media posts yet." : "No posts yet. Write your first one.");
+  if (feedStatus === "error") return h("div", { class: "empty" }, h("p", {}, "Could not load posts. Check your connection."), h("button", { class: "ghost", onclick: () => { feedTries = 0; feedStatus = "loading"; render(); loadFeed().catch(() => {}); } }, "Try again"));
+  return loadingEl();
+}
 function homeV() {
   const tabs = [{ id: "latest", name: "For you" }, { id: "photos", name: "Media" }];
   if (!tabs.some(t => t.id === S.ui.homeTab)) S.ui.homeTab = "latest";
@@ -1118,7 +1135,7 @@ function homeV() {
   topEl.append(h("div", { class: "tabs", role: "tablist" }, tabs.map(t => h("button", { class: "tab" + (t.id === S.ui.homeTab ? " on" : ""), role: "tab", onclick: () => { S.ui.homeTab = t.id; persist(); render("root"); } }, h("span", {}, t.name)))));
   main.append(composerRow());
   const photos = S.ui.homeTab === "photos";
-  main.append(postList(rankFeed(feedPosts(photos ? { media: true } : null), photos ? "photos" : "latest"), { empty: emptyState("smile", photos ? "No media posts yet." : "No posts yet. Write your first one.") }));
+  main.append(postList(rankFeed(feedPosts(photos ? { media: true } : null), photos ? "photos" : "latest"), { empty: feedEmpty(photos) }));
 }
 
 function mainPost(p) {
@@ -2246,7 +2263,12 @@ async function compressGif(f, onp) {
 }
 async function intake(f, onp, o) {
   if (isVideo(f)) throw new Error("videos are not supported");
-  if (isGif(f)) return compressGif(f, onp);
+  if (isGif(f)) {
+    const out = await compressGif(f, onp);
+    // a gif that cannot be read is refused here, not sent as a broken picture
+    await loadImage(typeof out === "string" ? out : await readDataURL(out));
+    return out;
+  }
   return shrink(f, { max: 1280, q: 0.8 });
 }
 async function addMedia(files, arr, jobs, max, redraw) {
@@ -2261,7 +2283,7 @@ async function addMedia(files, arr, jobs, max, redraw) {
     jobs.splice(jobs.indexOf(job), 1);
     redraw();
   }
-  if (bad) toast(bad === 1 ? "Could not add that file (" + why + ")" : "Could not add " + bad + " files");
+  if (bad) toast(bad === 1 ? (/video/i.test(why) ? "Videos are not supported" : "That file is not a photo we can read") : "Could not add " + bad + " files");
 }
 
 const byT = (x, y) => y.t - x.t;
@@ -2292,12 +2314,20 @@ function parseMedia(v) {
   if (v.charAt(0) === "[") { try { return JSON.parse(v); } catch (e) { return []; } }
   return [v];
 }
+// "loading" until the first answer, "error" when the posts could not be fetched, "ok" after a good answer
+let feedStatus = "loading", feedTries = 0, feedRetryTimer = null;
+function feedFail() {
+  feedStatus = "error";
+  if (!feedRetryTimer && feedTries < 8) { feedTries++; feedRetryTimer = setTimeout(() => { feedRetryTimer = null; loadFeed().catch(() => {}); }, Math.min(30000, 4000 * feedTries)); }
+  const cur = stack[stack.length - 1];
+  if (cur && cur.r === "home" && !layer.childElementCount && !S.posts.length) render();
+}
 async function loadFeed() {
   if (!sbUser || !S) return;
   let pq = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url").order("created_at", { ascending: false }).limit(300);
   if (pq.error) pq = await sb.from("posts").select("id, user_id, body, created_at").order("created_at", { ascending: false }).limit(300);
   const posts = pq.data;
-  if (!posts) return;
+  if (!posts) { feedFail(); return; }
   const pend = new Set(S.pendDel || []);
   if (S.pendDel && S.pendDel.length) { try { await deleteRemote(S.pendDel.map(r => ({ remote: r }))); } catch (e) {} }
   const ids = posts.filter(p => !p.parent_id).map(p => p.id);
@@ -2312,7 +2342,8 @@ async function loadFeed() {
     sb.from("follows").select("followee_id").eq("follower_id", sbUser.id).limit(1000)
   ]);
   // a failed answer is not an empty one: nothing is changed (a blocked person must not come back because a call failed)
-  if ([0, 1, 2, 3].some(i => !feedRes[i] || feedRes[i].error)) return;
+  if ([0, 1, 2, 3].some(i => !feedRes[i] || feedRes[i].error)) { feedFail(); return; }
+  feedStatus = "ok"; feedTries = 0;
   const [{ data: myLikes }, { data: myReposts }, { data: blocksOut }, { data: blocksIn }, { data: likeRows }, { data: repostRows }, { data: meRow }, { data: myFollows }] = feedRes;
   if (myFollows) { followSet = new Set(myFollows.map(r => r.followee_id)); cacheWrite("follows:" + sbUser.id, [...followSet]); }
   if (meRow) {
@@ -3845,6 +3876,7 @@ function authV() {
   const up = authMode === "up";
   navEl.hidden = true;
   const msg = h("p", { class: "note", role: "alert" });
+  try { const nt = sessionStorage.getItem("nook-notice"); if (nt) { msg.textContent = nt; sessionStorage.removeItem("nook-notice"); } } catch (e) {}
   const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "email", "aria-label": "Email" });
   const pass = h("input", { class: "in", type: "password", placeholder: "Password", autocomplete: up ? "new-password" : "current-password", "aria-label": "Password", style: "padding-right:60px" });
   const eye = h("button", { type: "button", class: "tbtn", "aria-label": "Show password", style: "position:absolute;right:14px;top:50%;transform:translateY(-50%);padding:6px 0;color:var(--muted);font-size:var(--fs-md);font-weight:600", onclick: () => { const show = pass.type === "password"; pass.type = show ? "text" : "password"; eye.textContent = show ? "Hide" : "Show"; eye.setAttribute("aria-label", show ? "Hide password" : "Show password"); } }, "Show");
@@ -5721,11 +5753,15 @@ async function boot() {
       delete S.split;
     }
   } catch (e) { db = null; }
+  // saved data of the wrong shape is thrown away instead of stopping the app
+  const badShape = s => !s || typeof s !== "object" || (s.posts !== undefined && !Array.isArray(s.posts)) || (s.chats !== undefined && !Array.isArray(s.chats));
+  if (badShape(S)) S = null;
   if (!S) { try { const r = localStorage.getItem("tiny-posts-v3"); if (r) S = JSON.parse(r); } catch (e) {} }
+  if (badShape(S)) S = null;
   if (!S) { S = freshState(); persist(); }
   // keys that older versions left on this device
   try { ["tiny-bsky-v2", "zenith-pw", "nook-banned"].forEach(k => localStorage.removeItem(k)); } catch (e) {}
-  if (normalize()) persist();
+  try { if (normalize()) persist(); } catch (e) { S = freshState(); normalize(); persist(); }
   applyTheme();
   try {
     const rt = JSON.parse(sessionStorage.getItem("nook-route") || "null");
@@ -5764,7 +5800,7 @@ async function boot() {
     // if the check cannot be made the answer is "held": the age screen stays up until the server says otherwise
     if (acct) { const { data: held, error: he } = await sb.rpc("my_age_hold"); acct.age_hold = he ? true : held === true; }
     ageHeld = !!(acct && acct.age_hold);
-    if (!aerr && (!acct || acct.deactivated)) { await sb.auth.signOut(); sbUser = null; }
+    if (!aerr && (!acct || acct.deactivated)) { try { sessionStorage.setItem("nook-notice", acct ? "That account is deactivated. Sign in again to bring it back." : "Your account could not be loaded. Sign in again."); } catch (e) {} await sb.auth.signOut({ scope: "local" }).catch(() => {}); sbUser = null; }
     else if (sbUser && await foreignLocalData(acct)) { await wipeLocal(true); try { localStorage.setItem(LOCAL_UID, sbUser.id); } catch (e) {} location.reload(); return; }
     if (sbUser && acct) {
       // no "Me" while the profile loads: the real name, handle and picture are in place before the first screen
@@ -5830,7 +5866,11 @@ async function takeShared() {
   const targets = await messageTargets().catch(() => []);
   const sendTo = async t => {
     if (cleaned) await sendLinkTo(t, cleaned);
-    for (const f of files) await sendPicTo(t, f);
+    for (const f of files) {
+      let src = f;
+      try { const out = await intake(f); src = typeof out === "string" ? await (await fetch(out)).blob() : out; } catch (e) { toast("That file is not a photo we can read"); continue; }
+      await sendPicTo(t, src);
+    }
   };
   const compose = () => openCompose(cleaned ? { prefix: cleaned, files } : { files });
   if (!targets.length) { compose(); return; }
@@ -5940,7 +5980,7 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 boot();
 setInterval(zenTick, 10000);
 setInterval(retryUnsent, 45000);
-window.addEventListener("online", () => setTimeout(retryUnsent, 800));
+window.addEventListener("online", () => setTimeout(() => { retryUnsent(); feedTries = 0; if (sbUser && S) loadFeed().catch(() => {}); }, 800));
 window.addEventListener("load", () => setTimeout(retryUnsent, 6000));
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") zenTick(); });
 window.addEventListener("load", () => setTimeout(zenTick, 1500));

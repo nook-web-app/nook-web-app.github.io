@@ -1,6 +1,6 @@
-const VERSION = "nook-3.6.0";
+const VERSION = "nook-3.6.1";
 const SHARE_CACHE = "nook-share";
-const SHELL = ["./", "index.html", "app.js", "update.js", "supabase.js", "fonts/inter-latin.woff2", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
+const SHELL = ["./", "index.html", "style.css", "guard.js", "app.js", "update.js", "supabase.js", "fonts/inter-latin.woff2", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => {
   // the app files are fetched fresh (not from the browser's own cache) and kept under this version, so a version is always whole
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: "reload" })))));

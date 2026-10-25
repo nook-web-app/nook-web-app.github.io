@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.6.4";
+const APP_VERSION = "3.6.5";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -323,6 +323,8 @@ if (window.matchMedia) {
 
 const byId = id => S.posts.find(p => p.id === id);
 const kids = id => S.posts.filter(p => p.parent === id);
+// a post that shows a link card does not also print the link; the copy button in the menu still has the whole text
+const cardless = p => { if (!p.text || (p.imgs && p.imgs.length) || !firstUrl(p.text)) return p.text; return p.text.replace(/https?:\/\/[^\s<>"]+/i, "").replace(/[ \t]{2,}/g, " ").trim(); };
 // every reply under a post counts, the ones to replies too
 const replyTotal = id => flat(id, 0, []).length;
 function flat(id, d, out) {
@@ -651,13 +653,60 @@ function getPreview(url) {
   }
   return pvMem.get(url);
 }
+// what a card says: for Instagram only the @username and the caption without hashtags, for everything else just the page title
+function cardText(d, url) {
+  const t = String((d && d.t) || "");
+  if (/(^|\.)instagram\.com$/i.test(hostOf(url))) {
+    const who = /\(@([\w.]+)\)/.exec(t) || /\s-\s([\w.]+) on /.exec(String((d && d.d) || ""));
+    const m = /:\s*["\u201c]([\s\S]*)$/.exec(String((d && d.d) || ""));
+    const cap = m ? m[1].replace(/["\u201d]\.?\s*$/, "").replace(/#[\p{L}\p{N}_]+/gu, "").replace(/\s+/g, " ").trim() : "";
+    return { t: who ? "@" + who[1] : t.replace(/\s*[\u2022\u00b7|-]\s*Instagram.*$/i, ""), c: cap };
+  }
+  return { t: t.replace(/\s*[\u2022\u00b7]\s*Instagram (photo|video|reel)s?$/i, ""), c: "" };
+}
+// where the main thing in a picture is, as fractions: the crop is moved so that spot stays in view
+function focusPos(f, ar, box) {
+  const at = (v, len, win) => (len - win) > 0.001 ? Math.max(0, Math.min(100, ((v * len - win / 2) / (len - win)) * 100)) : 50;
+  if (ar < box) return "50% " + at(f.y / 100, 1 / ar, 1 / box).toFixed(1) + "%";
+  return at(f.x / 100, ar, box).toFixed(1) + "% 50%";
+}
+const focusMem = new Map();
+async function getFocus(url, img) {
+  if (!sbUser) return null;
+  if (!focusMem.has(url)) focusMem.set(url, (async () => {
+    try {
+      const { data } = await sb.auth.getSession();
+      const tok = data && data.session ? data.session.access_token : null;
+      const r = await fetch(SB_URL + "/functions/v1/focus", { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: JSON.stringify({ url: img }), signal: AbortSignal.timeout ? AbortSignal.timeout(20000) : undefined });
+      if (!r.ok) return null;
+      const j = await r.json();
+      return j && Number.isFinite(j.x) && Number.isFinite(j.y) ? { x: j.x, y: j.y } : null;
+    } catch (e) { return null; }
+  })().then(f => { if (!f) setTimeout(() => focusMem.delete(url), 300000); return f; }));
+  return focusMem.get(url);
+}
 function linkCard(url, chat) {
   const host = hostOf(url);
   const card = h("a", { class: "lc" + (chat ? " chat" : ""), href: url, target: "_blank", rel: "noopener noreferrer", onclick: e => e.stopPropagation() });
   const fill = d => {
     card.textContent = "";
-    if (d && d.i) { const im = h("img", { class: "lci", src: d.i, alt: "", loading: "lazy", referrerpolicy: "no-referrer" }); im.onerror = () => im.remove(); card.append(im); }
-    card.append(h("div", { class: "lcb" }, h("b", {}, d && d.t ? d.t : host), h("span", { class: "lch" }, host)));
+    const ct = cardText(d, url);
+    if (d && d.i) {
+      const im = h("img", { class: "lci", src: d.i, alt: "", loading: "lazy", referrerpolicy: "no-referrer" });
+      im.onerror = () => im.remove();
+      card.append(im);
+      // Aegis looks at the picture once and says where the main thing is; the crop is placed on it (not in chats)
+      if (!chat) {
+        const place = f => { if (f && im.naturalWidth) im.style.objectPosition = focusPos(f, im.naturalWidth / im.naturalHeight, 4 / 3); };
+        const go2 = async () => {
+          let f = S.previews[url] && S.previews[url].f;
+          if (!f) { f = await getFocus(url, d.i); if (f && S.previews[url]) { S.previews[url].f = f; persist(); } }
+          place(f);
+        };
+        if (im.complete && im.naturalWidth) go2(); else im.addEventListener("load", go2, { once: true });
+      }
+    }
+    card.append(h("div", { class: "lcb" }, h("b", {}, ct.t || host), ct.c && !chat ? h("span", { class: "lcd" }, ct.c) : null, h("span", { class: "lch" }, host)));
   };
   if (S.previews[url] && S.previews[url].v) fill(S.previews[url]);
   else { card.append(h("div", { class: "skel lcs" })); getPreview(url).then(fill); }
@@ -1006,7 +1055,7 @@ function postCard(p, o) {
   const pname = p.ai ? "Zenith" : p.ra ? p.ra.name : S.profile.name, phand = p.ai ? "@zenith" : "@" + (p.ra ? p.ra.handle : S.profile.handle);
   col.append(h("div", { class: "ph2" }, pname ? h("span", { class: "pn" }, pname) : null, h("span", { class: "pu" }, phand), h("span", { class: "pt" }, ago(p.t))));
   if (o.replyTo && p.parent) { const par = byId(p.parent); col.append(h("div", { class: "rt" }, ic("reply", 14), "Replying to " + (!par ? "a post" : par.ai ? "@zenith" : "@" + (par.ra ? par.ra.handle : S.profile.handle)))); }
-  if (p.text) col.append(txBody(p.text, ""));
+  if (cardless(p)) col.append(txBody(cardless(p), ""));
   if (p.imgs.length) col.append(imgGrid(p.imgs));
   else if (firstUrl(p.text)) col.append(linkCard(firstUrl(p.text)));
   if (!o.compact) col.append(acts(p));
@@ -1189,7 +1238,7 @@ function mainPost(p) {
     h("div", { class: "mp" },
       p.pinned ? h("div", { class: "rt", style: "margin-bottom:8px" }, ic("pin", 14), "Pinned post") : null,
       h("div", { class: "mh" }, pfp, h("div", { class: "nm" }, h("b", {}, p.ai ? "Zenith" : p.ra ? p.ra.name : S.profile.name), h("span", {}, p.ai ? "@zenith" : "@" + (p.ra ? p.ra.handle : S.profile.handle)))),
-      p.text ? txBody(p.text, " big") : null,
+      cardless(p) ? txBody(cardless(p), " big") : null,
       p.imgs.length ? imgGrid(p.imgs) : firstUrl(p.text) ? linkCard(firstUrl(p.text)) : null,
       h("div", { class: "when" }, new Date(p.t).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) + (p.edited ? " · edited" : ""))),
     st.length ? h("div", { class: "stats" }, st) : null,

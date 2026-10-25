@@ -51,7 +51,7 @@ async function fetchPic(u: string): Promise<{ inline_data: { mime_type: string; 
   const x = publicHttps(u);
   if (!x) return null;
   try {
-    const r = await fetch(x, { signal: AbortSignal.timeout(6000), headers: { accept: "image/*" } });
+    const r = await fetch(x, { signal: AbortSignal.timeout(6000), headers: { accept: "image/*", "user-agent": "Mozilla/5.0 (compatible; NookPreview/1.0)" } });
     if (!r.ok || !publicHttps(r.url)) return null;
     const type = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
     if (!PIC_TYPES.includes(type)) return null;

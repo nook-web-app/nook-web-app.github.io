@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.7.3";
+const APP_VERSION = "3.8.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1026,6 +1026,17 @@ async function sharePost(p) {
     ...(targets.length ? [{ icon: "chat", label: "Message", fn: () => chooseTarget(targets, async t => {
       if (p.ai && t.kind === "user") { try { const pu = await zenPfpUrl(); await sendDm(t.id, ZPOST + JSON.stringify({ x: p.text, t: p.t, ...(pu ? { a: pu } : {}) }), [], []); toast("Sent to " + t.name); } catch (e) { toast("Could not send"); } return; }
       if (p.remote && t.kind === "user") { try { await sendDm(t.id, RPOST + JSON.stringify({ id: p.remote, u: p.ra ? p.ra.id : sbUser.id }), [], []); toast("Sent to " + t.name); } catch (e) { toast("Could not send. " + plainErr(e, "Try again")); } return; }
+      if (t.kind === "note") {
+        // a post goes into notes as the post itself, the way it goes to a person, not as a picture of it
+        const chat = S.chats.find(x => x.id === t.id);
+        if (!chat) return;
+        const m = { id: uid(), text: "", t: Date.now(), imgs: [] };
+        if (p.ai) { const pu = await zenPfpUrl().catch(() => null); m.zpost = { x: String(p.text || "").slice(0, 600), t: p.t, a: pu || null }; }
+        else if (p.remote) m.rpost = { id: p.remote, u: p.ra ? p.ra.id : sbUser.id };
+        else { m.text = p.text || ""; m.imgs = (p.imgs || []).slice(); }
+        chat.msgs.push(m); persist(); toast("Saved in " + t.name);
+        return;
+      }
       const b = await pic(); if (b) sendPicTo(t, b, true);
     }) }] : []),
     { icon: "share", label: "Another app", fn: () => sharePic(p) },
@@ -1044,7 +1055,7 @@ function acts(p, big, nc) {
     ab("mo", "dots", 0, false, () => sheet([...(typeof p.text === "string" && p.text ? [{ icon: "copy", label: "Copy post text", fn: () => copy(p.text || "") }] : []), { icon: "eyeoff", label: "Not interested", danger: true, fn: () => lessLikeThis(p) }, { icon: "flag", label: "Report post", danger: true, fn: () => reportPost(p) }]), "More"));
   return h("div", { class: "acts" + (big ? " big" : ""), "data-pid": p.id, "data-nc": nc ? "1" : null },
     ab("rl", "reply", n, false, () => openCompose({ parent: p.id }), "Reply"),
-    ab("rp", "repost", p.ai ? 0 : p.rpc || 0, p.reposted, () => (p.remote ? toggleRemoteRepost(p, big) : (p.reposted = !p.reposted, bump = p.id + "rp", persist(), refresh(p, big))), "Repost"),
+    ab("rp", "repost", p.ai ? 0 : p.rpc || 0, p.reposted, () => (p.remote ? toggleRemoteRepost(p, big) : (p.reposted = !p.reposted, p.rpAt = p.reposted ? Date.now() : 0, bump = p.id + "rp", persist(), refresh(p, big))), "Repost"),
     ab("like", "heart", p.ai ? (p.zenLike ? 1 : 0) : p.lc || 0, p.liked, () => (p.remote ? toggleRemoteLike(p, big) : (p.liked = !p.liked, bump = p.id + "like", persist(), refresh(p, big))), "Like", true),
     ab("bm", "bookmark", 0, p.saved, () => { p.saved = !p.saved; bump = p.id + "bm"; persist(); refresh(p, big); toast(p.saved ? "Saved" : "Removed from saved"); }, "Save", true),
     ab("sh", "share", 0, false, () => sharePost(p), "Share post"),
@@ -1058,6 +1069,8 @@ function refreshActs(p) {
 function postCard(p, o) {
   o = o || {};
   const col = h("div", { class: "pc" });
+  const lab = o.lab ? o.lab(p) : null;
+  if (lab) col.append(h("div", { class: "rt" }, ic("repost", 14), lab));
   if (o.pin && p.pinned) col.append(h("div", { class: "rt" }, ic("pin", 14), "Pinned post"));
   const pname = p.ai ? "Zenith" : p.ra ? p.ra.name : S.profile.name, phand = p.ai ? "@zenith" : "@" + (p.ra ? p.ra.handle : S.profile.handle);
   col.append(h("div", { class: "ph2" }, pname ? h("span", { class: "pn" }, pname) : null, h("span", { class: "pu" }, phand), h("span", { class: "pt" }, ago(p.t))));
@@ -1294,8 +1307,11 @@ function profileV() {
   if (S.ui.profTab === "posts") main.append(composerRow());
   const tab = S.ui.profTab;
   if (tab === "posts") {
-    const a = S.posts.filter(p => !p.parent && !p.ai && !p.ra).sort((x, y) => (y.pinned ? 1 : 0) - (x.pinned ? 1 : 0) || y.t - x.t);
-    main.append(postList(a, { pin: true, empty: emptyState("smile", "No posts yet.") }));
+    // a post you repost sits in your posts too, at the time you reposted it
+    const items = S.posts.filter(p => !p.parent && !p.ai && !p.ra).map(p => ({ p, t: p.t, pin: p.pinned ? 1 : 0 }))
+      .concat(S.posts.filter(p => (p.ra || p.ai) && p.reposted && !p.parent).map(p => ({ p, t: p.rpAt || p.t, pin: 0 })));
+    items.sort((x, y) => y.pin - x.pin || y.t - x.t);
+    main.append(postList(items.map(x => x.p), { pin: true, lab: p => (p.ra || p.ai ? "You reposted" : null), empty: emptyState("smile", "No posts yet.") }));
   } else if (tab === "replies") {
     const a = S.posts.filter(p => p.parent && !p.ai && !p.ra).sort((x, y) => y.t - x.t);
     main.append(postList(a, { replyTo: true, empty: emptyState("reply", "No replies yet. Reply to one of your own posts.") }));
@@ -1351,7 +1367,7 @@ function chatV() {
   }
   const mine = S.chats.slice().sort((a, b) => lastT(b) - lastT(a)).map(c => {
     const last = c.msgs[c.msgs.length - 1];
-    return h("div", { class: "lrow", onclick: () => go({ r: "conv", id: c.id }) }, avatar(48), h("div", { class: "nm" }, h("b", {}, c.name), h("span", { class: "sub" }, last ? last.text || "Sent a photo" : "No messages yet")), last ? h("span", { class: "time" }, ago(last.t)) : null);
+    return h("div", { class: "lrow", onclick: () => go({ r: "conv", id: c.id }) }, avatar(48), h("div", { class: "nm" }, h("b", {}, c.name), h("span", { class: "sub" }, last ? last.text || (last.rpost || last.zpost ? "Shared a post" : "Sent a photo") : "No messages yet")), last ? h("span", { class: "time" }, ago(last.t)) : null);
   });
   if (mine.length > 1) main.append(folder("notes", h("div", { class: "lrow" }, avatar(48), h("div", { class: "nm" }, h("b", {}, "Notes to self"), h("span", { class: "sub" }, mine.length + " chats")), h("span", { class: "time" }, ago(Math.max(...S.chats.map(lastT))))), mine));
   else main.append(...mine);
@@ -1381,6 +1397,8 @@ function convV(c) {
     if (m.ai) swipeReply(row, () => fillReply("@zenith "));
     const url = firstUrl(m.text);
     if (m.imgs && m.imgs.length) row.append(imgGrid(m.imgs, when(m)));
+    if (m.rpost) { const rc = rCard(m.rpost.id, false, m.rpost.u); rc.addEventListener("click", e => { e.stopPropagation(); openSharedPost(m.rpost.id).catch(() => toast("Could not open that post. Check your connection")); }); row.append(rc); }
+    if (m.zpost) { const zc = zCard(m.zpost); zc.addEventListener("click", e => { e.stopPropagation(); viewZPost(m.zpost); }); row.append(zc); }
     if (url) row.append(linkCard(url, true));
     if (m.text) row.append(h("div", { class: "bub" }, rich(m.text)));
     row.append(h("div", { class: "mmeta" }, h("div", { class: "mmi" }, h("span", {}, when(m)))));
@@ -2541,7 +2559,7 @@ async function loadFeed() {
   const ids = posts.filter(p => !p.parent_id).map(p => p.id);
   const feedRes = await Promise.all([
     sb.from("likes").select("post_id").eq("user_id", sbUser.id),
-    sb.from("reposts").select("post_id").eq("user_id", sbUser.id),
+    sb.from("reposts").select("post_id, created_at").eq("user_id", sbUser.id),
     sb.from("blocks").select("blocked_id").eq("blocker_id", sbUser.id),
     sb.from("blocks").select("blocker_id").eq("blocked_id", sbUser.id),
     ids.length ? sb.from("likes").select("post_id").in("post_id", ids) : { data: [] },
@@ -2588,6 +2606,7 @@ async function loadFeed() {
   const lc = tally(likeRows), rc = tally(repostRows);
   const liked = new Set((myLikes || []).map(x => x.post_id));
   const reposted = new Set((myReposts || []).map(x => x.post_id));
+  const rpTime = new Map((myReposts || []).map(x => [x.post_id, Date.parse(x.created_at) || 0]));
   const hidden = new Set([...(blocksOut || []).map(x => x.blocked_id), ...(blocksIn || []).map(x => x.blocker_id)]);
   const shown = posts.filter(p => !hidden.has(p.user_id));
   const authors = [...new Set(shown.filter(p => p.user_id !== sbUser.id).map(p => p.user_id))];
@@ -2605,6 +2624,7 @@ async function loadFeed() {
     p.rp = replyTally.get(p.remote) || 0;
     p.liked = liked.has(p.remote);
     p.reposted = reposted.has(p.remote);
+    p.rpAt = p.reposted ? rpTime.get(p.remote) || p.rpAt || 0 : 0;
   });
   const remote = others.map(p => {
     const a = who.get(p.user_id) || { username: "user", avatar: null };
@@ -2612,7 +2632,7 @@ async function loadFeed() {
       id: "r" + p.id, remote: p.id, parent: p.parent_id ? (localByRemote.get(p.parent_id) || "r" + p.parent_id) : null,
       text: p.body || "", t: Date.parse(p.created_at), imgs: parseMedia(p.media_url),
       ra: { id: p.user_id, name: a.display_name == null ? a.username : a.display_name, handle: a.username, avatar: a.avatar || null },
-      liked: liked.has(p.id), reposted: reposted.has(p.id), saved: savedMap.get(p.id) || false,
+      liked: liked.has(p.id), reposted: reposted.has(p.id), rpAt: rpTime.get(p.id) || 0, saved: savedMap.get(p.id) || false,
       lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, rp: replyTally.get(p.id) || 0, pinned: false
     };
   });
@@ -2675,7 +2695,7 @@ async function toggleRemoteRepost(p, big) {
 }
 async function toggleRemoteRepostNow(p, big) {
   const on = !p.reposted;
-  p.reposted = on; p.rpc = Math.max(0, (p.rpc || 0) + (on ? 1 : -1));
+  p.reposted = on; p.rpAt = on ? Date.now() : 0; p.rpc = Math.max(0, (p.rpc || 0) + (on ? 1 : -1));
   bump = p.id + "rp"; persist(); refresh(p, big);
   const { error } = on
     ? await sb.from("reposts").insert({ user_id: sbUser.id, post_id: p.remote })
@@ -2704,6 +2724,7 @@ function userV(cur) {
   const listEl = h("div");
   let tab = "posts";
   let st = null;
+  let theirReposts = (cacheRead("rpt:" + cur.id) || {}).v || null;
   const drawTabs = () => {
     tabsEl.textContent = "";
     [["posts", "Posts"], ["replies", "Replies"], ["reposts", "Reposts"], ["media", "Media"], ["likes", "Likes"]].forEach(t => tabsEl.append(h("button", { class: "tab" + (t[0] === tab ? " on" : ""), role: "tab", onclick: () => { tab = t[0]; drawTabs(); drawList(); } }, h("span", {}, t[1]))));
@@ -2728,7 +2749,15 @@ function userV(cur) {
     const pinId = st && st.acc ? st.acc.pinned_post_id : null;
     S.posts.forEach(p => { if (p.ra && p.ra.id === cur.id) p.pinned = !!pinId && p.remote === pinId; });
     const mine = S.posts.filter(p => p.ra && p.ra.id === cur.id).sort(byT);
-    if (tab === "posts") listEl.append(postList(mine.filter(p => !p.parent).sort((x, y) => (y.pinned ? 1 : 0) - (x.pinned ? 1 : 0) || y.t - x.t), { pin: true, empty: emptyState("smile", "No posts yet.") }));
+    if (tab === "posts") {
+      // what this person reposted sits in their posts too, at the time they reposted it
+      const items = mine.filter(p => !p.parent).map(p => ({ p, t: p.t, pin: p.pinned ? 1 : 0 }));
+      const had = new Set(items.map(x => x.p.remote));
+      (theirReposts || []).forEach(r => { const p = S.posts.find(x => x.remote === r.post_id); if (p && !p.parent && !had.has(p.remote) && !(p.ra && p.ra.id === cur.id)) items.push({ p, t: r.t, pin: 0, rp: true }); });
+      items.sort((x, y) => y.pin - x.pin || y.t - x.t);
+      const who2 = new Set(items.filter(x => x.rp).map(x => x.p.id));
+      listEl.append(postList(items.map(x => x.p), { pin: true, lab: p => (who2.has(p.id) ? (pnEl.textContent || who.name || "They") + " reposted" : null), empty: emptyState("smile", "No posts yet.") }));
+    }
     else if (tab === "replies") listEl.append(postList(mine.filter(p => p.parent), { replyTo: true, empty: emptyState("reply", "No replies yet.") }));
     else if (tab === "reposts") idsTab("reposts", "reposts", "No reposts yet.", "repost");
     else if (tab === "likes") idsTab("likes", "likes", "No likes yet.", "heart");
@@ -2740,6 +2769,12 @@ function userV(cur) {
   };
   main.append(tabsEl, listEl);
   drawTabs(); drawList();
+  if (sbUser) sb.from("reposts").select("post_id, created_at").eq("user_id", cur.id).order("created_at", { ascending: false }).limit(100).then(({ data, error }) => {
+    if (error || !data) return;
+    theirReposts = data.map(r => ({ post_id: r.post_id, t: Date.parse(r.created_at) || 0 }));
+    cacheWrite("rpt:" + cur.id, theirReposts);
+    if (tab === "posts") drawList();
+  });
   if (!sbUser) return;
   let counts = { followers: 0, following: 0 };
   const paintStat = () => {
@@ -6399,7 +6434,7 @@ const noteHash = new Map();
 const imgH = src => { let v = noteHash.get(src); if (!v) { v = srcHash(src); if (noteHash.size > 3000) noteHash.clear(); noteHash.set(src, v); } return v; };
 const noteCSig = c => srcHash("c|" + (c.name || "") + "|" + (c.t || 0));
 const noteImgSig = m => (m.imgs || []).map(imgH).join(",");
-const noteMSig = m => srcHash("m|" + (m.text || "") + "|" + (m.t || 0) + "|" + noteImgSig(m));
+const noteMSig = m => srcHash("m|" + (m.text || "") + "|" + (m.t || 0) + "|" + noteImgSig(m) + "|" + JSON.stringify(m.rpost || null) + JSON.stringify(m.zpost || null));
 let notesOn = false, notesBusy = false, notesAgain = false, notesTimer = 0, notesQuiet = false;
 function noteState() {
   const n = S.notesSync;
@@ -6470,12 +6505,16 @@ async function noteTake(ns, key, r) {
   const text = String(p.x || ""), t = Number(p.t) || Date.now();
   const media = Array.isArray(r.media) ? r.media : [];
   const have = ns.pm[r.id];
-  if (m && m.text === text && m.t === t && have && JSON.stringify(have.e) === JSON.stringify(media)) return false;
+  const rp = p.rp && typeof p.rp.id === "string" && /^[0-9a-f-]{36}$/i.test(p.rp.id) ? { id: p.rp.id, u: typeof p.rp.u === "string" && /^[0-9a-f-]{36}$/i.test(p.rp.u) ? p.rp.u : null } : null;
+  const zp = p.zp && typeof p.zp.x === "string" ? { x: p.zp.x.slice(0, 600), t: Number(p.zp.t) || Date.now(), a: typeof p.zp.a === "string" && p.zp.a.startsWith(SB_URL + "/storage/v1/object/public/media/") && p.zp.a.length < 400 ? p.zp.a : null } : null;
+  if (m && m.text === text && m.t === t && have && JSON.stringify(have.e) === JSON.stringify(media) && JSON.stringify(m.rpost || null) === JSON.stringify(rp) && JSON.stringify(m.zpost || null) === JSON.stringify(zp)) return false;
   // a photo that cannot be fetched stops the pull here, and it is tried again on the next round
   const imgs = [];
   for (const md of media) imgs.push(await notePicIn(key, md));
   if (!c) { c = { id: cid, name: "Notes to self", msgs: [], t }; S.chats.push(c); ns.pushed["c:" + cid] = noteCSig(c); }
   if (!m) { m = { id: rid, text, t, imgs }; c.msgs.push(m); c.msgs.sort((a, b) => a.t - b.t); } else { m.text = text; m.t = t; m.imgs = imgs; }
+  if (rp) m.rpost = rp; else delete m.rpost;
+  if (zp) m.zpost = zp; else delete m.zpost;
   ns.pushed[r.id] = noteMSig(m);
   ns.pm[r.id] = { h: noteImgSig(m), e: media };
   return true;
@@ -6513,7 +6552,7 @@ async function notesPush(ns, key) {
           const h = noteImgSig(x.m), have = ns.pm[x.id];
           let media = have && have.h === h ? have.e : null;
           if (!media) { media = []; for (const src of x.m.imgs || []) { if (/^data:/.test(src)) media.push(await notePicOut(key, src)); } }
-          rows.push({ owner_id: sbUser.id, id: x.id, body: await noteSeal(key, { c: x.c.id, t: x.m.t, x: x.m.text || "" }), media, deleted: false });
+          rows.push({ owner_id: sbUser.id, id: x.id, body: await noteSeal(key, { c: x.c.id, t: x.m.t, x: x.m.text || "", ...(x.m.rpost ? { rp: x.m.rpost } : {}), ...(x.m.zpost ? { zp: x.m.zpost } : {}) }), media, deleted: false });
           done.push({ x, pm: { h, e: media } });
         } else {
           rows.push({ owner_id: sbUser.id, id: x.id, body: await noteSeal(key, { n: x.c.name, t: x.c.t }), media: [], deleted: false });

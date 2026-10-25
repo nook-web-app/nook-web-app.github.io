@@ -75,7 +75,11 @@
     try { once = sessionStorage.getItem("nook-idle-reload") === "1"; if (idle && !once) sessionStorage.setItem("nook-idle-reload", "1"); } catch (e) { once = true; }
     if (idle && !once) Promise.race([r.update(), new Promise(res => setTimeout(res, 4000))]).then(() => location.reload(), () => location.reload());
   }).catch(() => {});
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") touch(); });
+  // an app that stays open still hears about a new version: the check runs when it comes back to the front and every ten minutes
+  let lastCheck = 0;
+  const poll = () => { if (!reg || document.visibilityState !== "visible" || Date.now() - lastCheck < 60000) return; lastCheck = Date.now(); reg.update().catch(() => {}); };
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") touch(); else poll(); });
+  setInterval(poll, 600000);
   window.addEventListener("pagehide", touch);
   setInterval(() => { if (document.visibilityState === "visible") touch(); }, 60000);
 })();

@@ -1,0 +1,1 @@
+-- applied to the database before this folder existed; this file only keeps the migration history in step

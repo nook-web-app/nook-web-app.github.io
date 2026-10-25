@@ -1,4 +1,4 @@
-const VERSION = "nook-3.4.21";
+const VERSION = "nook-3.4.22";
 const SHARE_CACHE = "nook-share";
 const SHELL = ["./", "index.html", "app.js", "update.js", "supabase.js", "fonts/inter-latin.woff2", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => {
@@ -25,7 +25,7 @@ async function handleShare(request) {
   }
 }
 self.addEventListener("activate", e => {
-  e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== VERSION && k !== SHARE_CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
 self.addEventListener("fetch", e => {
   const url = new URL(e.request.url);

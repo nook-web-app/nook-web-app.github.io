@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.6.3";
+const APP_VERSION = "3.6.4";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -657,7 +657,7 @@ function linkCard(url, chat) {
   const fill = d => {
     card.textContent = "";
     if (d && d.i) { const im = h("img", { class: "lci", src: d.i, alt: "", loading: "lazy", referrerpolicy: "no-referrer" }); im.onerror = () => im.remove(); card.append(im); }
-    card.append(h("div", { class: "lcb" }, h("b", {}, d && d.t ? d.t : host), d && d.d && !chat ? h("span", { class: "lcd" }, d.d) : null, h("span", { class: "lch" }, host)));
+    card.append(h("div", { class: "lcb" }, h("b", {}, d && d.t ? d.t : host), h("span", { class: "lch" }, host)));
   };
   if (S.previews[url] && S.previews[url].v) fill(S.previews[url]);
   else { card.append(h("div", { class: "skel lcs" })); getPreview(url).then(fill); }
@@ -741,7 +741,7 @@ function settleScroll(y) {
 // a post and one reply opened from it is as deep as it goes, so nobody can wander down one chain forever
 const MAX_OPEN_POSTS = 2;
 function go(r) {
-  if (r && r.r === "thread" && stack.filter(x => x.r === "thread").length >= MAX_OPEN_POSTS) { toast("Too many posts open. Go back first"); return; }
+  if (r && r.r === "thread" && stack.filter(x => x.r === "thread").length >= MAX_OPEN_POSTS) return;
   scrolls.push(main.scrollTop); stack.push(r); hist(false); render("fwd"); main.scrollTop = 0; }
 function back() { if (stack.length > 1) history.back(); }
 function hist(replace) { const st = { s: JSON.parse(JSON.stringify(stack)), sc: scrolls.slice() }; try { if (replace) history.replaceState(st, ""); else history.pushState(st, ""); } catch (e) {} }
@@ -1204,9 +1204,13 @@ function threadV(c) {
   anc.forEach(a => main.append(postCard(a, { line: true, compact: true })));
   const mp = mainPost(p);
   main.append(mp);
-  main.append(h("div", { class: "rb" }, avatar(28), h("button", { onclick: () => openCompose({ parent: p.id }) }, "Write your reply")));
-  // only the replies to this post are listed; a reply to a reply shows when that reply is opened
-  kids(p.id).sort((a, b) => a.t - b.t).forEach(k => main.append(postCard(k, { rep: true, d: 0 })));
+  main.append(h("div", { class: "rb" }));
+  threadReplies(p).forEach(x => main.append(postCard(x.p, { rep: true, d: x.d })));
+}
+// a post lists only the replies made to it; an opened reply lists everything under it, so no page ever has to be opened for a third level
+function threadReplies(p) {
+  if (p.parent) return flat(p.id, 0, []);
+  return kids(p.id).sort((a, b) => a.t - b.t).map(k => ({ p: k, d: 0 }));
 }
 
 function profileV() {
@@ -1799,7 +1803,7 @@ const zenRefresh = () => {
   const rb = cur.r === "thread" ? main.querySelector(".rb") : null;
   if (rb && byId(cur.id)) {
     while (rb.nextSibling) rb.nextSibling.remove();
-    kids(cur.id).sort((a, b) => a.t - b.t).forEach(k => main.append(postCard(k, { rep: true, d: 0 })));
+    threadReplies(byId(cur.id)).forEach(x => main.append(postCard(x.p, { rep: true, d: x.d })));
     return;
   }
   zenCounts();

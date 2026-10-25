@@ -167,7 +167,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.28";
+const APP_VERSION = "3.4.29";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -946,6 +946,7 @@ async function sharePost(p) {
     { icon: "edit", label: "Post", fn: async () => { const b = await pic(); if (b) openCompose({ files: [new File([b], "nook-post.png", { type: "image/png" })] }); } },
     ...(targets.length ? [{ icon: "chat", label: "Message", fn: () => chooseTarget(targets, async t => {
       if (p.ai && t.kind === "user") { try { await sendDm(t.id, ZPOST + JSON.stringify({ x: p.text, t: p.t }), [], []); toast("Sent to " + t.name); } catch (e) { toast("Could not send"); } return; }
+      if (p.remote && t.kind === "user") { try { await sendDm(t.id, RPOST + JSON.stringify({ id: p.remote }), [], []); toast("Sent to " + t.name); } catch (e) { toast("Could not send. " + plainErr(e, "Try again")); } return; }
       const b = await pic(); if (b) sendPicTo(t, b, true);
     }) }] : []),
     { icon: "share", label: "Another app", fn: () => sharePic(p) },
@@ -4777,7 +4778,48 @@ const ZMARK = "\u2063Z\u2063";
 const ZPOST = "\u2063P\u2063";
 // the mark and the post card only count when they come from the owner's account, so nobody else can pose as Zenith
 const OWNER_ID = "c8bd0469-c5e1-4741-8ee5-2baf3bc02221";
-const zUn = t => typeof t === "string" ? (t.startsWith(ZMARK) ? t.slice(ZMARK.length) : t.startsWith(ZPOST) ? "a post" : t) : t;
+// a shared post travels as a reference (its id): the other phone reads the post itself, so nobody can write words in someone else's name
+const RPOST = "\u2063R\u2063";
+const zUn = t => typeof t === "string" ? (t.startsWith(ZMARK) ? t.slice(ZMARK.length) : t.startsWith(ZPOST) || t.startsWith(RPOST) ? "a post" : t) : t;
+function rPostOf(t) {
+  if (typeof t !== "string" || !t.startsWith(RPOST)) return null;
+  try { const j = JSON.parse(t.slice(RPOST.length)); return j && typeof j.id === "string" && /^[0-9a-f-]{36}$/i.test(j.id) ? { id: j.id } : null; } catch (e) { return null; }
+}
+const rpCache = new Map();
+function loadRPost(id) {
+  if (!rpCache.has(id)) {
+    const p = (async () => {
+      const { data, error } = await sb.from("posts").select("id, user_id, body, media_url, created_at").eq("id", id).maybeSingle();
+      if (error) throw error;
+      if (!data) return null;
+      const m = await cachedAccounts([data.user_id]);
+      const a = m.get(data.user_id) || {};
+      return { text: String(data.body || ""), t: Date.parse(data.created_at), imgs: parseMedia(data.media_url).slice(0, 4), name: a.display_name || a.username || "user", handle: a.username || "user", avatar: a.avatar || null };
+    })();
+    rpCache.set(id, p);
+    p.catch(() => rpCache.delete(id));
+  }
+  return rpCache.get(id);
+}
+// the shared post as a card: only that post, no profile and no replies behind it
+function rCard(id, big) {
+  const box = h("div", { class: "zcard" + (big ? " big" : "") }, h("div", { class: "zct", style: "color:var(--muted)" }, "Loading post"));
+  loadRPost(id).then(d => {
+    box.textContent = "";
+    if (!d) { box.append(h("div", { class: "zct", style: "color:var(--muted)" }, "This post is not available")); return; }
+    box.append(h("div", { class: "zch" }, rAv({ name: d.name, avatar: d.avatar }, big ? 44 : 34), h("div", { class: "nm" }, h("b", {}, d.name), h("span", {}, "@" + d.handle))));
+    if (d.text) box.append(h("div", { class: "zct" }, rich(d.text)));
+    if (d.imgs.length) box.append(h("div", { class: "zimgs" }, d.imgs.map(s => mkImg(s))));
+    box.append(h("div", { class: "zcd" }, Number.isFinite(d.t) ? new Date(d.t).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : ""));
+  }).catch(() => { box.textContent = ""; box.append(h("div", { class: "zct", style: "color:var(--muted)" }, "Could not load this post")); });
+  return box;
+}
+function viewRPost(id) {
+  const m = modal({ title: "Post", action: "Close", onAction: c => c(), body: [rCard(id, true)] });
+  m.act.style.visibility = "hidden";
+  const cb = m.ov.querySelector(".tbtn");
+  if (cb) cb.textContent = "Close";
+}
 function zPostOf(t) {
   if (typeof t !== "string" || !t.startsWith(ZPOST)) return null;
   try { const j = JSON.parse(t.slice(ZPOST.length)); return j && typeof j.x === "string" ? { x: j.x.slice(0, 600), t: Number(j.t) || Date.now() } : null; } catch (e) { return null; }
@@ -4819,6 +4861,8 @@ function loadEncMedia(md, otherId) {
 async function openRows(rows, otherId, waitFor) {
   const out = await Promise.all(rows.map(async m => {
     const t = await openText(otherId, m.body);
+    const rp = rPostOf(t);
+    if (rp || (typeof t === "string" && t.startsWith(RPOST))) return Object.assign({}, m, { text: "" }, rp ? { rpost: rp } : {});
     const fromOwner = m.sender_id === OWNER_ID;
     const marked = typeof t === "string" && t.startsWith(ZMARK), card = typeof t === "string" && t.startsWith(ZPOST);
     if (!fromOwner && (marked || card)) return Object.assign({}, m, { text: t.slice(marked ? ZMARK.length : ZPOST.length) });
@@ -4987,6 +5031,7 @@ function dmBubble(m, mine, otherId) {
     row.textContent = "";
     const body = msg.text !== undefined ? msg.text : msg.body;
     (msg.media || []).forEach((md, i) => row.append(dmMedia(md, otherId, () => openDmViewer(row, i))));
+    if (msg.rpost) { const rc = rCard(msg.rpost.id); rc.addEventListener("click", e => { e.stopPropagation(); viewRPost(msg.rpost.id); }); row.append(rc); }
     if (msg.zpost) { const zc = zCard(msg.zpost); zc.addEventListener("click", e => { e.stopPropagation(); viewZPost(msg.zpost); }); row.append(zc); }
     const link = firstUrl(body);
     if (link) row.append(linkCard(link, true));

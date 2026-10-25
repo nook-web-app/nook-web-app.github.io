@@ -12,8 +12,8 @@ async function geminiKey(): Promise<string> {
   return keyCache.v;
 }
 const MAX_IMG = 12 * 1024 * 1024;
-// a sweep runs every minute: up to 25 posts a minute, checked 4 at a time so Gemma is not flooded
-const PER_SWEEP = 25;
+// a sweep runs every minute: up to 15 posts a minute, checked 4 at a time so Gemma is not flooded
+const PER_SWEEP = 15;
 const AT_ONCE = 4;
 
 // the same rules judge the words of a post and any words written inside a picture

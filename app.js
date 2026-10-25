@@ -167,7 +167,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.23";
+const APP_VERSION = "3.4.24";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1540,6 +1540,9 @@ async function readZip(buf) {
     const name = dec.decode(u8.subarray(p + 46, p + 46 + nlen));
     const start = loff + 30 + dv.getUint16(loff + 26, true) + dv.getUint16(loff + 28, true);
     const raw = u8.subarray(start, start + csize);
+    // the size a file says it will have is checked before it is opened, so a tiny file cannot fill the phone's memory
+    const usize = dv.getUint32(p + 24, true);
+    if (usize > 200 * 1024 * 1024 || total + usize > 400 * 1024 * 1024) throw new Error("too big");
     out[name] = method === 0 ? raw : method === 8 ? await inflateRaw(raw) : null;
     total += out[name] ? out[name].length : 0;
     if (total > 400 * 1024 * 1024) throw new Error("too big");
@@ -1554,6 +1557,8 @@ function bytesToDataURL(u8, mime) {
 }
 async function restoreBackup(file) {
   let n = 0;
+  // nothing is changed unless the whole file could be read
+  const before = JSON.stringify(S);
   try {
     if (/\.json$/i.test(file.name)) {
       const d = JSON.parse(await file.text());
@@ -1596,7 +1601,7 @@ async function restoreBackup(file) {
     }
     persist(); render();
     toast("Restored " + n + " items");
-  } catch (e) { toast("Not a Nook backup"); }
+  } catch (e) { try { S = JSON.parse(before); } catch (x) {} toast("Could not read that file. Nothing was changed"); }
 }
 const fmtSize = b => (b < 1048576 ? Math.max(1, Math.round(b / 1024)) + " KB" : (b / 1048576).toFixed(1) + " MB");
 function mediaBytes() {
@@ -2031,7 +2036,9 @@ function settingsV() {
     }))));
   main.append(sec("Your data"));
   main.append(h("div", { class: "group" },
-    row(ic("copy", 22), "Download backup", "Posts, messages and media in a zip", () => downloadBackup())));
+    row(ic("copy", 22), "Download backup", "Posts, notes and media in a zip", () => downloadBackup()),
+    h("label", { class: "srow", style: "cursor:pointer" }, ic("backup", 22), h("div", { class: "nm" }, h("b", {}, "Restore backup"), h("span", { class: "sub" }, "Add posts and notes from a backup file")),
+      h("input", { type: "file", accept: ".zip,.json,application/zip,application/json", class: "vh", "aria-label": "Restore backup", onchange: e => { const f = e.target.files && e.target.files[0]; e.target.value = ""; if (f) restoreBackup(f); } }))));
   main.append(sec("Updates"));
   main.append(h("div", { class: "group" }, row(ic("check", 22), "Check for updates", "You are on version " + APP_VERSION, () => {
     if (!window.nookCheckUpdate) { toast("Not available right now"); return; }
@@ -2471,7 +2478,13 @@ async function toggleRemoteLikeNow(p, big) {
   const { error } = on
     ? await sb.from("likes").insert({ user_id: sbUser.id, post_id: p.remote })
     : await sb.from("likes").delete().eq("user_id", sbUser.id).eq("post_id", p.remote);
-  if (error && !(on && error.code === "23505")) { p.liked = !on; p.lc = Math.max(0, (p.lc || 0) + (on ? -1 : 1)); persist(); refresh(p, big); toast("Could not update like"); }
+  if (error && !(on && error.code === "23505")) {
+    p.liked = !on; p.lc = Math.max(0, (p.lc || 0) + (on ? -1 : 1));
+    // a lost answer can hide that the server did take the tap: the real state is read back
+    const { data: truth, error: te } = await sb.from("likes").select("post_id").eq("user_id", sbUser.id).eq("post_id", p.remote).maybeSingle();
+    if (!te && !!truth !== p.liked) { p.liked = !!truth; p.lc = Math.max(0, (p.lc || 0) + (p.liked ? 1 : -1)); }
+    persist(); refresh(p, big); toast("Could not update like");
+  }
 }
 async function toggleRemoteRepost(p, big) {
   if (!sbUser || busyTaps.has("r" + p.id)) return;
@@ -2609,11 +2622,16 @@ function userV(cur) {
     applyState({ acc, following: !!(fol && fol.length), followsMe: !!(folMe && folMe.length), blocked: !!(blk && blk.length) });
     saveState();
   }, () => { if (!st) profileFail(); });
-  let followBusy = false;
+  let followBusy = false, followQueued = false;
   followBtn.onclick = async () => {
-    if (!st || followBusy) return;
+    if (!st) return;
+    // a tap while one is running waits its turn instead of being lost
+    if (followBusy) { followQueued = true; return; }
     followBusy = true;
-    try { await followNow(); } finally { followBusy = false; }
+    try {
+      await followNow();
+      while (followQueued) { followQueued = false; await followNow(); }
+    } finally { followBusy = false; followQueued = false; }
   };
   const followNow = async () => {
     const on = !st.following;
@@ -3610,6 +3628,13 @@ async function signOutNow() {
   if (leaving || signingOut) return;
   signingOut = true;
   toast("Signing out...");
+  // the push address of this phone goes from the server even if the page is closed right after
+  try {
+    const sub = await Promise.race([pushSub(), wait(800).then(() => null)]);
+    const { data: cur } = await Promise.race([sb.auth.getSession(), wait(800).then(() => ({ data: null }))]);
+    const tok = cur && cur.session ? cur.session.access_token : null;
+    if (sub && tok) fetch(SB_URL + "/rest/v1/push_subs?endpoint=eq." + encodeURIComponent(sub.endpoint), { method: "DELETE", headers: { apikey: SB_KEY, authorization: "Bearer " + tok }, keepalive: true }).catch(() => {});
+  } catch (e) {}
   await Promise.race([pushDetach().catch(() => {}), wait(2000)]);
   await leaveThisAccount();
 }
@@ -3960,9 +3985,9 @@ function authV() {
         const { data: sd, error } = await sb.auth.setSession({ access_token: r.body.session.access_token, refresh_token: r.body.session.refresh_token });
         if (error) { msg.textContent = "Could not sign in. Try again"; return; }
         try { localStorage.removeItem(BAN_EMAIL); } catch (x) {}
-        await sb.rpc("set_my_deactivated", { flag: false });
-        // the typed password opens the saved chat key on a new phone, and locks it for this account when none is saved yet
-        if (sd && sd.user) { sbUser = sd.user; await loginBackup(p); }
+        // the typed password opens the saved chat key on a new phone, and locks it for this account when none is saved yet; both run at once and never hold the sign in for long
+        if (sd && sd.user) sbUser = sd.user;
+        await Promise.race([Promise.all([Promise.resolve(sb.rpc("set_my_deactivated", { flag: false })).catch(() => {}), sd && sd.user ? loginBackup(p).catch(() => {}) : null]), wait(10000)]);
       }
       location.reload();
     } finally { btn.disabled = false; }

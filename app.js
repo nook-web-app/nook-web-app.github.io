@@ -167,7 +167,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.29";
+const APP_VERSION = "3.4.30";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -946,7 +946,7 @@ async function sharePost(p) {
     { icon: "edit", label: "Post", fn: async () => { const b = await pic(); if (b) openCompose({ files: [new File([b], "nook-post.png", { type: "image/png" })] }); } },
     ...(targets.length ? [{ icon: "chat", label: "Message", fn: () => chooseTarget(targets, async t => {
       if (p.ai && t.kind === "user") { try { await sendDm(t.id, ZPOST + JSON.stringify({ x: p.text, t: p.t }), [], []); toast("Sent to " + t.name); } catch (e) { toast("Could not send"); } return; }
-      if (p.remote && t.kind === "user") { try { await sendDm(t.id, RPOST + JSON.stringify({ id: p.remote }), [], []); toast("Sent to " + t.name); } catch (e) { toast("Could not send. " + plainErr(e, "Try again")); } return; }
+      if (p.remote && t.kind === "user") { try { await sendDm(t.id, RPOST + JSON.stringify({ id: p.remote, u: p.ra ? p.ra.id : sbUser.id }), [], []); toast("Sent to " + t.name); } catch (e) { toast("Could not send. " + plainErr(e, "Try again")); } return; }
       const b = await pic(); if (b) sendPicTo(t, b, true);
     }) }] : []),
     { icon: "share", label: "Another app", fn: () => sharePic(p) },
@@ -4783,39 +4783,57 @@ const RPOST = "\u2063R\u2063";
 const zUn = t => typeof t === "string" ? (t.startsWith(ZMARK) ? t.slice(ZMARK.length) : t.startsWith(ZPOST) || t.startsWith(RPOST) ? "a post" : t) : t;
 function rPostOf(t) {
   if (typeof t !== "string" || !t.startsWith(RPOST)) return null;
-  try { const j = JSON.parse(t.slice(RPOST.length)); return j && typeof j.id === "string" && /^[0-9a-f-]{36}$/i.test(j.id) ? { id: j.id } : null; } catch (e) { return null; }
+  try { const j = JSON.parse(t.slice(RPOST.length)); return j && typeof j.id === "string" && /^[0-9a-f-]{36}$/i.test(j.id) ? { id: j.id, u: typeof j.u === "string" && /^[0-9a-f-]{36}$/i.test(j.u) ? j.u : null } : null; } catch (e) { return null; }
 }
-const rpCache = new Map();
-function loadRPost(id) {
+// what was already fetched is kept, so a card shows at once the second time and even the first photo is ready before the chat opens
+const rpCache = new Map(), rpData = new Map();
+const preloadImg = src => new Promise(res => { const i = new Image(); i.onload = i.onerror = () => res(); i.src = view(src); });
+function loadRPost(id, hint) {
+  if (rpData.has(id)) return Promise.resolve(rpData.get(id));
   if (!rpCache.has(id)) {
     const p = (async () => {
-      const { data, error } = await sb.from("posts").select("id, user_id, body, media_url, created_at").eq("id", id).maybeSingle();
+      // the post and the author are asked for at the same time when the author is known
+      const [{ data, error }, early] = await Promise.all([
+        sb.from("posts").select("id, user_id, body, media_url, created_at").eq("id", id).maybeSingle(),
+        hint ? cachedAccounts([hint]).catch(() => null) : null
+      ]);
       if (error) throw error;
       if (!data) return null;
-      const m = await cachedAccounts([data.user_id]);
+      const m = early && early.get(data.user_id) ? early : await cachedAccounts([data.user_id]);
       const a = m.get(data.user_id) || {};
-      return { text: String(data.body || ""), t: Date.parse(data.created_at), imgs: parseMedia(data.media_url).slice(0, 4), name: a.display_name || a.username || "user", handle: a.username || "user", avatar: a.avatar || null };
+      const d = { text: String(data.body || ""), t: Date.parse(data.created_at), imgs: parseMedia(data.media_url).slice(0, 4), name: a.display_name || a.username || "user", handle: a.username || "user", avatar: a.avatar || null };
+      rpData.set(id, d);
+      return d;
     })();
     rpCache.set(id, p);
     p.catch(() => rpCache.delete(id));
   }
   return rpCache.get(id);
 }
+function fillRCard(box, d, big, all) {
+  box.textContent = "";
+  if (!d) { box.append(h("div", { class: "zct", style: "color:var(--muted)" }, "This post is not available")); return; }
+  box.append(h("div", { class: "zch" }, rAv({ name: d.name, avatar: d.avatar }, big ? 44 : 34), h("div", { class: "nm" }, h("b", {}, d.name), h("span", {}, "@" + d.handle))));
+  if (d.text) box.append(h("div", { class: "zct" }, rich(d.text)));
+  // in the chat only the first photo shows; the opened post shows them all
+  const shown = all ? d.imgs : d.imgs.slice(0, 1);
+  if (shown.length) {
+    const g = h("div", { class: "zimgs" }, shown.map(s => { const im = mkImg(s); im.loading = "eager"; return im; }));
+    if (!all && d.imgs.length > 1) g.append(h("span", { class: "zmore" }, "+" + (d.imgs.length - 1)));
+    box.append(g);
+  }
+  box.append(h("div", { class: "zcd" }, Number.isFinite(d.t) ? new Date(d.t).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : ""));
+}
 // the shared post as a card: only that post, no profile and no replies behind it
-function rCard(id, big) {
-  const box = h("div", { class: "zcard" + (big ? " big" : "") }, h("div", { class: "zct", style: "color:var(--muted)" }, "Loading post"));
-  loadRPost(id).then(d => {
-    box.textContent = "";
-    if (!d) { box.append(h("div", { class: "zct", style: "color:var(--muted)" }, "This post is not available")); return; }
-    box.append(h("div", { class: "zch" }, rAv({ name: d.name, avatar: d.avatar }, big ? 44 : 34), h("div", { class: "nm" }, h("b", {}, d.name), h("span", {}, "@" + d.handle))));
-    if (d.text) box.append(h("div", { class: "zct" }, rich(d.text)));
-    if (d.imgs.length) box.append(h("div", { class: "zimgs" }, d.imgs.map(s => mkImg(s))));
-    box.append(h("div", { class: "zcd" }, Number.isFinite(d.t) ? new Date(d.t).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : ""));
-  }).catch(() => { box.textContent = ""; box.append(h("div", { class: "zct", style: "color:var(--muted)" }, "Could not load this post")); });
+function rCard(id, big, hint) {
+  const box = h("div", { class: "zcard" + (big ? " big" : "") });
+  if (rpData.has(id)) { fillRCard(box, rpData.get(id), big, big); return box; }
+  box.append(h("div", { class: "zct", style: "color:var(--muted)" }, "Loading post"));
+  loadRPost(id, hint).then(d => fillRCard(box, d, big, big)).catch(() => { box.textContent = ""; box.append(h("div", { class: "zct", style: "color:var(--muted)" }, "Could not load this post")); });
   return box;
 }
-function viewRPost(id) {
-  const m = modal({ title: "Post", action: "Close", onAction: c => c(), body: [rCard(id, true)] });
+function viewRPost(id, hint) {
+  const m = modal({ title: "Post", action: "Close", onAction: c => c(), body: [rCard(id, true, hint)] });
   m.act.style.visibility = "hidden";
   const cb = m.ov.querySelector(".tbtn");
   if (cb) cb.textContent = "Close";
@@ -4872,6 +4890,8 @@ async function openRows(rows, otherId, waitFor) {
   // photos are opened before their bubbles show, so no grey box sits on the screen while they load (only the newest ones are waited for when there are many)
   const jobs = [];
   rows.slice(-(waitFor || rows.length)).forEach(m => (m.media || []).forEach(md => { if (md.iv && !/^video\//.test(md.type || "")) jobs.push(loadEncMedia(md, otherId).catch(() => {})); }));
+  // shared posts are fetched, and their first photo loaded, before the bubbles show
+  out.slice(-(waitFor || out.length)).forEach(m => { if (m.rpost) jobs.push(loadRPost(m.rpost.id, m.rpost.u).then(d => (d && d.imgs[0] ? preloadImg(d.imgs[0]) : null)).catch(() => {})); });
   if (jobs.length) await Promise.race([Promise.all(jobs), new Promise(r => setTimeout(r, 6000))]);
   return out;
 }
@@ -5031,7 +5051,7 @@ function dmBubble(m, mine, otherId) {
     row.textContent = "";
     const body = msg.text !== undefined ? msg.text : msg.body;
     (msg.media || []).forEach((md, i) => row.append(dmMedia(md, otherId, () => openDmViewer(row, i))));
-    if (msg.rpost) { const rc = rCard(msg.rpost.id); rc.addEventListener("click", e => { e.stopPropagation(); viewRPost(msg.rpost.id); }); row.append(rc); }
+    if (msg.rpost) { const rc = rCard(msg.rpost.id, false, msg.rpost.u); rc.addEventListener("click", e => { e.stopPropagation(); viewRPost(msg.rpost.id, msg.rpost.u); }); row.append(rc); }
     if (msg.zpost) { const zc = zCard(msg.zpost); zc.addEventListener("click", e => { e.stopPropagation(); viewZPost(msg.zpost); }); row.append(zc); }
     const link = firstUrl(body);
     if (link) row.append(linkCard(link, true));

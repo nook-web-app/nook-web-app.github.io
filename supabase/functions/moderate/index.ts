@@ -113,8 +113,8 @@ function readVerdict(j: any): Verdict {
   return null;
 }
 
-// when the AI service cannot answer (quota, outage) a post is NOT given up on: it stays waiting until the service is back
-const MODELS = ["gemma-4-26b-a4b-it"];
+// moderation only uses Gemma 4 (high daily limit); the 31B one takes over when the 26B one is out of tokens for the minute or the day. Zenith has its own models so they never share this quota
+const MODELS = ["gemma-4-26b-a4b-it", "gemma-4-31b-it"];
 async function ask(parts: unknown[], system = SYSTEM): Promise<Verdict> {
   const key = await geminiKey();
   if (!key) { C().lastNote = "no gemini key in the vault"; C().aiDown = true; return null; }

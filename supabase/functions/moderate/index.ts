@@ -223,6 +223,21 @@ async function holdAccount(userId: string): Promise<boolean> {
   return !!(data && data.length);
 }
 
+// an email address written in a post that was taken down: the person it belongs to (when they have an account) is told which address was posted.
+// plain code finds the addresses, the AI is not involved; the poster's own address is skipped and nobody gets more than one such notice an hour
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+async function exposeEmails(text: string, posterId: string) {
+  const found = Array.from(new Set((text.match(EMAIL_RE) || []).map((e) => e.toLowerCase()))).slice(0, 5);
+  for (const email of found) {
+    const { data: uid } = await admin.rpc("nook_user_by_email", { p_email: email });
+    if (typeof uid !== "string" || uid === posterId) continue;
+    const since = new Date(Date.now() - 3600000).toISOString();
+    const { data: recent } = await admin.from("mod_notices").select("id").eq("user_id", uid).eq("kind", "exposed").gt("created_at", since).limit(1);
+    if (recent && recent.length) continue;
+    await admin.from("mod_notices").insert({ user_id: uid, kind: "exposed", note: email });
+  }
+}
+
 // what the AI may know besides the words themselves: the post being replied to, the writer's last posts and the report reasons
 const clip = (s: unknown, n: number) => String(s || "").replace(/\s+/g, " ").replace(/"/g, "'").trim().slice(0, n);
 async function contextFor(id: string, userId: string): Promise<string> {
@@ -257,7 +272,10 @@ async function runText(id: string): Promise<boolean> {
   if (v === "sexual") v = "rules";
   if (v === "rules") {
     const gone = await admin.from("posts").delete().eq("id", id).eq("text_pending", true).eq("body", p.body).select("user_id");
-    if (gone.data && gone.data.length) await admin.from("mod_notices").insert({ user_id: gone.data[0].user_id, kind: "rules", post_id: id, note: C().why });
+    if (gone.data && gone.data.length) {
+      await admin.from("mod_notices").insert({ user_id: gone.data[0].user_id, kind: "rules", post_id: id, note: C().why });
+      try { await exposeEmails(body, gone.data[0].user_id); } catch (_e) { /* the warning to the other person is optional */ }
+    }
     return true;
   }
   if (v === "minor") {

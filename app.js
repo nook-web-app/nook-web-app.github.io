@@ -167,7 +167,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.31";
+const APP_VERSION = "3.4.32";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2460,7 +2460,7 @@ async function loadFeed() {
   }));
   // what this person saved or liked stays, even when the post is older than the newest 300
   const seen = new Set(remote.map(r => r.remote));
-  let kept = S.posts.filter(p => p.ra && (p.saved || p.liked) && !seen.has(p.remote) && !hidden.has(p.ra.id)).slice(0, 100);
+  let kept = S.posts.filter(p => p.ra && (p.saved || p.liked || (p.sharedAt && Date.now() - p.sharedAt < 864e5)) && !seen.has(p.remote) && !hidden.has(p.ra.id)).slice(0, 100);
   if (kept.length) {
     // only the ones the server still has (the author may have deleted them)
     const { data: still, error: se } = await sb.from("posts").select("id").in("id", kept.map(p => p.remote));
@@ -4849,11 +4849,36 @@ function rCard(id, big, hint) {
   loadRPost(id, hint).then(d => fillRCard(box, d, big, big)).catch(() => { box.textContent = ""; box.append(h("div", { class: "zct", style: "color:var(--muted)" }, "Could not load this post")); });
   return box;
 }
-function viewRPost(id, hint) {
-  const m = modal({ title: "Post", action: "Close", onAction: c => c(), body: [rCard(id, true, hint)] });
-  m.act.style.visibility = "hidden";
-  const cb = m.ov.querySelector(".tbtn");
-  if (cb) cb.textContent = "Close";
+// opens the real post, with its replies, in the app; a post this phone does not have yet is fetched first and kept for a day
+async function openSharedPost(id) {
+  let local = S.posts.find(x => x.remote === id);
+  if (!local) {
+    const cols = "id, user_id, body, media_url, created_at, parent_id";
+    const [pq, rq] = await Promise.all([
+      sb.from("posts").select(cols).eq("id", id).maybeSingle(),
+      sb.from("posts").select(cols).eq("parent_id", id).order("created_at", { ascending: true }).limit(100)
+    ]);
+    if (pq.error || rq.error) throw new Error("load");
+    if (!pq.data) { toast("This post is not available"); return; }
+    const rows = [pq.data, ...(rq.data || [])];
+    const who = await cachedAccounts([...new Set(rows.map(r => r.user_id))]);
+    const have = new Set(S.posts.filter(p => p.remote).map(p => p.remote));
+    const now = Date.now();
+    const fresh = rows.filter(r => !have.has(r.id)).map(r => {
+      const a = who.get(r.user_id) || { username: "user", avatar: null };
+      return {
+        id: "r" + r.id, remote: r.id, parent: r.id === id ? null : "r" + id,
+        text: r.body || "", t: Date.parse(r.created_at), imgs: parseMedia(r.media_url),
+        ra: { id: r.user_id, name: a.display_name == null ? a.username : a.display_name, handle: a.username, avatar: a.avatar || null },
+        liked: false, reposted: false, saved: false, lc: 0, rpc: 0, rp: r.id === id ? rows.length - 1 : 0, pinned: false, sharedAt: now
+      };
+    });
+    S.posts.push(...fresh);
+    persist();
+    local = S.posts.find(x => x.remote === id);
+  }
+  if (!local) { toast("This post is not available"); return; }
+  go({ r: "thread", id: local.id });
 }
 function zPostOf(t) {
   if (typeof t !== "string" || !t.startsWith(ZPOST)) return null;
@@ -5085,7 +5110,7 @@ function dmBubble(m, mine, otherId) {
     row.textContent = "";
     const body = msg.text !== undefined ? msg.text : msg.body;
     (msg.media || []).forEach((md, i) => row.append(dmMedia(md, otherId, () => openDmViewer(row, i))));
-    if (msg.rpost) { const rc = rCard(msg.rpost.id, false, msg.rpost.u); rc.addEventListener("click", e => { e.stopPropagation(); viewRPost(msg.rpost.id, msg.rpost.u); }); row.append(rc); }
+    if (msg.rpost) { const rc = rCard(msg.rpost.id, false, msg.rpost.u); rc.addEventListener("click", e => { e.stopPropagation(); openSharedPost(msg.rpost.id).catch(() => toast("Could not open that post. Check your connection")); }); row.append(rc); }
     if (msg.zpost) { const zc = zCard(msg.zpost); zc.addEventListener("click", e => { e.stopPropagation(); viewZPost(msg.zpost); }); row.append(zc); }
     const link = firstUrl(body);
     if (link) row.append(linkCard(link, true));

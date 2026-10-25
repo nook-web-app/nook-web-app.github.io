@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.7.2";
+const APP_VERSION = "3.7.3";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1031,17 +1031,18 @@ async function sharePost(p) {
     { icon: "share", label: "Another app", fn: () => sharePic(p) },
     { label: "Cancel", cancel: true }], "Share post");
 }
-function acts(p, big) {
-  const n = p.ra ? (p.rp || 0) : replyTotal(p.id);
+// nc: inside an opened reply the list is flat and the numbers would only count down the chain, so the comment icon shows alone
+function acts(p, big, nc) {
+  const n = nc ? 0 : p.ra ? (p.rp || 0) : replyTotal(p.id);
   const ab = (cls, name, cnt, on, fn, label, fill) => h("button", { class: "ab " + cls + (on ? " on" : "") + (bump === p.id + cls ? " bump" : ""), "aria-label": label, onclick: e => { e.stopPropagation(); fn(); } }, ic(name, big ? 24 : 20, fill && on), cnt ? h("span", {}, cnt) : null);
-  if (p.ra) return h("div", { class: "acts" + (big ? " big" : ""), "data-pid": p.id },
+  if (p.ra) return h("div", { class: "acts" + (big ? " big" : ""), "data-pid": p.id, "data-nc": nc ? "1" : null },
     ab("rl", "reply", n, false, () => openCompose({ parent: p.id }), "Reply"),
     ab("rp", "repost", p.rpc || 0, p.reposted, () => toggleRemoteRepost(p, big), "Repost"),
     ab("like", "heart", p.lc || 0, p.liked, () => toggleRemoteLike(p, big), "Like", true),
     ab("bm", "bookmark", 0, p.saved, () => { p.saved = !p.saved; bump = p.id + "bm"; persist(); refresh(p, big); toast(p.saved ? "Saved" : "Removed from saved"); }, "Save", true),
     ab("sh", "share", 0, false, () => sharePost(p), "Share post"),
     ab("mo", "dots", 0, false, () => sheet([...(typeof p.text === "string" && p.text ? [{ icon: "copy", label: "Copy post text", fn: () => copy(p.text || "") }] : []), { icon: "eyeoff", label: "Not interested", danger: true, fn: () => lessLikeThis(p) }, { icon: "flag", label: "Report post", danger: true, fn: () => reportPost(p) }]), "More"));
-  return h("div", { class: "acts" + (big ? " big" : ""), "data-pid": p.id },
+  return h("div", { class: "acts" + (big ? " big" : ""), "data-pid": p.id, "data-nc": nc ? "1" : null },
     ab("rl", "reply", n, false, () => openCompose({ parent: p.id }), "Reply"),
     ab("rp", "repost", p.ai ? 0 : p.rpc || 0, p.reposted, () => (p.remote ? toggleRemoteRepost(p, big) : (p.reposted = !p.reposted, bump = p.id + "rp", persist(), refresh(p, big))), "Repost"),
     ab("like", "heart", p.ai ? (p.zenLike ? 1 : 0) : p.lc || 0, p.liked, () => (p.remote ? toggleRemoteLike(p, big) : (p.liked = !p.liked, bump = p.id + "like", persist(), refresh(p, big))), "Like", true),
@@ -1051,7 +1052,7 @@ function acts(p, big) {
 }
 const refresh = (p, big) => { if (big) render(); else refreshActs(p); };
 function refreshActs(p) {
-  document.querySelectorAll('.acts[data-pid="' + p.id + '"]').forEach(el => el.replaceWith(acts(p, el.classList.contains("big"))));
+  document.querySelectorAll('.acts[data-pid="' + p.id + '"]').forEach(el => el.replaceWith(acts(p, el.classList.contains("big"), el.dataset.nc === "1")));
   bump = null;
 }
 function postCard(p, o) {
@@ -1064,7 +1065,7 @@ function postCard(p, o) {
   if (cardless(p)) col.append(txBody(cardless(p), ""));
   if (p.imgs.length) col.append(imgGrid(p.imgs));
   else if (firstUrl(p.text)) col.append(linkCard(firstUrl(p.text)));
-  if (!o.compact) col.append(acts(p));
+  if (!o.compact) col.append(acts(p, false, !!o.nc));
   const av = p.ai ? zenAv(40) : p.ra ? rAv(p.ra, 40) : avatar(40);
   if (p.ra) av.addEventListener("click", e => { e.stopPropagation(); go({ r: "user", id: p.ra.id }); });
   const c = h("article", { class: "post" + (o.rep ? " rep" : "") + (o.line ? " line" : "") + (p.id === fresh ? " fresh" : ""), style: o.d ? "--d:" + Math.min(o.d, 3) : null, onclick: () => go({ r: "thread", id: p.id }) }, h("div", { class: "avc" }, av), col);
@@ -1260,7 +1261,7 @@ function threadV(c) {
   const mp = mainPost(p);
   main.append(mp);
   main.append(h("div", { class: "rb" }));
-  threadReplies(p).forEach(x => main.append(postCard(x.p, { rep: true, d: x.d })));
+  threadReplies(p).forEach(x => main.append(postCard(x.p, { rep: true, d: x.d, nc: !!p.parent })));
 }
 // a post lists only the replies made to it; an opened reply lists everything under it, so no page ever has to be opened for a third level
 function threadReplies(p) {
@@ -1840,6 +1841,7 @@ let zenSig = "", zenSig2 = "";
 // the reply numbers under the posts are changed in place, so they are right at once and nothing on the page moves
 function zenCounts() {
   document.querySelectorAll(".acts[data-pid]").forEach(el => {
+    if (el.dataset.nc) return;
     const p = byId(el.dataset.pid);
     const b = el.querySelector(".ab.rl");
     if (!p || !b) return;
@@ -1858,7 +1860,7 @@ const zenRefresh = () => {
   const rb = cur.r === "thread" ? main.querySelector(".rb") : null;
   if (rb && byId(cur.id)) {
     while (rb.nextSibling) rb.nextSibling.remove();
-    threadReplies(byId(cur.id)).forEach(x => main.append(postCard(x.p, { rep: true, d: x.d })));
+    threadReplies(byId(cur.id)).forEach(x => main.append(postCard(x.p, { rep: true, d: x.d, nc: !!byId(cur.id).parent })));
     return;
   }
   zenCounts();

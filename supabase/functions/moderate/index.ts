@@ -129,7 +129,19 @@ const busyUntil: Record<string, number> = {};
 const REST_MS = 20000, WAIT_MS = 15000;
 let turn = 0;
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+// the AI never reads real private values: emails, phone numbers and secrets are swapped for a label before anything is sent
+const PHONE_RE = /(?<![\w.])\+?\d[\d\s().-]{7,}\d(?!\w)/g;
+function mask(t: string): string {
+  return t
+    .replace(EMAIL_RE, "[email]")
+    .replace(/\b(password|passcode|passwd|pwd|pin|token|api[ _-]?key|secret)\b(\s*(?:is|are|:|=|->)\s*)\S+/gi, "$1$2[secret]")
+    .replace(PHONE_RE, (m) => (m.replace(/\D/g, "").length >= 9 ? "[phone]" : m))
+    .replace(/\b[A-Za-z0-9_-]{32,}\b/g, "[secret]");
+}
+const MASK_NOTE = " Private values were hidden from you: [email], [phone] and [secret] stand in for real ones that were written there. A post that gives out a password, a phone number or other private details of a person is sharing private info.";
 async function ask(parts: unknown[], system = SYSTEM): Promise<Verdict> {
+  parts = parts.map((x) => (x && typeof (x as { text?: unknown }).text === "string" ? { ...(x as object), text: mask((x as { text: string }).text) } : x));
+  system += MASK_NOTE;
   const key = await geminiKey();
   if (!key) { C().lastNote = "no gemini key in the vault"; C().aiDown = true; return null; }
   try {

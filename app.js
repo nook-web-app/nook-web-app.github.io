@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.9.0";
+const APP_VERSION = "3.9.1";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1977,9 +1977,14 @@ async function zenSync() {
     now.forEach((data, key) => { const j = zenJson(data); if (zenSeen.get(key) !== j) up.push({ key, data, j }); });
     // a wiped device must never wipe the copy on the server
     if (S.posts.length || S.chats.length) zenSeen.forEach((_, key) => { if (!now.has(key)) del.push(key); });
+    // his chats are sealed with the owner's own chat key before the copy leaves the phone, so the server cannot read them
+    let seal = null;
+    if (up.some(u => u.key.startsWith("chat:"))) { try { const k = await sharedKey(sbUser.id); seal = o => noteSeal(k, o); } catch (e) { seal = null; } }
     for (let i = 0; i < up.length; i += 100) {
-      const part = up.slice(i, i + 100);
-      const rows = part.map(u => Object.assign({ owner_id: sbUser.id, data: u.data, updated_at: new Date().toISOString() }, zenKey(u.key)));
+      const part = up.slice(i, i + 100).filter(u => seal || !u.key.startsWith("chat:"));
+      if (!part.length) continue;
+      for (const u of part) if (u.key.startsWith("chat:")) u.sealed = { id: u.data.id, enc: await seal({ name: u.data.name, t: u.data.t, msgs: u.data.msgs }) };
+      const rows = part.map(u => Object.assign({ owner_id: sbUser.id, data: u.sealed || u.data, updated_at: new Date().toISOString() }, zenKey(u.key)));
       const { error } = await sb.from("zenith_docs").upsert(rows, { onConflict: "owner_id,kind,doc_id" });
       if (error) throw error;
       part.forEach(u => zenSeen.set(u.key, u.j));
@@ -1998,8 +2003,11 @@ async function zenPull() {
   const byLocal = new Map(S.posts.map(p => [p.id, p]));
   const byRemote = new Map(S.posts.filter(p => p.remote).map(p => [p.remote, p]));
   let changed = false;
+  // sealed chats are opened first; a copy from before sealing is used as it is and sealed again by the next sync
+  const chatOpen = new Map();
+  for (const r of data || []) if (r.kind === "chat" && r.data && r.data.enc) { try { const k = await sharedKey(sbUser.id); chatOpen.set(r.doc_id, Object.assign({ id: r.data.id }, await noteOpen(k, r.data.enc))); } catch (e) {} }
   (data || []).forEach(r => {
-    const key = r.kind + ":" + r.doc_id, d = r.data || {};
+    const key = r.kind + ":" + r.doc_id; let d = r.data || {};
     if (r.kind === "post") {
       zenSeen.set(key, zenJson(d));
       if ((S.zen.gone || []).includes(d.id)) { sb.from("zenith_docs").delete().eq("owner_id", sbUser.id).eq("kind", "post").eq("doc_id", r.doc_id).then(() => { zenSeen.delete(key); }, () => {}); return; }
@@ -2011,7 +2019,8 @@ async function zenPull() {
       zenSeen.set(key, zenJson(d));
       ["zenReplied", "zenAnswered", "zenLikeChecked", "zenLike"].forEach(f => { if (d[f] && !p[f]) { p[f] = true; changed = true; } });
     } else if (r.kind === "chat") {
-      zenSeen.set(key, zenJson(d));
+      const sealedRow = !!(r.data && r.data.enc);
+      if (sealedRow) { const dd = chatOpen.get(r.doc_id); if (!dd) return; zenSeen.set(key, zenJson(dd)); d = dd; }
       const c = S.chats.find(x => x.id === d.id);
       const msgs = (d.msgs || []).map(m => ({ id: m.id, text: m.text || "", t: m.t, ai: !!m.ai, imgs: [] }));
       if (!c) { S.chats.push({ id: d.id, name: d.name, t: d.t, msgs }); changed = true; }

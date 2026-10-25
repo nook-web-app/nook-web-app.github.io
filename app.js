@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.6.5";
+const APP_VERSION = "3.6.6";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -659,7 +659,12 @@ function cardText(d, url) {
   if (/(^|\.)instagram\.com$/i.test(hostOf(url))) {
     const who = /\(@([\w.]+)\)/.exec(t) || /\s-\s([\w.]+) on /.exec(String((d && d.d) || ""));
     const m = /:\s*["\u201c]([\s\S]*)$/.exec(String((d && d.d) || ""));
-    const cap = m ? m[1].replace(/["\u201d]\.?\s*$/, "").replace(/#[\p{L}\p{N}_]+/gu, "").replace(/\s+/g, " ").trim() : "";
+    let cap = m ? m[1].replace(/["\u201d]\.?\s*$/, "").replace(/#[\p{L}\p{N}_]+/gu, "").replace(/\s+/g, " ").trim() : "";
+    // Instagram cuts long captions in the middle of a word: a cut caption stops at its last full sentence instead
+    if (/(\u2026|\.\.\.)$/.test(cap)) {
+      const body = cap.replace(/(\u2026|\.\.\.)$/, "").trim(), full = /^([\s\S]*[.!?])(\s|$)/.exec(body);
+      cap = full && full[1].length >= 12 ? full[1] : body + "\u2026";
+    }
     return { t: who ? "@" + who[1] : t.replace(/\s*[\u2022\u00b7|-]\s*Instagram.*$/i, ""), c: cap };
   }
   return { t: t.replace(/\s*[\u2022\u00b7]\s*Instagram (photo|video|reel)s?$/i, ""), c: "" };
@@ -706,7 +711,7 @@ function linkCard(url, chat) {
         if (im.complete && im.naturalWidth) go2(); else im.addEventListener("load", go2, { once: true });
       }
     }
-    card.append(h("div", { class: "lcb" }, h("b", {}, ct.t || host), ct.c && !chat ? h("span", { class: "lcd" }, ct.c) : null, h("span", { class: "lch" }, host)));
+    card.append(h("div", { class: "lcb" }, h("b", {}, ct.t || host), ct.c ? h("span", { class: "lcd" }, ct.c) : null, h("span", { class: "lch" }, host)));
   };
   if (S.previews[url] && S.previews[url].v) fill(S.previews[url]);
   else { card.append(h("div", { class: "skel lcs" })); getPreview(url).then(fill); }
@@ -5644,8 +5649,9 @@ function dmV(c) {
 
   // only the owner can call Zenith in a chat: the answer is sent as a normal message with a hidden mark inside the sealed text, so both people see it as Zenith
   const zenInDm = async (sentText, sentP) => {
+    // what the other person wrote never leaves the sealed chat: Zenith only gets the owner's words and his own, the rest is a blank turn
     const hist = Array.from(list.querySelectorAll("[data-mid]")).map(r => r._m).filter(m => m && m.text).slice(-20)
-      .map(m => (m.ai ? "Zenith: " : m.sender_id === me ? "Person A: " : "Person B: ") + m.text.replace(/@zenith/gi, "Zenith"));
+      .map(m => m.ai ? "Zenith: " + m.text : m.sender_id === me ? "Person A: " + m.text.replace(/@zenith/gi, "Zenith") : "Person B: (a private message you cannot read)");
     hist.push("Person A: " + sentText.replace(/@zenith/gi, "Zenith"));
     const ghost = h("div", { class: "mrow zdm tmpm" }, h("div", { class: "bub typing" }, h("i"), h("i"), h("i")));
     pushRow(ghost);

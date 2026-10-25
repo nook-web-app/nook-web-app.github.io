@@ -1,0 +1,39 @@
+# Used by the Supabase GitHub integration: a push to main applies supabase/migrations and deploys supabase/functions.
+project_id = "cimyolsipjdpibzaebmx"
+
+# every function does its own sign-in check except age, which Supabase checks for it
+[functions.age]
+verify_jwt = true
+
+[functions.purge-media]
+verify_jwt = false
+
+[functions.delete-account]
+verify_jwt = false
+
+[functions.totp]
+verify_jwt = false
+
+[functions.send-push]
+verify_jwt = false
+
+[functions.ban-export]
+verify_jwt = false
+
+[functions.moderate]
+verify_jwt = false
+
+[functions.zenith]
+verify_jwt = false
+
+[functions.signin]
+verify_jwt = false
+
+[functions.link-accounts]
+verify_jwt = false
+
+[functions.zenith-tick]
+verify_jwt = false
+
+[functions.focus]
+verify_jwt = false

@@ -5997,9 +5997,30 @@ function dropLocalPosts(remoteIds) {
   persist();
   return true;
 }
+// somebody's email address was written in a post that was taken down: this cannot be dismissed for 10 seconds,
+// and the shortcut to the email page only opens after 5; nothing here forces a change
+function showExposedNotice(n) {
+  const scrim = h("div", { class: "scrim" });
+  let left = 10, iv = 0;
+  const ok = h("button", { class: "pri", disabled: true }, "");
+  const chg = h("button", { class: "ghost", disabled: true, onclick: () => changeEmailV() }, "Change my email");
+  const paint = () => { ok.textContent = left > 0 ? "I understand (" + left + ")" : "I understand"; ok.disabled = left > 0; chg.disabled = left > 5; };
+  const done = () => { clearInterval(iv); dismiss(scrim, ov); sb.from("mod_notices").update({ seen_at: new Date().toISOString() }).eq("id", n.id).then(() => {}, () => {}); };
+  ok.addEventListener("click", () => { if (left <= 0) done(); });
+  const ov = h("div", { class: "sheet warn", role: "alertdialog", "aria-modal": "true" },
+    h("div", { class: "grab" }, h("i")),
+    h("div", { class: "warnt" }, "Your email was posted"),
+    h("p", {}, "This email address was written in a public post. The post has been removed."),
+    h("div", { class: "xmail" }, String(n.note || "")),
+    ok, chg);
+  paint();
+  iv = setInterval(() => { left--; paint(); if (left <= 0) clearInterval(iv); }, 1000);
+  layer.append(scrim, ov);
+}
 function showModNotice(n) {
   if (!n || modShown.has(n.id)) return;
   modShown.add(n.id);
+  if (n.kind === "exposed") { showExposedNotice(n); return; }
   if (n.post_id) dropLocalPosts([n.post_id]);
   // somebody who said they are under 18 goes straight to the age check, no warning first
   if (n.kind === "minor") {

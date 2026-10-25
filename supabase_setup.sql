@@ -1296,3 +1296,8 @@ create or replace function public.nook_gemini_key() returns text language sql se
 $$;
 revoke all on function public.nook_gemini_key() from public, anon, authenticated;
 grant execute on function public.nook_gemini_key() to service_role;
+
+-- profile edit limit: a save sends several updates at once (handle, text, picture, banner),
+-- so up to 10 changes are allowed per minute (accounts.edit_burst counts them from accounts.last_edit_at)
+-- alter table public.accounts add column if not exists edit_burst smallint not null default 0;
+-- see nook_accounts_edit_gap() in the database

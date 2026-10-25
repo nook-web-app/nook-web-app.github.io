@@ -36,6 +36,48 @@ async function generate(_password: string, system: string, history: unknown): Pr
   return last as Response;
 }
 
+// link preview pictures are fetched here, so the phone never has to download them; https only, no addresses inside a network, small pictures only
+const PIC_TYPES = ["image/jpeg", "image/png", "image/webp"];
+function publicHttps(u: string): URL | null {
+  try {
+    const x = new URL(u);
+    const h = x.hostname.toLowerCase();
+    if (x.protocol !== "https:" || (x.port && x.port !== "443")) return null;
+    if (h === "localhost" || h.endsWith(".local") || h.endsWith(".internal") || h.includes(":") || /^[\d.]+$/.test(h)) return null;
+    return x;
+  } catch { return null; }
+}
+async function fetchPic(u: string): Promise<{ inline_data: { mime_type: string; data: string } } | null> {
+  const x = publicHttps(u);
+  if (!x) return null;
+  try {
+    const r = await fetch(x, { signal: AbortSignal.timeout(6000), headers: { accept: "image/*" } });
+    if (!r.ok || !publicHttps(r.url)) return null;
+    const type = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+    if (!PIC_TYPES.includes(type)) return null;
+    const buf = new Uint8Array(await r.arrayBuffer());
+    if (!buf.length || buf.length > 4 * 1024 * 1024) return null;
+    let bin = "";
+    for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+    return { inline_data: { mime_type: type, data: btoa(bin) } };
+  } catch { return null; }
+}
+
+// the page title, description and picture of the first link in a post, the same service the app uses for its link cards
+async function linkInfo(body: string): Promise<{ note: string; pics: unknown[] }> {
+  const m = /https?:\/\/[^\s<>"]+/i.exec(body);
+  if (!m) return { note: "", pics: [] };
+  try {
+    const r = await fetch("https://api.microlink.io/?url=" + encodeURIComponent(m[0].replace(/[.,!?)\]]+$/, "")), { signal: AbortSignal.timeout(6000) });
+    const j = await r.json();
+    if (j.status !== "success" || !j.data) return { note: "", pics: [] };
+    const bits = [j.data.title, j.data.description].filter(Boolean).join(" - ").slice(0, 400);
+    const pic = (j.data.image && j.data.image.url) || "";
+    const got = pic ? await fetchPic(pic) : null;
+    return { note: bits ? "\n(The link preview says: " + bits + ")" : "", pics: got ? [got] : [] };
+  } catch { return { note: "", pics: [] }; }
+}
+
 let cached: string | null = null;
 async function expectedSecret(): Promise<string | null> {
   if (cached) return cached;
@@ -111,8 +153,8 @@ Deno.serve(async (req) => {
 
 const REPLY_FALLBACK = "You are Zenith, a 19 year old gay furry femboy, age rating 18+, not dark. Sound natural and relaxed like a friend. Never use emojis, capital letters or line breaks. You may use text faces like :3 or uwu. You are replying to a post. Keep it under 25 words, around 18 on average. Plain text only. No hashtags and no emojis. No asking user questions";
 
-async function ask(password: string, system: string, text: string): Promise<string> {
-  const r = await generate(password, system, [{ role: "user", parts: [{ text }] }]);
+async function ask(password: string, system: string, text: string, extra: unknown[] = []): Promise<string> {
+  const r = await generate(password, system, [{ role: "user", parts: [{ text }, ...extra] }]);
   if (!r.ok) return "";
   const j = await r.json();
   return ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).filter((p: { thought?: boolean }) => !p.thought).map((p: { text?: string }) => p.text || "").join("").replace(/\s*\n+\s*/g, " ").trim();
@@ -142,7 +184,7 @@ async function replies(id: string, docs: { doc_id: string; data: any }[], passwo
     const rid = "zr" + String(p.id).replace(/-/g, "");
     if (done.has("post:" + rid) || done.has("flag:" + p.id)) continue;
     let text = "";
-    try { text = (await ask(password, system, "Post: " + String(p.body).slice(0, 2000))).slice(0, 600); } catch { text = ""; }
+    try { const lk = await linkInfo(String(p.body)); text = (await ask(password, system, "Post: " + String(p.body).slice(0, 2000) + lk.note, lk.pics)).slice(0, 600); } catch { text = ""; }
     if (!text) continue;
     const reply = { id: rid, text, t: Date.now(), parent: null, parentRemote: p.id, ai: true, liked: false, reposted: false, saved: false, pinned: false };
     const stamp = new Date().toISOString();

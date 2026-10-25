@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.6.1";
+const APP_VERSION = "3.6.2";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -323,6 +323,8 @@ if (window.matchMedia) {
 
 const byId = id => S.posts.find(p => p.id === id);
 const kids = id => S.posts.filter(p => p.parent === id);
+// every reply under a post counts, the ones to replies too
+const replyTotal = id => flat(id, 0, []).length;
 function flat(id, d, out) {
   kids(id).sort((a, b) => a.t - b.t).forEach(k => { out.push({ p: k, d }); flat(k.id, d + 1, out); });
   return out;
@@ -465,9 +467,9 @@ const langText = () => { const ids = new Set(LANGS.map(l => l[0])); const l = Ar
 function txBody(text, extra) {
   const box = h("div", { class: "tx" + extra });
   const LIMIT = 700;
-  if (String(text).length <= LIMIT) { box.append(rich(text)); return box; }
-  const more = h("button", { class: "tbtn", type: "button", style: "padding:6px 0;color:var(--lnk)", onclick: e => { e.stopPropagation(); box.textContent = ""; box.append(rich(text)); } }, "Show more");
-  box.append(rich(String(text).slice(0, 600) + "…"), h("div", {}, more));
+  if (String(text).length <= LIMIT) { box.append(...rich(text)); return box; }
+  const more = h("button", { class: "tbtn", type: "button", style: "padding:6px 0;color:var(--lnk)", onclick: e => { e.stopPropagation(); box.textContent = ""; box.append(...rich(text)); } }, "Show more");
+  box.append(...rich(String(text).slice(0, 600) + "…"), h("div", {}, more));
   return box;
 }
 function feedPosts(f) {
@@ -583,11 +585,14 @@ function confirmSheet(msg, label, fn) {
   sheet([{ label, danger: true, fn }, { label: "Cancel", cancel: true }], msg);
 }
 // links lose what follows the ? so they do not carry tracking codes; a few sites need one part to find the page
-const TRACKING = new Set(["fbclid", "gclid", "gbraid", "wbraid", "dclid", "msclkid", "yclid", "twclid", "igshid", "igsh", "si", "feature", "pp", "mc_cid", "mc_eid", "ref_src", "ref_url", "_hsenc", "_hsmi", "mkt_tok", "vero_id", "s_cid", "spm"]);
+const TRACKING = new Set(["fbclid", "gclid", "gbraid", "wbraid", "dclid", "msclkid", "yclid", "twclid", "igshid", "igsh", "si", "feature", "pp", "mc_cid", "mc_eid", "ref_src", "ref_url", "_hsenc", "_hsmi", "mkt_tok", "vero_id", "s_cid", "spm", "xtok", "xmt", "ttclid", "sfnsn", "share_id"]);
+// these sites open the same page with no options at all, so every option on them is just tracking
+const PLAIN_HOSTS = /(^|\.)(instagram\.com|ig\.me|facebook\.com|fb\.com|fb\.watch)$/i;
 // only the tracking part of a link is dropped; the rest keeps the page the same
 function cleanUrl(u) {
   const i = u.indexOf("?");
   if (i < 0) return u;
+  try { if (PLAIN_HOSTS.test(new URL(u).hostname)) { const at = u.indexOf("#", i); return u.slice(0, i) + (at < 0 ? "" : u.slice(at)); } } catch (e) {}
   const hashAt = u.indexOf("#", i);
   const qs = u.slice(i + 1, hashAt < 0 ? undefined : hashAt), hash = hashAt < 0 ? "" : u.slice(hashAt);
   const kept = qs.split("&").filter(kv => { const k = kv.split("=")[0].toLowerCase(); return kv && !/^utm_/.test(k) && !TRACKING.has(k); });
@@ -733,7 +738,11 @@ function settleScroll(y) {
   };
   requestAnimationFrame(tick);
 }
-function go(r) { scrolls.push(main.scrollTop); stack.push(r); hist(false); render("fwd"); main.scrollTop = 0; }
+// a post opened from a post opened from a post stops at a depth, so nobody can wander down one chain forever
+const MAX_OPEN_POSTS = 8;
+function go(r) {
+  if (r && r.r === "thread" && stack.filter(x => x.r === "thread").length >= MAX_OPEN_POSTS) { toast("Too many posts open. Go back first"); return; }
+  scrolls.push(main.scrollTop); stack.push(r); hist(false); render("fwd"); main.scrollTop = 0; }
 function back() { if (stack.length > 1) history.back(); }
 function hist(replace) { const st = { s: JSON.parse(JSON.stringify(stack)), sc: scrolls.slice() }; try { if (replace) history.replaceState(st, ""); else history.pushState(st, ""); } catch (e) {} }
 let layers = [], ignorePops = 0, afterPop = null;
@@ -968,7 +977,7 @@ async function sharePost(p) {
     { label: "Cancel", cancel: true }], "Share post");
 }
 function acts(p, big) {
-  const n = p.ra ? (p.rp || 0) : kids(p.id).length;
+  const n = p.ra ? (p.rp || 0) : replyTotal(p.id);
   const ab = (cls, name, cnt, on, fn, label, fill) => h("button", { class: "ab " + cls + (on ? " on" : "") + (bump === p.id + cls ? " bump" : ""), "aria-label": label, onclick: e => { e.stopPropagation(); fn(); } }, ic(name, big ? 24 : 20, fill && on), cnt ? h("span", {}, cnt) : null);
   if (p.ra) return h("div", { class: "acts" + (big ? " big" : ""), "data-pid": p.id },
     ab("rl", "reply", n, false, () => openCompose({ parent: p.id }), "Reply"),
@@ -1171,7 +1180,7 @@ function homeV() {
 }
 
 function mainPost(p) {
-  const nr = kids(p.id).length;
+  const nr = replyTotal(p.id);
   const stat = (n, one, many) => n ? h("span", {}, h("b", {}, n), " " + (n === 1 ? one : many)) : null;
   const st = [stat(nr, "reply", "replies"), stat(p.saved ? 1 : 0, "save", "saves")].filter(Boolean);
   const pfp = p.ai ? zenAv(48) : p.ra ? rAv(p.ra, 48) : avatar(48);
@@ -1735,10 +1744,29 @@ function zenAv(size) {
   if (size) { a.style.width = size + "px"; a.style.height = size + "px"; }
   return a;
 }
-async function zGen(system, text, imgs) {
+// what a link looks like, so he can answer it: the page title and description as words, the preview picture as a picture (the server fetches it)
+async function zLink(text) {
+  const url = firstUrl(text);
+  if (!url) return { note: "", pics: [] };
+  const d = await Promise.race([getPreview(url).catch(() => null), new Promise(r => setTimeout(() => r(null), 4500))]);
+  if (!d) return { note: "", pics: [] };
+  const bits = [d.t, d.d].filter(Boolean).join(" - ").slice(0, 400);
+  return { note: bits ? "\n(The link preview says: " + bits + ")" : "", pics: d.i ? [d.i] : [] };
+}
+// only the two of them: the user's posts and his own, up to the reply being answered, never anybody else's
+const zChain = last => {
+  const chain = [];
+  for (let q = last; q && chain.length < 8; q = q.parent ? byId(q.parent) : null) if (!q.ra) chain.unshift(q);
+  return chain;
+};
+const chainText = last => zChain(last).map(q => q.text || "").join(" ");
+function zThread(last) {
+  return zChain(last).map(q => (q === last ? "The user's new reply: " : (q.ai ? "You: " : "The user: ")) + cleanText(String(q.text || "(photo only)").slice(0, 600))).join("\n");
+}
+async function zGen(system, text, imgs, pics) {
   const parts = [{ text }];
   (imgs || []).forEach(img => { const mm = /^data:(image\/[^;]+);base64,(.*)$/.exec(img); if (mm) parts.push({ inline_data: { mime_type: mm[1], data: mm[2] } }); });
-  const r = await zFetch({ system: zNow(system), history: [{ role: "user", parts }] });
+  const r = await zFetch({ system: zNow(system), history: [{ role: "user", parts }], ...(pics && pics.length ? { imageUrls: pics.slice(0, 2) } : {}) });
   if (!r.ok) throw new Error("zenith " + r.status);
   const j = await r.json();
   return ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).filter(p => !p.thought).map(p => p.text || "").join("").replace(/\s*\n+\s*/g, " ").trim();
@@ -1756,7 +1784,7 @@ function zenCounts() {
     const p = byId(el.dataset.pid);
     const b = el.querySelector(".ab.rl");
     if (!p || !b) return;
-    const n = p.ra ? (p.rp || 0) : kids(p.id).length;
+    const n = p.ra ? (p.rp || 0) : replyTotal(p.id);
     let sp = b.querySelector("span");
     if (n) { if (!sp) { sp = h("span", {}); b.append(sp); } sp.textContent = String(n); } else if (sp) sp.remove();
   });
@@ -1798,6 +1826,8 @@ async function zenTick() {
     const waiting = new Set();
     const cleared = async p => {
       if (!sbUser || p.aegis) return true;
+      // an answer to one of his own posts never leaves this phone, so there is nothing for Aegis to look at
+      if (!p.remote && p.parent && (byId(p.parent) || {}).ai) return true;
       if (!p.remote) { waiting.add(p.id); return false; }
       const { data, error } = await sb.from("posts").select("mod_status, text_pending").eq("id", p.remote).maybeSingle();
       if (error) { waiting.add(p.id); return false; }
@@ -1819,13 +1849,13 @@ async function zenTick() {
     for (let todo; (todo = S.posts.find(p => !p.ai && !p.ra && !p.parent && (p.text || p.imgs.length) && !p.zenReplied && fresh(p) && !waiting.has(p.id)));) {
       if (S.posts.some(x => x.ai && x.parent === todo.id)) { todo.zenReplied = true; continue; }
       if (!(await cleared(todo))) continue;
-      await answer(todo, "zenReplied", () => zGen(ZSYS_REPLY, "Post: " + (todo.text || "(photo only)"), todo.imgs), todo);
+      await answer(todo, "zenReplied", async () => { const lk = await zLink(todo.text); return zGen(ZSYS_REPLY, "Post: " + (todo.text || "(photo only)") + lk.note, todo.imgs, lk.pics); }, todo);
       if (!todo.zenReplied) break;
     }
     for (let rr; (rr = S.posts.find(p => !p.ai && !p.ra && p.parent && !p.zenAnswered && fresh(p) && (byId(p.parent) || {}).ai && !waiting.has(p.id)));) {
       const par = byId(rr.parent);
       if (!(await cleared(rr))) continue;
-      await answer(rr, "zenAnswered", () => zGen(ZSYS_REPLY, "Your post: " + par.text + "\nReply to you: " + rr.text), rr);
+      await answer(rr, "zenAnswered", async () => { const lk = await zLink(chainText(rr)); return zGen(ZSYS_REPLY, zThread(rr) + lk.note, [], lk.pics); }, rr);
       if (!rr.zenAnswered) break;
     }
     const cand = S.posts.filter(p => !p.ai && !p.ra && p.text && !p.zenLikeChecked && fresh(p) && !waiting.has(p.id)).slice(0, 2);

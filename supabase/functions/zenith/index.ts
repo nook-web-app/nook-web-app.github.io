@@ -18,6 +18,33 @@ async function geminiKey(): Promise<string> {
 }
 const MODEL = Deno.env.get("ZENITH_MODEL") || "gemini-3.5-flash-lite";
 
+// link preview pictures are fetched here, so the phone never has to download them; https only, no addresses inside a network, small pictures only
+const PIC_TYPES = ["image/jpeg", "image/png", "image/webp"];
+function publicHttps(u: string): URL | null {
+  try {
+    const x = new URL(u);
+    const h = x.hostname.toLowerCase();
+    if (x.protocol !== "https:" || (x.port && x.port !== "443")) return null;
+    if (h === "localhost" || h.endsWith(".local") || h.endsWith(".internal") || h.includes(":") || /^[\d.]+$/.test(h)) return null;
+    return x;
+  } catch { return null; }
+}
+async function fetchPic(u: string): Promise<{ inline_data: { mime_type: string; data: string } } | null> {
+  const x = publicHttps(u);
+  if (!x) return null;
+  try {
+    const r = await fetch(x, { signal: AbortSignal.timeout(6000), headers: { accept: "image/*" } });
+    if (!r.ok || !publicHttps(r.url)) return null;
+    const type = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+    if (!PIC_TYPES.includes(type)) return null;
+    const buf = new Uint8Array(await r.arrayBuffer());
+    if (!buf.length || buf.length > 4 * 1024 * 1024) return null;
+    let bin = "";
+    for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+    return { inline_data: { mime_type: type, data: btoa(bin) } };
+  } catch { return null; }
+}
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 }
@@ -54,7 +81,7 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   const jwt = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   if (!jwt) return json({ error: "not signed in" }, 401);
-  let body: { system?: unknown; history?: unknown; stream?: unknown } = {};
+  let body: { system?: unknown; history?: unknown; stream?: unknown; imageUrls?: unknown } = {};
   const parse = req.json().then((b) => { body = b; return true; }, () => false);
   if (!((okUntil.get(jwt) || 0) > Date.now())) {
     const { data, error } = await admin.auth.getUser(jwt);
@@ -69,6 +96,13 @@ Deno.serve(async (req) => {
   try {
     const key = await geminiKey();
     if (!key) return json({ error: "no gemini key in the vault" }, 500);
+    // the pictures of a link join the last message
+    const urls = Array.isArray(body.imageUrls) ? body.imageUrls.filter((u) => typeof u === "string").slice(0, 2) as string[] : [];
+    const last = (body.history as { parts?: unknown[] }[])[(body.history as unknown[]).length - 1];
+    if (urls.length && last && Array.isArray(last.parts)) {
+      const pics = (await Promise.all(urls.map(fetchPic))).filter(Boolean);
+      last.parts.push(...pics);
+    }
     const up = await gemini(key, body.system, body.history, body.stream === true);
     return new Response(up.body, { status: up.status, headers: { ...cors, "Content-Type": up.headers.get("content-type") || "application/json" } });
   } catch (_e) {

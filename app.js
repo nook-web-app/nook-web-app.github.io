@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.5.3";
+const APP_VERSION = "3.5.4";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -5082,9 +5082,17 @@ function zPostOf(t) {
   } catch (e) { return null; }
 }
 // his picture as a small link other people can load; made once per picture
+let zPfpChecked = "";
 async function zenPfpUrl() {
   if (!S.zen.pfp) return null;
-  if (S.zen.pfpUrl && S.zen.pfpUrlAt === S.zen.pfpAt) return S.zen.pfpUrl;
+  if (S.zen.pfpUrl && S.zen.pfpUrlAt === S.zen.pfpAt) {
+    // the stored file can be gone, so the link is checked once per session before it is shared again
+    if (zPfpChecked === S.zen.pfpUrl) return S.zen.pfpUrl;
+    try {
+      const r = await fetch(S.zen.pfpUrl, { method: "HEAD" });
+      if (r.ok) { zPfpChecked = S.zen.pfpUrl; return S.zen.pfpUrl; }
+    } catch (e) { return S.zen.pfpUrl; }
+  }
   try {
     const urls = await uploadMedia([S.zen.pfp]);
     if (!urls) return null;
@@ -5093,7 +5101,7 @@ async function zenPfpUrl() {
   } catch (e) { return null; }
 }
 function zCard(zp, big) {
-  const av = zp.a ? (() => { const d = h("div", { class: "av zenav" }); const im = h("img", { alt: "", decoding: "async" }); im.src = zp.a; im.onerror = () => { d.textContent = ""; d.innerHTML = ZEN_SVG; }; d.append(im); d.style.width = d.style.height = (big ? 44 : 34) + "px"; return d; })() : zenAv(big ? 44 : 34);
+  const av = zp.a ? (() => { const d = h("div", { class: "av zenav" }); const im = h("img", { alt: "", decoding: "async" }); im.src = zp.a; im.onerror = () => { im.onerror = null; if (S.zen && S.zen.pfp && im.src !== S.zen.pfp) im.src = S.zen.pfp; else { d.textContent = ""; d.innerHTML = ZEN_SVG; } }; d.append(im); d.style.width = d.style.height = (big ? 44 : 34) + "px"; return d; })() : zenAv(big ? 44 : 34);
   return h("div", { class: "zcard" + (big ? " big" : "") }, h("div", { class: "zch" }, av, h("div", { class: "nm" }, h("b", {}, "Zenith"), h("span", {}, "@zenith"))),
     h("div", { class: "zct" }, rich(zp.x)), h("div", { class: "zcd" }, new Date(zp.t).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })));
 }

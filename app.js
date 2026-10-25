@@ -167,7 +167,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.27";
+const APP_VERSION = "3.4.28";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2049,7 +2049,7 @@ function settingsV() {
   main.append(sec("Your data"));
   main.append(h("div", { class: "group" },
     row(ic("copy", 22), "Download backup", "Posts, notes and media in a zip", () => downloadBackup()),
-    h("label", { class: "srow", style: "cursor:pointer" }, ic("backup", 22), h("div", { class: "nm" }, h("b", {}, "Restore backup"), h("span", { class: "sub" }, "Add posts and notes from a backup file")),
+    h("label", { class: "srow", style: "cursor:pointer;position:relative;overflow:hidden" }, ic("backup", 22), h("div", { class: "nm" }, h("b", {}, "Restore backup"), h("span", { class: "sub" }, "Add posts and notes from a backup file")),
       h("input", { type: "file", accept: ".zip,.json,application/zip,application/json", class: "vh", "aria-label": "Restore backup", onchange: e => { const f = e.target.files && e.target.files[0]; e.target.value = ""; if (f) restoreBackup(f); } }))));
   main.append(sec("Updates"));
   main.append(h("div", { class: "group" }, row(ic("check", 22), "Check for updates", "You are on version " + APP_VERSION, () => {

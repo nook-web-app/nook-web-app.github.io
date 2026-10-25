@@ -167,7 +167,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.20";
+const APP_VERSION = "3.4.21";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2694,7 +2694,11 @@ async function pushPostNow(np, par, hasImgs, quiet) {
     row.media_url = JSON.stringify(urls);
   }
   if (par) row.parent_id = par.remote;
-  const { data, error } = await sb.from("posts").insert(row).select("id").single();
+  // the id is made here and kept, so a send that is repeated after a lost answer can never make a second post
+  if (!np.rid) np.rid = crypto.randomUUID();
+  row.id = np.rid;
+  let { data, error } = await sb.from("posts").insert(row).select("id").single();
+  if (error && error.code === "23505") { data = { id: np.rid }; error = null; }
   // deleted on this phone while it was still uploading: it goes from the server again
   if (!error && data && !S.posts.includes(np)) { S.pendDel = (S.pendDel || []).concat(data.id); persist(); serverDelete([{ remote: data.id, media: urls || [] }]); return; }
   if (!error && data) { np.remote = data.id; np.media = urls || []; persist(); }
@@ -2970,6 +2974,7 @@ function editProfile() {
           pr.handle = data.username;
           pr.handleChangedAt = data.handle_changed_at;
         } else if (handleChanged) pr.handle = newHandle;
+        const was = { name: pr.name, bio: pr.bio, avatar: pr.avatar, banner: pr.banner, bannerTheme: pr.bannerTheme };
         pr.name = name.value.trim().slice(0, 15);
         pr.bio = bio.value;
         pr.avatar = avatarData;
@@ -2977,7 +2982,9 @@ function editProfile() {
         pr.bannerTheme = themeVal;
         if (sbUser) {
           const uid0 = sbUser.id;
-          sb.from("accounts").update({ bio: pr.bio, display_name: pr.name, banner_theme: pr.bannerTheme }).eq("id", uid0).then(({ error }) => { if (error) toast("Your profile was saved on this phone only. " + plainErr(error, "Try again later")); });
+          // the editor only closes when the server took the change; otherwise it stays open with what was typed
+          const { error: ue } = await sb.from("accounts").update({ bio: pr.bio, display_name: pr.name, banner_theme: pr.bannerTheme }).eq("id", uid0);
+          if (ue) { Object.assign(pr, was); toast("Could not save your profile. " + plainErr(ue, "Try again")); return; }
           avatarValue(pr.avatar).then(small => {
             if (small === undefined) { toast("Could not upload profile photo"); return; }
             if (sbUser) sb.from("accounts").update({ avatar: small }).eq("id", uid0).then(({ error }) => { if (error) toast("The new picture was not saved. " + plainErr(error, "Try again later")); loadFeed(); if (sbUser && sbUser.id === uid0) rememberAccount({ username: pr.handle, name: pr.name || pr.handle, avatar: small }).catch(() => {}); });

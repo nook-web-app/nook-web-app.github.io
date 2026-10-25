@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.8.1";
+const APP_VERSION = "3.9.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -324,6 +324,8 @@ if (window.matchMedia) {
 
 const byId = id => S.posts.find(p => p.id === id);
 const kids = id => S.posts.filter(p => p.parent === id);
+// true when one of his own posts is above this one, however far up
+const zenThread = p => { for (let q = p && p.parent ? byId(p.parent) : null, n = 0; q && n < 60; q = q.parent ? byId(q.parent) : null, n++) if (q.ai) return true; return false; };
 // a post that shows a link card does not also print the link; the copy button in the menu still has the whole text
 const cardless = p => { if (!p.text || (p.imgs && p.imgs.length) || !firstUrl(p.text)) return p.text; return p.text.replace(/https?:\/\/[^\s<>"]+/i, "").replace(/[ \t]{2,}/g, " ").trim(); };
 // every reply under a post counts, the ones to replies too
@@ -402,7 +404,7 @@ function rankFeed(arr, tab) {
   const hidden = new Set(S.ui.hidden || []);
   const langs = myLangs();
   const follows = getFollows();
-  const maxT = arr.reduce((m, p) => Math.max(m, p.t), 0);
+  const maxT = arr.reduce((m, p) => Math.max(m, ft(p)), 0);
   const key = [tab, arr.length, maxT, hidden.size, Object.keys(less.a).length + ":" + Object.keys(less.w).length, [...langs].join(), follows.size].join("|");
   const hit = rankCache.get(tab);
   // the order stays the same while the posts, the follows and the choices stay the same, so likes do not shuffle the page
@@ -416,7 +418,7 @@ function rankFeed(arr, tab) {
   const now = Date.now();
   const scored = arr.filter(p => !hidden.has(p.id)).map(p => {
     const who = whoOf(p);
-    const rec = Math.pow(.5, Math.max(0, now - p.t) / 36e5 / 10);
+    const rec = Math.pow(.5, Math.max(0, now - ft(p)) / 36e5 / 10);
     const a = Math.min(1.5, aff.get(who) || 0);
     const fol = follows.has(who) ? 1 : 0;
     let s;
@@ -487,8 +489,10 @@ function feedPosts(f) {
       a = a.filter(p => tag ? tag.test(p.text) : p.text.toLowerCase().includes(q));
     }
   }
-  return a.sort((x, y) => y.t - x.t);
+  return a.sort((x, y) => ft(y) - ft(x));
 }
+// a post that somebody you follow reposted counts from the time of the repost
+const ft = p => (p.rpBy ? Math.max(p.t, p.rpBy.t) : p.t);
 function ago(t) {
   if (!Number.isFinite(t)) return "";
   const m = Math.floor((Date.now() - t) / 60000);
@@ -1245,7 +1249,7 @@ function homeV() {
   topEl.append(h("div", { class: "tabs", role: "tablist" }, tabs.map(t => h("button", { class: "tab" + (t.id === S.ui.homeTab ? " on" : ""), role: "tab", onclick: () => { S.ui.homeTab = t.id; persist(); render("root"); } }, h("span", {}, t.name)))));
   main.append(composerRow());
   const photos = S.ui.homeTab === "photos";
-  main.append(postList(rankFeed(feedPosts(photos ? { media: true } : null), photos ? "photos" : "latest"), { empty: feedEmpty(photos) }));
+  main.append(postList(rankFeed(feedPosts(photos ? { media: true } : null), photos ? "photos" : "latest"), { lab: p => (p.rpBy ? p.rpBy.name + " reposted" : null), empty: feedEmpty(photos) }));
 }
 
 function mainPost(p) {
@@ -1274,7 +1278,7 @@ function threadV(c) {
   const mp = mainPost(p);
   main.append(mp);
   main.append(h("div", { class: "rb" }));
-  threadReplies(p).forEach(x => main.append(postCard(x.p, { rep: true, d: x.d, nc: !!p.parent })));
+  threadReplies(p).forEach(x => main.append(postCard(x.p, { rep: true, d: x.d, nc: !!p.parent, replyTo: x.d > 0 })));
 }
 // a post lists only the replies made to it; an opened reply lists everything under it, so no page ever has to be opened for a third level
 function threadReplies(p) {
@@ -1878,7 +1882,7 @@ const zenRefresh = () => {
   const rb = cur.r === "thread" ? main.querySelector(".rb") : null;
   if (rb && byId(cur.id)) {
     while (rb.nextSibling) rb.nextSibling.remove();
-    threadReplies(byId(cur.id)).forEach(x => main.append(postCard(x.p, { rep: true, d: x.d, nc: !!byId(cur.id).parent })));
+    threadReplies(byId(cur.id)).forEach(x => main.append(postCard(x.p, { rep: true, d: x.d, nc: !!byId(cur.id).parent, replyTo: x.d > 0 })));
     return;
   }
   zenCounts();
@@ -1906,7 +1910,7 @@ async function zenTick() {
     const cleared = async p => {
       if (!sbUser || p.aegis) return true;
       // an answer to one of his own posts never leaves this phone, so there is nothing for Aegis to look at
-      if (!p.remote && p.parent && (byId(p.parent) || {}).ai) return true;
+      if (!p.remote && zenThread(p)) return true;
       if (!p.remote) { waiting.add(p.id); return false; }
       const { data, error } = await sb.from("posts").select("mod_status, text_pending").eq("id", p.remote).maybeSingle();
       if (error) { waiting.add(p.id); return false; }
@@ -1931,7 +1935,7 @@ async function zenTick() {
       await answer(todo, "zenReplied", async () => { const lk = await zLink(todo.text); return zGen(ZSYS_REPLY, "Post: " + (todo.text || "(photo only)") + lk.note, todo.imgs, lk.pics); }, todo);
       if (!todo.zenReplied) break;
     }
-    for (let rr; (rr = S.posts.find(p => !p.ai && !p.ra && p.parent && !p.zenAnswered && fresh(p) && (byId(p.parent) || {}).ai && !waiting.has(p.id)));) {
+    for (let rr; (rr = S.posts.find(p => !p.ai && !p.ra && p.parent && !p.zenAnswered && fresh(p) && zenThread(p) && !waiting.has(p.id)));) {
       const par = byId(rr.parent);
       if (!(await cleared(rr))) continue;
       await answer(rr, "zenAnswered", async () => { const lk = await zLink(chainText(rr)); return zGen(ZSYS_REPLY, zThread(rr) + lk.note, [], lk.pics); }, rr);
@@ -2554,6 +2558,22 @@ async function loadFeed() {
   if (pq.error) pq = await sb.from("posts").select("id, user_id, body, created_at").order("created_at", { ascending: false }).limit(300);
   const posts = pq.data;
   if (!posts) { feedFail(); return; }
+  // what the people you follow reposted comes in too, even when the post itself is older than the newest 300
+  let rpRows = [];
+  try {
+    const fq = await sb.from("follows").select("followee_id").eq("follower_id", sbUser.id).limit(1000);
+    const fids = (fq.data || []).map(r => r.followee_id);
+    if (fids.length) {
+      const rq = await sb.from("reposts").select("user_id, post_id, created_at").in("user_id", fids).order("created_at", { ascending: false }).limit(60);
+      rpRows = (rq.data || []).filter(r => r.user_id !== sbUser.id);
+      const have = new Set(posts.map(p => p.id));
+      const miss = [...new Set(rpRows.map(r => r.post_id))].filter(id => !have.has(id)).slice(0, 60);
+      if (miss.length) {
+        const mq = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url").in("id", miss);
+        (mq.data || []).forEach(p => { if (!p.parent_id) posts.push(p); });
+      }
+    }
+  } catch (e) { rpRows = []; }
   const pend = new Set(S.pendDel || []);
   if (S.pendDel && S.pendDel.length) { try { await deleteRemote(S.pendDel.map(r => ({ remote: r }))); } catch (e) {} }
   const ids = posts.filter(p => !p.parent_id).map(p => p.id);
@@ -2609,10 +2629,14 @@ async function loadFeed() {
   const rpTime = new Map((myReposts || []).map(x => [x.post_id, Date.parse(x.created_at) || 0]));
   const hidden = new Set([...(blocksOut || []).map(x => x.blocked_id), ...(blocksIn || []).map(x => x.blocker_id)]);
   const shown = posts.filter(p => !hidden.has(p.user_id));
-  const authors = [...new Set(shown.filter(p => p.user_id !== sbUser.id).map(p => p.user_id))];
+  const postIds = new Set(shown.map(p => p.id));
+  const rpFirst = new Map();
+  rpRows.forEach(r => { if (!hidden.has(r.user_id) && postIds.has(r.post_id) && !rpFirst.has(r.post_id)) rpFirst.set(r.post_id, r); });
+  const authors = [...new Set(shown.filter(p => p.user_id !== sbUser.id).map(p => p.user_id).concat([...rpFirst.values()].map(r => r.user_id)))];
   const who = await cachedAccounts(authors);
   // a deleted account has no profile to show: its posts are left out instead of appearing as "user"
   const others = shown.filter(p => p.user_id !== sbUser.id && (who.failed || who.get(p.user_id)));
+  const rpBy = id => { const r = rpFirst.get(id), a = r && who.get(r.user_id); return a ? { id: r.user_id, name: a.display_name == null ? a.username : a.display_name, t: Date.parse(r.created_at) || 0 } : null; };
   const replyTally = new Map();
   shown.filter(p => p.parent_id).forEach(p => replyTally.set(p.parent_id, (replyTally.get(p.parent_id) || 0) + 1));
   const savedMap = new Map(S.posts.filter(p => p.ra).map(p => [p.remote, !!p.saved]));
@@ -2632,7 +2656,7 @@ async function loadFeed() {
       id: "r" + p.id, remote: p.id, parent: p.parent_id ? (localByRemote.get(p.parent_id) || "r" + p.parent_id) : null,
       text: p.body || "", t: Date.parse(p.created_at), imgs: parseMedia(p.media_url),
       ra: { id: p.user_id, name: a.display_name == null ? a.username : a.display_name, handle: a.username, avatar: a.avatar || null },
-      liked: liked.has(p.id), reposted: reposted.has(p.id), rpAt: rpTime.get(p.id) || 0, saved: savedMap.get(p.id) || false,
+      liked: liked.has(p.id), reposted: reposted.has(p.id), rpAt: rpTime.get(p.id) || 0, rpBy: rpBy(p.id), saved: savedMap.get(p.id) || false,
       lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, rp: replyTally.get(p.id) || 0, pinned: false
     };
   });
@@ -2992,7 +3016,7 @@ function openCompose(o) {
   o = o || {};
   if (sbUser && lockLeft()) { postLockedSheet(); return; }
   const parent = o.parent ? byId(o.parent) : null;
-  if (parent && !parent.remote && !parent.ai && !parent.ra) { toast("Wait for the post to finish uploading"); return; }
+  if (parent && !parent.remote && !parent.ai && !parent.ra && !zenThread(parent)) { toast("Wait for the post to finish uploading"); return; }
   const ed = o.edit ? byId(o.edit) : null;
   let imgs = ed ? ed.imgs.slice() : [];
   const jobs = [];

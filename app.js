@@ -167,7 +167,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.19";
+const APP_VERSION = "3.4.20";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1456,13 +1456,22 @@ async function zipMedia(files, src, folder, name) {
   const path = folder + "/" + name + "." + extOf(src);
   // a picture that is gone is left out instead of stopping the whole backup
   try {
-    const res = await fetch(src);
-    if (!res.ok) return null;
+    const res = await fetch(src, { signal: AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined });
+    if (!res.ok) { backupSkipped++; return null; }
     files.push({ name: path, data: new Uint8Array(await res.arrayBuffer()) });
-  } catch (e) { return null; }
+  } catch (e) { backupSkipped++; return null; }
   return path;
 }
+let backupSkipped = 0, backupBusy = false;
 async function downloadBackup() {
+  if (backupBusy) return;
+  backupBusy = true;
+  backupSkipped = 0;
+  try { await downloadBackupNow(); }
+  catch (e) { toast("Could not prepare the backup. " + plainErr(e, "Try again")); }
+  finally { backupBusy = false; }
+}
+async function downloadBackupNow() {
   toast("Preparing backup...");
   const files = [], enc = t => new TextEncoder().encode(t);
   const posts = [], replies = [];
@@ -1493,6 +1502,7 @@ async function downloadBackup() {
   if (pr.banner) profile.banner = await zipMedia(files, pr.banner, "profile", "banner");
   files.push({ name: "profile/settings.json", data: enc(JSON.stringify({ app: "nook", version: APP_VERSION, exported: new Date().toISOString(), profile, lists: S.lists, ui: S.ui }, null, 2)) });
   saveSheet(makeZip(files), "nook-backup-" + new Date().toISOString().slice(0, 10) + ".zip", files.length);
+  if (backupSkipped) setTimeout(() => toast(backupSkipped + (backupSkipped === 1 ? " picture" : " pictures") + " could not be added to the backup"), 600);
 }
 // our own "your file is ready" card; the phone still shows its usual download notice once the file is saved
 function saveSheet(blob, name, count) {
@@ -1952,7 +1962,7 @@ function settingsV() {
   }).catch(() => { const sub = totpRow.querySelector(".sub"); if (sub) sub.textContent = "Could not check right now."; });
   let keyState = rowSubs.keyState || null, keyRows = rowSubs.keyRows || [];
   const keyRow = row(ic("backup", 22), "Message key backup", rowSubs.key || "Checking...", () => {
-    if (keyState === null) { toast("One moment..."); return; }
+    if (keyState === null) { toast("Checking..."); loadKeyState(); return; }
     if (keyState === "locked") { unlockModal(); return; }
     const hasRec = keyRows.some(r => r.mode === "recovery"), hasLogin = keyRows.some(r => r.mode === "login");
     const items = [];
@@ -1968,7 +1978,7 @@ function settingsV() {
     items.push({ label: "Cancel", cancel: true });
     sheet(items, "Message key backup");
   });
-  (async () => {
+  const loadKeyState = async () => {
     const sub = keyRow.querySelector(".sub");
     try {
       const [bk, loc] = await Promise.all([sb.from("key_backups").select("mode, pub").eq("user_id", sbUser.id), peekKeys()]);
@@ -1979,8 +1989,9 @@ function settingsV() {
       rowSubs.keyState = keyState; rowSubs.keyRows = keyRows;
       rowSubs.key = keyState === "locked" ? "Locked. Tap to unlock." : keyState === "off" ? "Off" : modes.includes("login") ? "On" : "On with a recovery password";
       if (sub) sub.textContent = keyState === "locked" ? "Locked. Tap to unlock." : keyState === "off" ? "Off" : modes.includes("login") ? "On" : "On with a recovery password";
-    } catch (e) { if (sub) sub.textContent = "Could not check right now."; }
-  })();
+    } catch (e) { if (sub) sub.textContent = "Could not check right now. Tap to retry."; }
+  };
+  loadKeyState();
   main.append(h("div", { class: "group" },
     row(ic("pass", 22), "Change password", "Needs your current password.", () => changePassV()),
     row(ic("mail", 22), "Change email", "We send a link to the new address.", () => changeEmailV()),
@@ -3104,8 +3115,10 @@ function showBanned(email) {
     if (mail) localStorage.setItem(BAN_EMAIL, mail);
   } catch (e) {}
   if (rtChan) { try { sb.removeChannel(rtChan); } catch (e) {} rtChan = null; }
+  leaving = true;
   Promise.resolve(sb.auth.signOut()).catch(() => {}).then(() => wipeLocal(true)).then(() => {
     sbUser = null;
+    leaving = false;
     stack = [{ r: "banned" }];
     scrolls.length = 0;
     layer.textContent = "";
@@ -3248,7 +3261,7 @@ function bannedDownload() {
       m.act.disabled = true;
       msg.textContent = "Checking...";
       try {
-        const r = await fetch(SB_URL + "/functions/v1/ban-export", { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY }, body: JSON.stringify({ email: e, password: pw.value }) });
+        const r = await fetch(SB_URL + "/functions/v1/ban-export", { signal: AbortSignal.timeout ? AbortSignal.timeout(25000) : undefined, method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY }, body: JSON.stringify({ email: e, password: pw.value }) });
         let j = null;
         try { j = await r.json(); } catch (x) {}
         if (!r.ok || !j) { msg.textContent = j && j.error === "locked" ? lockedMsg(j.until) : (j && j.error) || "Could not get your data. Try again later."; return; }
@@ -4262,7 +4275,7 @@ function keyDb() {
     const r = indexedDB.open("nook-keys", 1);
     r.onupgradeneeded = () => r.result.createObjectStore("k");
     r.onsuccess = () => res(r.result);
-    r.onerror = () => rej(r.error);
+    r.onerror = () => rej(new Error("This phone cannot open its key storage. Check private mode or site data"));
   });
 }
 function readLocalKeys(db, id) {
@@ -4451,7 +4464,8 @@ async function makeNewKey() {
 }
 async function unlockModal() {
   if (!sbUser) return;
-  const { data: rows } = await sb.from("key_backups").select("mode").eq("user_id", sbUser.id);
+  const { data: rows, error: ke } = await sb.from("key_backups").select("mode").eq("user_id", sbUser.id);
+  if (ke) { toast("Could not load your backup. Check your connection and try again"); return; }
   const has = k => (rows || []).some(r => r.mode === k);
   const items = [{ icon: "userswap", label: "Approve on my other phone", fn: waitForApprovalModal }];
   if (has("login")) items.push({ icon: "lock", label: "Use my login password", fn: () => restoreKeysModal("login") });
@@ -4609,7 +4623,8 @@ async function restoreKeysModal(mode) {
         let rec;
         try { rec = await openKeyBackup(row, pw.input.value); } catch (e) { msg.textContent = "That is not the right password"; return; }
         // a saved key that is not the key of the account is an old one: it must never replace the account's key
-        const { data: me } = await sb.from("accounts").select("public_key").eq("id", sbUser.id).maybeSingle();
+        const { data: me, error: me_err } = await sb.from("accounts").select("public_key").eq("id", sbUser.id).maybeSingle();
+        if (me_err) { msg.textContent = "Could not reach Nook. Check your connection and try again"; return; }
         if (me && me.public_key && me.public_key !== rec.pub) { msg.textContent = "That saved key is older than the one on your account. Use another way"; return; }
         await saveLocalKeys(await keyDb(), sbUser.id, rec);
         if (!me || !me.public_key) await sb.from("accounts").update({ public_key: rec.pub }).eq("id", sbUser.id);
@@ -4662,7 +4677,9 @@ async function backupSetupModal(changing) {
 async function ensureE2E() {
   if (!sbUser || !crypto.subtle) return;
   const k = await myKeys();
-  const { data } = await sb.from("accounts").select("public_key").eq("id", sbUser.id).maybeSingle();
+  const { data, error: ae } = await sb.from("accounts").select("public_key").eq("id", sbUser.id).maybeSingle();
+  // a failed answer is not "no key": this phone never replaces the account key on a guess
+  if (ae) throw new Error("network");
   if (data && data.public_key && data.public_key !== k.pub) {
     // another phone holds the key of this account now: this phone must not overwrite it, it asks for it
     const stale = Promise.reject(new Error(LOCKED_MSG));

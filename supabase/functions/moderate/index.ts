@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+// Aegis is the name of the moderation AI (it means protection); Zenith is the owner-only AI, they use separate models
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 // the Gemini key is saved in the database vault (secret name gemini_api_key); it is looked up once a minute at most

@@ -103,8 +103,16 @@ function readVerdict(j: any): Verdict {
   const c = j && j.candidates && j.candidates[0];
   if (!c) return null;
   // deno-lint-ignore no-explicit-any
-  const t = ((c.content && c.content.parts) || []).filter((p: any) => !p.thought).map((p: any) => p.text || "").join(" ").trim();
-  const first = (t.split(/\s+/)[0] || "").replace(/[^A-Za-z]/g, "").toUpperCase();
+  let t = ((c.content && c.content.parts) || []).filter((p: any) => !p.thought).map((p: any) => p.text || "").join("\n").trim();
+  let first = (t.split(/\s+/)[0] || "").replace(/[^A-Za-z]/g, "").toUpperCase();
+  // Gemma sometimes writes its reasoning first: the answer is then the last line that holds only the verdict word
+  if (!/^(SEXUAL|UNSAFE|RULES|MINOR|SAFE)$/.test(first)) {
+    const lines = t.split(/\n+/).map((l: string) => l.trim());
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const w = lines[i].replace(/[^A-Za-z]/g, "").toUpperCase();
+      if (lines[i].length <= 12 && /^(SEXUAL|UNSAFE|RULES|MINOR|SAFE)$/.test(w)) { first = w; t = w + " " + lines.slice(i + 1).join(" "); break; }
+    }
+  }
   if (first === "SEXUAL" || first === "UNSAFE") { C().why = "the AI said: " + t.slice(0, 200); return "sexual"; }
   if (first === "RULES") { C().why = t.replace(/^\S+\s*/, "").slice(0, 120) || "it breaks the rules"; return "rules"; }
   if (first === "MINOR") { C().why = t.replace(/^\S+\s*/, "").slice(0, 120) || "Nook is for people aged 18 and older."; return "minor"; }
@@ -140,7 +148,7 @@ async function ask(parts: unknown[], system = SYSTEM): Promise<Verdict> {
         const call = (think: boolean) => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
           method: "POST",
           headers: { "content-type": "application/json", "x-goog-api-key": key },
-          body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: [{ role: "user", parts }], generationConfig: { temperature: 0, maxOutputTokens: 400, ...(think ? { thinkingConfig: { thinkingLevel: "low" } } : {}) } }),
+          body: JSON.stringify({ systemInstruction: { parts: [{ text: system + " Reply with the verdict only. When it is SAFE, reply with the single word SAFE and nothing else: no reason, no analysis, no bullet points. For any other verdict give the two lines." }] }, contents: [{ role: "user", parts }], generationConfig: { temperature: 0, maxOutputTokens: 600, ...(think ? { thinkingConfig: { thinkingLevel: "low" } } : {}) } }),
         });
         r = await call(true);
         if (r.status === 400) r = await call(false);
@@ -153,7 +161,12 @@ async function ask(parts: unknown[], system = SYSTEM): Promise<Verdict> {
     if (!r || !r.ok) { C().lastNote = "gemini " + (r ? r.status : "none") + " " + (r ? (await r.text()).slice(0, 120) : ""); if (!r || r.status === 429 || r.status >= 500) C().aiDown = true; return null; }
     const j = await r.json();
     const v = readVerdict(j);
-    if (v === null) C().lastNote = "unreadable answer " + JSON.stringify(j).slice(0, 200);
+    if (v === null) {
+      const cand = j && j.candidates && j.candidates[0];
+      // deno-lint-ignore no-explicit-any
+      const txt = ((cand && cand.content && cand.content.parts) || []).map((p: any) => p.text || "").join("\n");
+      C().lastNote = "unreadable answer finish=" + (cand ? cand.finishReason : "none") + " len=" + txt.length + " tail=" + txt.slice(-300);
+    }
     return v;
   } catch (e) { C().lastNote = "fetch failed " + String((e as Error).message || e); C().aiDown = true; return null; }
 }

@@ -137,6 +137,14 @@ function h(t, p, ...k) {
       else e.setAttribute(a, v === true ? "" : v);
     }
   }
+  // only the sign up and sign in fields (marked data-pm) may open the password manager; every other field tells it to stay away
+  if ((t === "input" || t === "textarea") && !(p && p["data-pm"]) && e.getAttribute("autocomplete") !== "one-time-code") {
+    e.setAttribute("autocomplete", "off");
+    e.setAttribute("data-1p-ignore", "");
+    e.setAttribute("data-lpignore", "true");
+    e.setAttribute("data-bwignore", "");
+    e.setAttribute("data-form-type", "other");
+  }
   add(e, k);
   return e;
 }
@@ -167,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.35";
+const APP_VERSION = "3.5.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1786,6 +1794,19 @@ async function zenTick() {
     // his own posts are decided on the server every hour; this brings them in
     if (Date.now() - zenPulled > 45000) { zenPulled = Date.now(); if (await zenPull()) zenRefresh(); }
     const fresh = p => p.t > z.since;
+    // Zenith only gets a request once Aegis has passed the post; until then it waits and is looked at again in a few seconds
+    const waiting = new Set();
+    const cleared = async p => {
+      if (!sbUser || p.aegis) return true;
+      if (!p.remote) { waiting.add(p.id); return false; }
+      const { data, error } = await sb.from("posts").select("mod_status, text_pending").eq("id", p.remote).maybeSingle();
+      if (error) { waiting.add(p.id); return false; }
+      // taken down or deleted: there is nothing to answer
+      if (!data) { p.zenReplied = p.zenAnswered = p.zenLikeChecked = true; persist(); return false; }
+      if (data.mod_status === "safe" && !data.text_pending) { p.aegis = true; return true; }
+      waiting.add(p.id);
+      return false;
+    };
     // a failed answer is tried again a few times instead of being lost
     const answer = async (item, flag, make, parent) => {
       item[flag] = true;
@@ -1795,23 +1816,27 @@ async function zenTick() {
       else if (!text) { item.zenTries = (item.zenTries || 0) + 1; if (item.zenTries < 4) item[flag] = false; }
       persist(); zenRefresh();
     };
-    for (let todo; (todo = S.posts.find(p => !p.ai && !p.ra && !p.parent && (p.text || p.imgs.length) && !p.zenReplied && fresh(p)));) {
+    for (let todo; (todo = S.posts.find(p => !p.ai && !p.ra && !p.parent && (p.text || p.imgs.length) && !p.zenReplied && fresh(p) && !waiting.has(p.id)));) {
       if (S.posts.some(x => x.ai && x.parent === todo.id)) { todo.zenReplied = true; continue; }
+      if (!(await cleared(todo))) continue;
       await answer(todo, "zenReplied", () => zGen(ZSYS_REPLY, "Post: " + (todo.text || "(photo only)"), todo.imgs), todo);
       if (!todo.zenReplied) break;
     }
-    for (let rr; (rr = S.posts.find(p => !p.ai && !p.ra && p.parent && !p.zenAnswered && fresh(p) && (byId(p.parent) || {}).ai));) {
+    for (let rr; (rr = S.posts.find(p => !p.ai && !p.ra && p.parent && !p.zenAnswered && fresh(p) && (byId(p.parent) || {}).ai && !waiting.has(p.id)));) {
       const par = byId(rr.parent);
+      if (!(await cleared(rr))) continue;
       await answer(rr, "zenAnswered", () => zGen(ZSYS_REPLY, "Your post: " + par.text + "\nReply to you: " + rr.text), rr);
       if (!rr.zenAnswered) break;
     }
-    const cand = S.posts.filter(p => !p.ai && !p.ra && p.text && !p.zenLikeChecked && fresh(p)).slice(0, 2);
+    const cand = S.posts.filter(p => !p.ai && !p.ra && p.text && !p.zenLikeChecked && fresh(p) && !waiting.has(p.id)).slice(0, 2);
     for (const p of cand) {
+      if (!(await cleared(p))) continue;
       p.zenLikeChecked = true;
       const a = await zGen(ZSYS_LIKE, p.text);
       if (/^yes/i.test(a)) p.zenLike = true;
     }
     if (cand.length) { persist(); zenRefresh(); }
+    if (waiting.size) setTimeout(zenTick, 6000);
   } catch (e) {} finally { zenBusy = false; if (zenAgain) { zenAgain = false; setTimeout(zenTick, 300); } }
 }
 // Zenith's posts, replies, likes and chats are mirrored into a table that only the owner can read,
@@ -2073,12 +2098,19 @@ function settingsV() {
     row(ic("eyeoff", 22), "Privacy Policy", "What we keep and why.", () => go({ r: "privacy" })),
     row(ic("check", 22), "Terms of Use", "The rules for using Nook.", () => go({ r: "terms" }))));
   main.append(sec("Danger zone"));
-  main.append(h("div", { class: "group" }, row(ic("trash", 22), "Delete account", "Deletes your account and its data", () => confirmLogin("Delete account", "Deletes your account, posts and messages for good.", "Delete", async () => {
-    const r = await callFn("delete-account");
-    if (!r.ok) return failText(r, "Could not delete the account. Try again");
-    await wipeLocal();
-    await leaveThisAccount();
-  }), "dng")));
+  main.append(h("div", { class: "group" }, row(ic("trash", 22), "Delete account", "Deletes your account and its data", () => {
+    const ask = () => confirmLogin("Delete account", "Deletes your account, posts and messages for good.", "Delete", async () => {
+      const r = await callFn("delete-account");
+      if (!r.ok) return failText(r, "Could not delete the account. Try again");
+      await wipeLocal();
+      await leaveThisAccount();
+    });
+    // the data goes with the account, so the person is asked first if they want a copy
+    sheet([
+      { icon: "copy", label: "Download my data first", fn: async () => { await downloadBackup(); setTimeout(ask, 400); } },
+      { icon: "trash", label: "Delete without downloading", danger: true, fn: ask },
+      { label: "Cancel", cancel: true }], "Want a copy of your data before you delete your account?");
+  }, "dng")));
 }
 
 function readDataURL(file) {
@@ -2726,6 +2758,36 @@ async function pushPost(np, quiet) {
   np.sending = true;
   try { await pushPostNow(np, par, hasImgs, quiet); } finally { delete np.sending; }
 }
+// posting is paused for a while after posts were taken down; the server decides, this only tells the person
+let postLock = null;
+async function loadPostLock() {
+  if (!sbUser) { postLock = null; return; }
+  try {
+    const { data, error } = await sb.rpc("nook_post_lock");
+    if (error) return;
+    const r = Array.isArray(data) ? data[0] : data;
+    postLock = r && r.locked_until ? { until: Date.parse(r.locked_until), strikes: r.strikes } : null;
+  } catch (e) {}
+}
+const lockLeft = () => (postLock && postLock.until > Date.now() ? postLock.until - Date.now() : 0);
+function lockText(ms) {
+  const m = Math.ceil(ms / 60000);
+  if (m < 60) return m + (m === 1 ? " minute" : " minutes");
+  const hr = Math.ceil(ms / 36e5);
+  if (hr < 48) return hr + (hr === 1 ? " hour" : " hours");
+  const d = Math.ceil(ms / 864e5);
+  return d + " days";
+}
+function postLockedSheet() {
+  const scrim = h("div", { class: "scrim" });
+  const done = () => dismiss(scrim, ov);
+  const ov = h("div", { class: "sheet warn", role: "alertdialog", "aria-modal": "true" },
+    h("div", { class: "grab" }, h("i")),
+    h("div", { class: "warnt" }, "Posting is paused"),
+    h("p", {}, "Some of your posts were removed for breaking the rules. You can post again in " + lockText(lockLeft()) + ". More removed posts mean a longer pause and then a ban."),
+    h("button", { class: "pri", onclick: done }, "I understand"));
+  layer.append(scrim, ov);
+}
 async function pushPostNow(np, par, hasImgs, quiet) {
   const row = { user_id: sbUser.id, body: np.text || "" };
   let urls = null;
@@ -2745,6 +2807,17 @@ async function pushPostNow(np, par, hasImgs, quiet) {
   if (!error && data) { np.remote = data.id; np.media = urls || []; persist(); }
   else {
     if (urls && urls.length) sb.storage.from("media").remove(urls.map(u => storagePath(u, "media")).filter(Boolean)).then(() => {}, () => {});
+    // posting is paused: this post is dropped instead of being tried again and again
+    const lk = /post_locked:(\d+)/.exec(String((error && error.message) || ""));
+    if (lk) {
+      postLock = { until: Number(lk[1]) * 1000, strikes: 0 };
+      const gone = new Set([np.id]);
+      for (let grew = true; grew;) { grew = false; S.posts.forEach(x => { if (x.parent && gone.has(x.parent) && !gone.has(x.id)) { gone.add(x.id); grew = true; } }); }
+      S.posts = S.posts.filter(x => !gone.has(x.id));
+      persist(); render();
+      if (!quiet) postLockedSheet();
+      return;
+    }
     if (!quiet) toast("Could not send that post yet. It will be sent again when the connection is back");
   }
 }
@@ -2756,6 +2829,7 @@ function bannedHit(text) {
 }
 function openCompose(o) {
   o = o || {};
+  if (sbUser && lockLeft()) { postLockedSheet(); return; }
   const parent = o.parent ? byId(o.parent) : null;
   if (parent && !parent.remote && !parent.ai && !parent.ra) { toast("Wait for the post to finish uploading"); return; }
   const ed = o.edit ? byId(o.edit) : null;
@@ -3679,10 +3753,10 @@ async function leaveThisAccount() {
 }
 // makes a brand new account and keeps it on this phone next to the open one; the open one stays open
 function newAccountModal() {
-  const dn = h("input", { class: "in", type: "text", placeholder: "Display name", autocomplete: "off", "aria-label": "Display name" });
-  const user = h("input", { class: "in", type: "text", placeholder: "Username", autocomplete: "off", "aria-label": "Username" });
-  const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "off", "aria-label": "Email" });
-  const pw = pwField("Password");
+  const dn = h("input", { class: "in", type: "text", placeholder: "Display name", autocomplete: "off", "aria-label": "Display name", "data-pm": "1" });
+  const user = h("input", { class: "in", type: "text", placeholder: "Username", autocomplete: "off", "aria-label": "Username", "data-pm": "1" });
+  const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "off", "aria-label": "Email", "data-pm": "1" });
+  const pw = pwField("Password", "new-password");
   const msg = h("p", { class: "note", role: "alert" });
   // the message also shows as a toast, because the keyboard can cover the line under the fields
   const say = t => { msg.textContent = t; if (t) toast(t); };
@@ -3741,8 +3815,8 @@ function newAccountModal() {
   };
 }
 function addAccountModal() {
-  const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "email", "aria-label": "Email" });
-  const pw = pwField("Password");
+  const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "email", "aria-label": "Email", "data-pm": "1" });
+  const pw = pwField("Password", "current-password");
   const pass = pw.input;
   const msg = h("p", { class: "note", role: "alert" });
   // the message also shows as a toast, because the keyboard can cover the line under the fields
@@ -3900,96 +3974,102 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("mess
 
 const LEGAL = {
   privacy: { title: "Privacy Policy", body: [
-    ["Scope", [
-      "This Policy governs the collection and use of information by Nook, the application and its related services.",
-      "By using Nook you acknowledge this Policy."]],
-    ["Information collected", [
-      "Account: email address, username, display name, bio, profile photo and banner. Your password is stored only in hashed form.",
-      "Content: posts, photos, replies, likes, follows, blocks and reports you submit.",
-      "Messages: stored in encrypted form. The content cannot be read by us. The sender, the recipient and the time are retained.",
-      "Devices: push notification addresses of the devices you enable.",
-      "Security: records of sign-in attempts and a marker showing the result of the age check.",
-      "On your device: settings, drafts and feed preferences are kept on your device."]],
-    ["Use of information", [
-      "Information is used to operate the service, deliver notifications, enforce the Terms of Use and protect the security of accounts.",
-      "We do not sell personal data. We do not display advertising. We do not track time spent or scrolling."]],
-    ["Messages and key backup", [
-      "Messages are end to end encrypted. The key is held on your devices.",
-      "A copy of the message key, protected by your login password, is stored so that a new device can open your messages. The server receives your password at sign-in and could in theory open that copy.",
-      "The backup may be turned off in Settings."]],
-    ["Automated review", [
-      "Posts, photos, profile pictures, banners, usernames, display names and bios are reviewed by an automated system for content that violates the Terms of Use.",
-      "Content under review is sent to Google for analysis. Photos remain hidden until the review is complete.",
-      "Automated decisions may be mistaken."]],
+    ["About this policy", [
+      "This policy explains what Nook collects and how it is used.",
+      "By using Nook you accept it."]],
+    ["What we collect", [
+      "Your email, username, display name, bio, profile photo and banner.",
+      "Your password, stored scrambled and never as plain text.",
+      "Your posts, photos, replies, likes, follows, blocks and reports.",
+      "Your messages, stored encrypted. We cannot read them. We do keep who sent them, who received them and when.",
+      "A push address for each device where you turn on notifications.",
+      "Your sign-in attempts and whether you passed the age check.",
+      "A count of your removed posts, tied to your email.",
+      "Your settings, drafts and feed choices stay on your device."]],
+    ["How we use it", [
+      "To run Nook, send your notifications, enforce the rules and keep accounts safe.",
+      "We do not sell your data, show ads or track how long you scroll."]],
+    ["Messages and the key backup", [
+      "Messages are end to end encrypted. The key lives on your devices.",
+      "A copy of that key, locked with your login password, is stored so a new phone can open your messages. The server sees your password when you sign in, so in theory it could open that copy.",
+      "You can turn the backup off in Settings."]],
+    ["Aegis, the automated review", [
+      "Aegis is Nook's automated reviewer. It checks posts, photos, profile pictures, banners, usernames, names and bios against the rules.",
+      "For this check the content is sent to an outside AI service.",
+      "Photos stay hidden until Aegis has checked them.",
+      "Aegis can make mistakes."]],
     ["Links", [
-      "When a link shows a preview card, the link is sent to a preview service and the image is loaded from the linked site. This includes links sent in messages."]],
+      "When a link shows a preview card, the link is sent to a preview service and the picture loads from the linked site. This includes links sent in messages."]],
     ["Age", [
-      "Use of Nook is restricted to persons aged 18 or older.",
-      "An account that states an age below 18, or that is found by the automated review to show such a sign, is locked or banned.",
-      "A copy of a banned account is retained for 30 days for download, then deleted."]],
-    ["Service providers", [
-      "Supabase: authentication, database, file storage and server functions.",
-      "GitHub Pages: delivery of the application.",
-      "Google: automated review of content.",
-      "Your device vendor's push service: delivery of notifications.",
-      "Have I Been Pwned: new passwords are checked against known leaks without transmitting the password itself.",
-      "Each provider receives only the data required to perform its service."]],
-    ["Retention and deletion", [
-      "Data is retained until you delete it or delete your account.",
-      "An account may be deleted at any time in Settings. Deletion requires your email address and password."]],
+      "Nook is for people 18 and older.",
+      "If you say you are under 18, or Aegis finds a sign of it, the account is locked or banned.",
+      "A banned account is kept for 30 days so it can be downloaded, then deleted."]],
+    ["Who helps us run Nook", [
+      "Supabase for sign-in, the database, file storage and server functions.",
+      "GitHub Pages to deliver the app.",
+      "An outside AI service for Aegis.",
+      "Your phone's push service to deliver notifications.",
+      "Have I Been Pwned to check new passwords against known leaks, without sending the password itself.",
+      "Each one only gets what it needs to do its job."]],
+    ["Keeping and deleting your data", [
+      "We keep your data until you delete it or delete your account.",
+      "You can delete your account in Settings. You are offered a download of your data first, and you confirm with your email and password.",
+      "The count of removed posts tied to your email is kept after deletion, so pauses and bans cannot be dodged by making a new account."]],
     ["Security", [
-      "Reasonable measures are used to protect data. No system is completely secure and no absolute guarantee is given."]],
+      "We protect your data with reasonable measures, but no system is completely secure."]],
     ["Changes", [
-      "This Policy may be amended. Continued use after an amendment constitutes acceptance."]],
+      "We may update this policy. If you keep using Nook after an update, you accept it."]],
   ] },
   terms: { title: "Terms of Use", body: [
-    ["Acceptance", [
-      "By using Nook you agree to these Terms and to the Privacy Policy.",
-      "If you do not agree, you must not use Nook."]],
-    ["Eligibility", [
-      "You must be 18 years of age or older.",
-      "Nook may be used only where its use is lawful."]],
-    ["Account", [
-      "You shall provide accurate information.",
-      "You are responsible for your password and for all activity on your account."]],
+    ["Using Nook", [
+      "By using Nook you agree to these terms and to the Privacy Policy.",
+      "If you do not agree, please do not use Nook."]],
+    ["Who can use Nook", [
+      "You must be 18 or older.",
+      "You may only use Nook where it is legal to do so."]],
+    ["Your account", [
+      "You are responsible for your password and for everything done with your account."]],
     ["Your content", [
-      "You retain ownership of your content.",
-      "You grant Nook a limited licence to store, display and transmit your content as required to operate the service.",
-      "You warrant that you hold the rights necessary to post your content."]],
-    ["Prohibited conduct", [
-      "Nudity or sexual content.",
-      "Threats, incitement to violence, or praise of violence against people.",
-      "Hate against persons on the basis of race, religion, gender, orientation, disability or origin.",
-      "Harassment or bullying.",
-      "Disclosure of private information of others.",
-      "Spam, scams and illegal material, including the sale of illegal goods.",
-      "Content that encourages self-harm.",
-      "Any content involving minors in a sexual context. Such content will be reported to the competent authorities.",
-      "Attempts to disrupt, probe or gain unauthorised access to the service."]],
-    ["Enforcement", [
-      "Content that breaches these Terms may be removed. Accounts may be warned, restricted, locked or banned.",
-      "Review is carried out by an automated system. Decisions may be mistaken."]],
-    ["AI-generated content", [
-      "Content marked as AI-generated is produced by an automated system and does not represent a person."]],
-    ["Disclaimer", [
-      "Nook is provided as is and as available, without warranties of any kind.",
-      "We do not warrant that the service will be uninterrupted or error free."]],
-    ["Limitation of liability", [
-      "To the extent permitted by law, we are not liable for lost data, indirect or consequential loss, or for content posted by users."]],
-    ["Termination", [
-      "You may stop using Nook and delete your account at any time.",
-      "We may suspend or terminate access where these Terms are breached."]],
-    ["Severability", [
-      "If a provision is found unenforceable, the remaining provisions continue in force."]],
+      "Your posts stay yours.",
+      "You let Nook store, show and send them as needed to run the service.",
+      "You must have the right to post what you post."]],
+    ["What is not allowed", [
+      "Nudity and sexual content.",
+      "Threats, calls for violence, or praising violence against people.",
+      "Hate against people because of their race, religion, gender, orientation, disability or origin.",
+      "Harassment and bullying.",
+      "Sharing other people's private information.",
+      "Spam, scams and illegal material, including selling illegal goods.",
+      "Content that pushes someone to hurt themselves.",
+      "Anything sexual involving minors. This is reported to the authorities.",
+      "Trying to break, probe or get into Nook without permission."]],
+    ["Removed posts and pauses", [
+      "Aegis, Nook's automated reviewer, checks content. Content that breaks these terms is removed. Aegis can make mistakes.",
+      "Each removed post pauses your posting: 6 hours the first time, 24 hours the second, 72 hours the third, 7 days the fourth and 14 days the fifth. The sixth gets your account banned.",
+      "The count is tied to your email. Deleting your account and making a new one does not reset it.",
+      "A banned account can download its data.",
+      "We may also warn, restrict or ban accounts that break these terms in other ways."]],
+    ["AI-made content", [
+      "Content marked as AI-made comes from an automated system, not from a person."]],
+    ["No warranty", [
+      "Nook is provided as it is and as it is available, with no promises of any kind.",
+      "We do not promise it will always work or be free of errors."]],
+    ["Our responsibility", [
+      "As far as the law allows, we are not responsible for lost data, indirect losses, or what other users post."]],
+    ["Ending your use", [
+      "You can stop using Nook and delete your account at any time.",
+      "We may suspend or end your access if you break these terms."]],
+    ["If part of these terms is invalid", [
+      "The rest still applies."]],
     ["Changes", [
-      "These Terms may be amended. Continued use after an amendment constitutes acceptance."]],
+      "We may update these terms. If you keep using Nook after an update, you accept it."]],
   ] },
 };
 function legalV(c) {
   const doc = LEGAL[c.r];
   topEl.append(bar(backBtn(), ttl(doc.title)));
   if (!sbUser) navEl.hidden = true;
-  main.append(h("div", { class: "legal" }, h("p", { class: "upd" }, "Last updated 25 October 2026"), ...doc.body.map((sec, i) => h("div", {}, h("h2", {}, (i + 1) + ". " + sec[0]), ...sec[1].map((t, j) => h("p", {}, (i + 1) + "." + (j + 1) + "  " + t))))));
+  main.append(h("div", { class: "legal" }, h("p", { class: "upd" }, "Last updated 25 October 2026"), ...doc.body.map(sec => h("div", {}, h("h2", {}, sec[0]), h("ul", {}, ...sec[1].map(t => h("li", {}, t)))))));
 }
 const legalLink = (r, label) => h("a", { role: "link", tabindex: "0", onclick: () => go({ r }), onkeydown: e => { if (e.key === "Enter") go({ r }); } }, label);
 
@@ -4018,12 +4098,12 @@ function authV() {
   navEl.hidden = true;
   const msg = h("p", { class: "note", role: "alert" });
   try { const nt = sessionStorage.getItem("nook-notice"); if (nt) { msg.textContent = nt; sessionStorage.removeItem("nook-notice"); } } catch (e) {}
-  const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "email", "aria-label": "Email" });
-  const pass = h("input", { class: "in", type: "password", placeholder: "Password", autocomplete: up ? "new-password" : "current-password", "aria-label": "Password", style: "padding-right:60px" });
+  const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "email", "aria-label": "Email", "data-pm": "1" });
+  const pass = h("input", { class: "in", type: "password", placeholder: "Password", autocomplete: up ? "new-password" : "current-password", "aria-label": "Password", style: "padding-right:60px", "data-pm": "1" });
   const eye = h("button", { type: "button", class: "tbtn", "aria-label": "Show password", style: "position:absolute;right:14px;top:50%;transform:translateY(-50%);padding:6px 0;color:var(--muted);font-size:var(--fs-md);font-weight:600", onclick: () => { const show = pass.type === "password"; pass.type = show ? "text" : "password"; eye.textContent = show ? "Hide" : "Show"; eye.setAttribute("aria-label", show ? "Hide password" : "Show password"); } }, "Show");
   const passWrap = h("div", { style: "position:relative" }, pass, eye);
-  const dname = h("input", { class: "in", type: "text", placeholder: "Display name", autocomplete: "name", maxlength: "15", "aria-label": "Display name" });
-  const user = h("input", { class: "in", type: "text", placeholder: "Username", autocomplete: "username", maxlength: "15", "aria-label": "Username" });
+  const dname = h("input", { class: "in", type: "text", placeholder: "Display name", autocomplete: "name", maxlength: "15", "aria-label": "Display name", "data-pm": "1" });
+  const user = h("input", { class: "in", type: "text", placeholder: "Username", autocomplete: "username", maxlength: "15", "aria-label": "Username", "data-pm": "1" });
   const btn = h("button", { class: "pri" }, up ? "Create account" : "Sign in");
   const agree = up ? h("input", { type: "checkbox", id: "agree", "aria-label": "I agree to the Terms of Use and Privacy Policy" }) : null;
   const agreeRow = up ? h("label", { class: "agree" }, agree, h("span", {}, "I am 18+ and agree to the ", legalLink("terms", "Terms"), " and ", legalLink("privacy", "Privacy"))) : null;
@@ -4305,6 +4385,7 @@ function plainErr(e, fallback) {
   if (/failed to fetch|networkerror|load failed|network request|abort|timed out|timeout/i.test(m)) return "No connection. Check it and try again";
   if (/row-level security|permission denied/i.test(m)) return "That is not allowed right now";
   if (/rate_limited/i.test(m)) return "Too many changes. Wait a minute and try again";
+  if (/post_locked/i.test(m)) return "Posting is paused for now";
   if (/need to open nook/i.test(m)) return "They have not opened messages yet";
   if (/message_too_long/i.test(m)) return "That message is too long";
   return fallback || "Something went wrong. Try again";
@@ -4546,8 +4627,8 @@ function confirmLogin(title, warn, label, fn) {
     } catch (e) { say("Something went wrong. Try again"); } finally { go1.disabled = false; go1.textContent = label; }
   };
 }
-function pwField(ph) {
-  const input = h("input", { class: "in", type: "password", placeholder: ph, autocomplete: "off", "aria-label": ph, style: "padding-right:60px" });
+function pwField(ph, pm) {
+  const input = h("input", { class: "in", type: "password", placeholder: ph, autocomplete: pm || "off", "aria-label": ph, style: "padding-right:60px", ...(pm ? { "data-pm": "1" } : {}) });
   const eye = h("button", { type: "button", class: "tbtn", "aria-label": "Show password", style: "position:absolute;right:14px;top:50%;transform:translateY(-50%);padding:6px 0;color:var(--muted);font-size:var(--fs-md);font-weight:600", onclick: () => { const s = input.type === "password"; input.type = s ? "text" : "password"; eye.textContent = s ? "Hide" : "Show"; eye.setAttribute("aria-label", s ? "Hide password" : "Show password"); } }, "Show");
   return { input, wrap: h("div", { class: "fld", style: "position:relative" }, input, eye) };
 }
@@ -5893,11 +5974,14 @@ function showModNotice(n) {
   const sexual = n.kind === "sexual" || (field && !/_(toolarge|rules)$/.test(n.kind));
   const what = field ? (field[1] === "avatar" ? "Profile photo removed" : "Banner removed") : ({ bio: "Bio removed", name: "Name removed", username: "Username changed" })[n.kind] || "Post removed";
   const scrim = h("div", { class: "scrim" });
+  const lockP = h("p", {});
+  if (n.post_id && /^(rules|sexual)$/.test(n.kind)) loadPostLock().then(() => { if (lockLeft()) lockP.textContent = "Posting is paused for " + lockText(lockLeft()) + "."; });
   const done = () => { dismiss(scrim, ov); sb.from("mod_notices").update({ seen_at: new Date().toISOString() }).eq("id", n.id).then(() => {}, () => {}); render(); };
   const ov = h("div", { class: "sheet warn", role: "alertdialog", "aria-modal": "true" },
     h("div", { class: "grab" }, h("i")),
     h("div", { class: "warnt" }, what),
     h("p", {}, n.kind === "removed" ? "Reason: reported and removed by the owner." : /^(rules|bio|name|username|avatar_rules|banner_rules)$/.test(n.kind) ? "Reason: " + (n.note ? n.note.replace(/[.\s]+$/, "") + "." : "text that is not allowed.") : sexual ? "Reason: sexual content." : "Reason: the file could not be checked."),
+    lockP,
     h("button", { class: "pri", onclick: done }, "I understand"));
   layer.append(scrim, ov);
 }
@@ -6138,6 +6222,7 @@ async function boot() {
   startRealtime();
   warmInbox().catch(() => {});
   checkModNotices().catch(() => {});
+  loadPostLock().catch(() => {});
   setTimeout(maybeInstallPrompt, 6000);
   zenStart().catch(() => {});
   refreshBadge();

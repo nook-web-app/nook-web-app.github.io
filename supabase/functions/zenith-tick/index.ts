@@ -127,7 +127,7 @@ async function replies(id: string, docs: { doc_id: string; data: any }[], passwo
   const now = Date.now();
   const from = new Date(Math.max(since, now - 6 * HOUR)).toISOString();
   const old = new Date(now - 40000).toISOString();
-  const { data: posts } = await admin.from("posts").select("id, body, created_at, media_url").eq("user_id", id).is("parent_id", null).gt("created_at", from).lt("created_at", old).order("created_at", { ascending: true }).limit(5);
+  const { data: posts } = await admin.from("posts").select("id, body, created_at, media_url").eq("user_id", id).is("parent_id", null).eq("mod_status", "safe").eq("text_pending", false).gt("created_at", from).lt("created_at", old).order("created_at", { ascending: true }).limit(5);
   const todo = (posts || []).filter((p) => p.body && String(p.body).trim());
   if (!todo.length) return json({ skipped: "nothing to answer" });
   const { data: have } = await admin.from("zenith_docs").select("kind, doc_id").eq("owner_id", id).in("kind", ["post", "flag"]).limit(5000);

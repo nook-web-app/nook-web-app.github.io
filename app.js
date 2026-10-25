@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.5.4";
+const APP_VERSION = "3.5.5";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1367,7 +1367,7 @@ function convV(c) {
     stick = true;
     main.scrollTop = main.scrollHeight;
   });
-  const zpop = h("button", { class: "zpop", type: "button" }, h("span", { class: "zav" }, "Z"), h("span", {}, h("b", {}, "Zenith AI")));
+  const zpop = h("button", { class: "zpop", type: "button" }, zenAv(34), h("span", {}, h("b", {}, "Zenith AI")));
   zpop.addEventListener("pointerdown", e => e.preventDefault());
   zpop.addEventListener("click", () => { ta.value = ta.value.replace(/@\w*$/, "@zenith "); zpop.classList.remove("on"); chat.draft = ta.value; persist(); sync(); ta.focus(); });
   const dock = h("div", { class: "cdock" }, zpop, strip, h("div", { class: "cin" }, att, ta, send));
@@ -5480,7 +5480,7 @@ function dmV(c) {
   };
   const att = pickBtn("image", "Add photo", false, f => addMedia(f, pend, jobs, 4, draw), true);
   const lockNote = h("div", { class: "lockn", hidden: true });
-  const zpop = h("button", { class: "zpop", type: "button" }, h("span", { class: "zav" }, "Z"), h("span", {}, h("b", {}, "Zenith AI")));
+  const zpop = h("button", { class: "zpop", type: "button" }, zenAv(34), h("span", {}, h("b", {}, "Zenith AI")));
   zpop.addEventListener("pointerdown", e => e.preventDefault());
   zpop.addEventListener("click", () => { ta.value = ta.value.replace(/@\w*$/, "@zenith "); zpop.classList.remove("on"); sync(); ta.focus(); });
   ta.addEventListener("input", () => zpop.classList.toggle("on", zOn() && /@\w*$/.test(ta.value)));

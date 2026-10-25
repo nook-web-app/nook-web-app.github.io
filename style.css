@@ -82,7 +82,7 @@ textarea{resize:none}
 .ab.like.on{color:var(--like)}
 .ab.rp.on{color:var(--good)}
 .ab.bm.on{color:var(--accent)}
-.acts.big{margin:4px 0 0;justify-content:space-around;padding-block:4px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.acts.big{margin:4px 0 0;justify-content:space-around;padding-block:4px}
 .acts.big>.ab{flex:0 0 auto;max-width:none;margin:0}
 .mp{padding-block:12px 0}
 .mh{display:flex;gap:12px;align-items:center}

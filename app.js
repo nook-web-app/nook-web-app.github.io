@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.6.2";
+const APP_VERSION = "3.6.3";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -738,8 +738,8 @@ function settleScroll(y) {
   };
   requestAnimationFrame(tick);
 }
-// a post opened from a post opened from a post stops at a depth, so nobody can wander down one chain forever
-const MAX_OPEN_POSTS = 8;
+// a post and one reply opened from it is as deep as it goes, so nobody can wander down one chain forever
+const MAX_OPEN_POSTS = 2;
 function go(r) {
   if (r && r.r === "thread" && stack.filter(x => x.r === "thread").length >= MAX_OPEN_POSTS) { toast("Too many posts open. Go back first"); return; }
   scrolls.push(main.scrollTop); stack.push(r); hist(false); render("fwd"); main.scrollTop = 0; }
@@ -1180,9 +1180,8 @@ function homeV() {
 }
 
 function mainPost(p) {
-  const nr = replyTotal(p.id);
   const stat = (n, one, many) => n ? h("span", {}, h("b", {}, n), " " + (n === 1 ? one : many)) : null;
-  const st = [stat(nr, "reply", "replies"), stat(p.saved ? 1 : 0, "save", "saves")].filter(Boolean);
+  const st = [stat(p.saved ? 1 : 0, "save", "saves")].filter(Boolean);
   const pfp = p.ai ? zenAv(48) : p.ra ? rAv(p.ra, 48) : avatar(48);
   if (p.ai) { pfp.style.cursor = "pointer"; pfp.addEventListener("click", e => { e.stopPropagation(); go({ r: "zen" }); }); }
   if (p.ra) { pfp.style.cursor = "pointer"; pfp.addEventListener("click", e => { e.stopPropagation(); go({ r: "user", id: p.ra.id }); }); }
@@ -1206,7 +1205,8 @@ function threadV(c) {
   const mp = mainPost(p);
   main.append(mp);
   main.append(h("div", { class: "rb" }, avatar(28), h("button", { onclick: () => openCompose({ parent: p.id }) }, "Write your reply")));
-  flat(p.id, 0, []).forEach(x => main.append(postCard(x.p, { rep: true, d: x.d })));
+  // only the replies to this post are listed; a reply to a reply shows when that reply is opened
+  kids(p.id).sort((a, b) => a.t - b.t).forEach(k => main.append(postCard(k, { rep: true, d: 0 })));
 }
 
 function profileV() {
@@ -1799,7 +1799,7 @@ const zenRefresh = () => {
   const rb = cur.r === "thread" ? main.querySelector(".rb") : null;
   if (rb && byId(cur.id)) {
     while (rb.nextSibling) rb.nextSibling.remove();
-    flat(cur.id, 0, []).forEach(x => main.append(postCard(x.p, { rep: true, d: x.d })));
+    kids(cur.id).sort((a, b) => a.t - b.t).forEach(k => main.append(postCard(k, { rep: true, d: 0 })));
     return;
   }
   zenCounts();

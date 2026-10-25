@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.6.6";
+const APP_VERSION = "3.7.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -231,6 +231,7 @@ function persist() {
   clearTimeout(timer);
   timer = setTimeout(flush, 250);
   if (zenSyncOn) { clearTimeout(zenTimer); zenTimer = setTimeout(zenSync, 2500); }
+  if (notesOn && !notesQuiet) { clearTimeout(notesTimer); notesTimer = setTimeout(notesSync, 3000); }
 }
 function flush() {
   chain = chain.then(doFlush).catch(() => {});
@@ -6382,10 +6383,184 @@ async function boot() {
   try { if (sessionStorage.getItem("nook-welcome-back")) { sessionStorage.removeItem("nook-welcome-back"); toast("Welcome back. Your account was restored"); } } catch (e) {}
   setTimeout(maybeInstallPrompt, 6000);
   zenStart().catch(() => {});
+  notesStart();
   refreshBadge();
   pushSync();
   setInterval(checkBan, 60000);
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { checkBan(); refreshBadge(); checkModNotices().catch(() => {}); } });
+}
+// ---- notes to self: sealed on this phone and kept on every phone ----
+// each chat and each message is one row the server cannot read; nothing here ever makes the screen wait
+const isNoteChat = c => !(c.msgs || []).some(m => m.ai);
+const noteHash = new Map();
+const imgH = src => { let v = noteHash.get(src); if (!v) { v = srcHash(src); if (noteHash.size > 3000) noteHash.clear(); noteHash.set(src, v); } return v; };
+const noteCSig = c => srcHash("c|" + (c.name || "") + "|" + (c.t || 0));
+const noteImgSig = m => (m.imgs || []).map(imgH).join(",");
+const noteMSig = m => srcHash("m|" + (m.text || "") + "|" + (m.t || 0) + "|" + noteImgSig(m));
+let notesOn = false, notesBusy = false, notesAgain = false, notesTimer = 0, notesQuiet = false;
+function noteState() {
+  const n = S.notesSync;
+  if (!n || n.uid !== sbUser.id) S.notesSync = { uid: sbUser.id, cursor: "", pushed: {}, pm: {} };
+  return S.notesSync;
+}
+const blobToData = b => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(b); });
+async function noteOpen(key, raw) {
+  const parts = String(raw).slice(5).split(".");
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(parts[0]) }, key, fromB64(parts[1]));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+async function noteSeal(key, obj) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify(obj)));
+  return "e2e1:" + toB64(iv) + "." + toB64(new Uint8Array(ct));
+}
+async function notePicIn(key, md) {
+  const res = await fetch(md.url);
+  if (!res.ok) throw new Error("gone");
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(md.iv) }, key, await res.arrayBuffer());
+  return blobToData(new Blob([pt], { type: md.type || "image/jpeg" }));
+}
+async function notePicOut(key, src) {
+  const blob = await (await fetch(src)).blob();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, await blob.arrayBuffer());
+  const path = sbUser.id + "/notes/" + uid() + ".bin";
+  const up = await sb.storage.from(DM_BUCKET).upload(path, new Blob([ct]), { contentType: "application/octet-stream", cacheControl: "3600" });
+  if (up.error) throw up.error;
+  return { url: sb.storage.from(DM_BUCKET).getPublicUrl(path).data.publicUrl, iv: toB64(iv), type: blob.type || "image/jpeg" };
+}
+const notePath = md => { const m = /\/object\/public\/dm-media\/([^?#]+)/.exec(md && md.url || ""); return m ? decodeURIComponent(m[1]) : null; };
+// takes one row from the server into the notes on this phone; true when something changed
+async function noteTake(ns, key, r) {
+  const isChat = r.id.startsWith("c:"), rid = r.id.slice(2);
+  if (r.deleted) {
+    if (isChat) {
+      const c = S.chats.find(x => x.id === rid);
+      if (c && isNoteChat(c) && (ns.pushed[r.id] === noteCSig(c))) { S.chats = S.chats.filter(x => x !== c); ns.pushed[r.id] = "gone"; return true; }
+    } else {
+      for (const c of S.chats) {
+        const m = (c.msgs || []).find(x => x.id === rid);
+        if (m && isNoteChat(c) && ns.pushed[r.id] === noteMSig(m)) { c.msgs = c.msgs.filter(x => x !== m); ns.pushed[r.id] = "gone"; delete ns.pm[r.id]; return true; }
+      }
+    }
+    if (ns.pushed[r.id] !== "gone" && !S.chats.some(c => c.id === rid || (c.msgs || []).some(x => x.id === rid))) ns.pushed[r.id] = "gone";
+    return false;
+  }
+  const p = await noteOpen(key, r.body);
+  if (isChat) {
+    let c = S.chats.find(x => x.id === rid);
+    if (c && (!isNoteChat(c) || ns.pushed[r.id] !== noteCSig(c))) return false;
+    const name = String(p.n || "Notes to self").slice(0, 200), t = Number(p.t) || Date.now();
+    if (c && c.name === name && c.t === t) return false;
+    if (!c) { c = { id: rid, name, msgs: [], t }; S.chats.push(c); } else { c.name = name; c.t = t; }
+    ns.pushed[r.id] = noteCSig(c);
+    return true;
+  }
+  const cid = String(p.c || "");
+  if (!cid) return false;
+  let c = S.chats.find(x => x.id === cid);
+  if (c && !isNoteChat(c)) return false;
+  let m = c && (c.msgs || []).find(x => x.id === rid);
+  if (m && ns.pushed[r.id] !== noteMSig(m)) return false;
+  const text = String(p.x || ""), t = Number(p.t) || Date.now();
+  const media = Array.isArray(r.media) ? r.media : [];
+  const have = ns.pm[r.id];
+  if (m && m.text === text && m.t === t && have && JSON.stringify(have.e) === JSON.stringify(media)) return false;
+  // a photo that cannot be fetched stops the pull here, and it is tried again on the next round
+  const imgs = [];
+  for (const md of media) imgs.push(await notePicIn(key, md));
+  if (!c) { c = { id: cid, name: "Notes to self", msgs: [], t }; S.chats.push(c); ns.pushed["c:" + cid] = noteCSig(c); }
+  if (!m) { m = { id: rid, text, t, imgs }; c.msgs.push(m); c.msgs.sort((a, b) => a.t - b.t); } else { m.text = text; m.t = t; m.imgs = imgs; }
+  ns.pushed[r.id] = noteMSig(m);
+  ns.pm[r.id] = { h: noteImgSig(m), e: media };
+  return true;
+}
+async function notesPull(ns, key) {
+  let changed = false;
+  // a little overlap, so a row saved a moment before the last pull is never missed; what is already here is skipped
+  const from = ns.cursor ? new Date(Date.parse(ns.cursor) - 300000).toISOString() : "1970-01-01T00:00:00Z";
+  for (let off = 0; off < 40000; off += 500) {
+    const { data, error } = await sb.from("notes_self").select("id, body, media, deleted, updated_at").gte("updated_at", from).order("updated_at", { ascending: true }).order("id", { ascending: true }).range(off, off + 499);
+    if (error) throw error;
+    for (const r of data || []) {
+      try { if (await noteTake(ns, key, r)) changed = true; } catch (e) { return changed; }
+      if (!ns.cursor || r.updated_at > ns.cursor) ns.cursor = r.updated_at;
+    }
+    if (!data || data.length < 500) break;
+  }
+  return changed;
+}
+async function notesPush(ns, key) {
+  const exist = new Set();
+  S.chats.forEach(c => { exist.add("c:" + c.id); (c.msgs || []).forEach(m => { if (!m.id) m.id = uid(); exist.add("m:" + m.id); }); });
+  const todo = [];
+  S.chats.filter(isNoteChat).forEach(c => {
+    if (ns.pushed["c:" + c.id] !== noteCSig(c)) todo.push({ id: "c:" + c.id, sig: noteCSig(c), c });
+    (c.msgs || []).forEach(m => { if (ns.pushed["m:" + m.id] !== noteMSig(m)) todo.push({ id: "m:" + m.id, sig: noteMSig(m), c, m }); });
+  });
+  const gone = Object.keys(ns.pushed).filter(id => ns.pushed[id] !== "gone" && !exist.has(id));
+  const stale = [];
+  for (let i = 0; i < todo.length; i += 20) {
+    const part = todo.slice(i, i + 20), rows = [], done = [];
+    for (const x of part) {
+      try {
+        if (x.m) {
+          const h = noteImgSig(x.m), have = ns.pm[x.id];
+          let media = have && have.h === h ? have.e : null;
+          if (!media) { media = []; for (const src of x.m.imgs || []) { if (/^data:/.test(src)) media.push(await notePicOut(key, src)); } }
+          rows.push({ owner_id: sbUser.id, id: x.id, body: await noteSeal(key, { c: x.c.id, t: x.m.t, x: x.m.text || "" }), media, deleted: false });
+          done.push({ x, pm: { h, e: media } });
+        } else {
+          rows.push({ owner_id: sbUser.id, id: x.id, body: await noteSeal(key, { n: x.c.name, t: x.c.t }), media: [], deleted: false });
+          done.push({ x });
+        }
+      } catch (e) { /* this one is tried again on the next round */ }
+    }
+    if (!rows.length) continue;
+    const { error } = await sb.from("notes_self").upsert(rows, { onConflict: "owner_id,id" });
+    if (error) throw error;
+    done.forEach(d => {
+      const old = ns.pm[d.x.id];
+      ns.pushed[d.x.id] = d.x.sig;
+      if (d.pm) { ns.pm[d.x.id] = d.pm; if (old && old.h !== d.pm.h) old.e.forEach(md => { const pth = notePath(md); if (pth && !d.pm.e.some(e => e.url === md.url)) stale.push(pth); }); }
+    });
+  }
+  for (let i = 0; i < gone.length; i += 50) {
+    const part = gone.slice(i, i + 50);
+    const { error } = await sb.from("notes_self").upsert(part.map(id => ({ owner_id: sbUser.id, id, body: "", media: [], deleted: true })), { onConflict: "owner_id,id" });
+    if (error) throw error;
+    part.forEach(id => { const o = ns.pm[id]; if (o) o.e.forEach(md => { const pth = notePath(md); if (pth) stale.push(pth); }); ns.pushed[id] = "gone"; delete ns.pm[id]; });
+  }
+  if (stale.length) sb.storage.from(DM_BUCKET).remove(stale).then(() => {}, () => {});
+}
+function notesRefreshUI() {
+  const cur = stack[stack.length - 1];
+  if (layer.childElementCount || !cur) return;
+  const a = document.activeElement;
+  if (a && /^(TEXTAREA|INPUT)$/.test(a.tagName)) return;
+  if (cur.r === "chat" || cur.r === "conv") render();
+}
+async function notesSync() {
+  if (!notesOn || !sbUser || !S || !crypto.subtle || e2eLocked) return;
+  if (notesBusy) { notesAgain = true; return; }
+  notesBusy = true;
+  try {
+    await ensureE2E();
+    const key = await sharedKey(sbUser.id);
+    const ns = noteState();
+    const changed = await notesPull(ns, key);
+    await notesPush(ns, key);
+    notesQuiet = true; persist(); notesQuiet = false;
+    if (changed) notesRefreshUI();
+  } catch (e) { notesQuiet = false; } finally { notesBusy = false; if (notesAgain) { notesAgain = false; setTimeout(notesSync, 1500); } }
+}
+function notesStart() {
+  if (notesOn || !sbUser) return;
+  notesOn = true;
+  notesSync();
+  setInterval(() => { if (document.visibilityState === "visible") notesSync(); }, 90000);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") notesSync(); });
+  window.addEventListener("online", () => notesSync());
 }
 async function takeShared() {
   const p = new URLSearchParams(location.search);

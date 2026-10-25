@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.5.2";
+const APP_VERSION = "3.5.3";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1943,7 +1943,7 @@ function zenEdit() {
     if (!f) return;
     if (isVideo(f)) { toast("Videos are not supported"); return; }
     try {
-      const out = isGif(f) ? await intake(f) : await openCropper(f, { w: 320, h: 320, gw: 240, gh: 240, round: true, title: "Crop picture" });
+      const out = isGif(f) ? await cropGif(f, { w: 320, h: 320, gw: 240, gh: 240, round: true, title: "Crop picture" }) : await openCropper(f, { w: 320, h: 320, gw: 240, gh: 240, round: true, title: "Crop picture" });
       if (out) { pfp = out; paint(); drawSeg(); }
     } catch (e) { toast("Could not use that picture"); }
   });
@@ -2350,6 +2350,42 @@ async function intake(f, onp, o) {
     return out;
   }
   return shrink(f, { max: 1280, q: 0.8 });
+}
+// a moving picture is cropped like any other: the area is picked on the first frame, then every frame is cut and the gif is made again
+async function cropGif(f, o) {
+  if (!window.ImageDecoder) return intake(f);
+  const r = await openCropper(f, { ...o, rect: true });
+  if (!r) return null;
+  const k = Math.min(1, (o.round ? 256 : 480) / o.w);
+  const W = Math.max(2, Math.round(o.w * k)), H = Math.max(2, Math.round(o.h * k));
+  toast("Cropping your GIF...");
+  try {
+    const dec = new ImageDecoder({ data: await f.arrayBuffer(), type: "image/gif" });
+    await dec.tracks.ready;
+    const count = dec.tracks.selectedTrack.frameCount;
+    if (!(count > 1)) { dec.close(); return await shrink(f, { max: 1280, q: 0.8 }); }
+    const c = document.createElement("canvas");
+    c.width = W; c.height = H;
+    const x = c.getContext("2d", { willReadFrequently: true });
+    const fr = [];
+    let tAt = 0, nextAt = 0;
+    const step = 1e6 / 12, maxFrames = 12 * 8;
+    for (let i = 0; i < count && fr.length < maxFrames; i++) {
+      const { image } = await dec.decode({ frameIndex: i });
+      const d = image.duration || 100000;
+      if (tAt >= nextAt) {
+        x.fillStyle = "#fff"; x.fillRect(0, 0, W, H);
+        x.drawImage(image, r.x, r.y, r.w, r.h, 0, 0, W, H);
+        fr.push(x.getImageData(0, 0, W, H).data);
+        nextAt += step;
+      }
+      tAt += d;
+      image.close();
+    }
+    dec.close();
+    if (!fr.length) throw new Error("no frames");
+    return await readDataURL(await gifEncode(fr, W, H, 12));
+  } catch (e) { toast("Could not crop that GIF"); return null; }
 }
 async function addMedia(files, arr, jobs, max, redraw) {
   let bad = 0, why = "";
@@ -2917,6 +2953,8 @@ async function openCropper(file, o) {
       body: [h("div", { class: "crop" }, cv), h("p", { class: "hint" }, "Drag to move, pinch to zoom")],
       onCancel: close => { close(); resolve(null); },
       onAction: close => {
+        // a moving picture is cut frame by frame later, so only the chosen area is handed back (in the pixels of the original)
+        if (o.rect) { const l0 = cx - iw * s / 2, t0 = cy - ih * s / 2; close(); resolve({ x: (fl - l0) / s / k, y: (ft - t0) / s / k, w: fw / s / k, h: fh / s / k }); return; }
         const oc = document.createElement("canvas");
         oc.width = o.w; oc.height = o.h;
         const ox = oc.getContext("2d");
@@ -3032,7 +3070,7 @@ function editProfile() {
       if (f) {
         let out = null;
         if (isVideo(f)) { toast("Videos are not supported"); }
-        else if (isGif(f)) { try { out = await intake(f); } catch (e) { toast("Could not read that GIF"); } }
+        else if (isGif(f)) { try { out = await cropGif(f, opts); } catch (e) { toast("Could not read that GIF"); } }
         else out = await openCropper(f, opts);
         if (out) { set(out); paint(); }
       }

@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.7.1";
+const APP_VERSION = "3.7.2";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -6447,6 +6447,8 @@ async function noteTake(ns, key, r) {
     if (ns.pushed[r.id] !== "gone" && !S.chats.some(c => c.id === rid || (c.msgs || []).some(x => x.id === rid))) ns.pushed[r.id] = "gone";
     return false;
   }
+  // a note this phone already knew but no longer has was removed here: the removal goes up, it is not brought back
+  if (ns.pushed[r.id] && !(isChat ? S.chats.some(x => x.id === rid) : S.chats.some(c => (c.msgs || []).some(x => x.id === rid)))) return false;
   const p = await noteOpen(key, r.body);
   if (isChat) {
     let c = S.chats.find(x => x.id === rid);

@@ -7,7 +7,7 @@ function startFail(why) {
   const box = document.createElement("div");
   box.className = "empty";
   const p = document.createElement("p");
-  p.textContent = "Nook could not start. " + (why || "");
+  p.textContent = "Nook could not start. " + (/connection/i.test(why || "") ? why : "Try again, and if it keeps happening reset this phone.");
   const b = document.createElement("button");
   b.className = "pri";
   b.textContent = "Try again";
@@ -167,7 +167,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.4.18";
+const APP_VERSION = "3.4.19";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -463,6 +463,7 @@ function feedPosts(f) {
   return a.sort((x, y) => y.t - x.t);
 }
 function ago(t) {
+  if (!Number.isFinite(t)) return "";
   const m = Math.floor((Date.now() - t) / 60000);
   if (m < 1) return "now";
   if (m < 60) return m + "m";
@@ -474,6 +475,7 @@ function ago(t) {
 }
 function rich(text) {
   const out = [];
+  text = String(text == null ? "" : text);
   text.split(/(https?:\/\/\S+|#[\p{L}\p{N}_]+)/gu).forEach((part, i) => {
     if (i % 2 === 0) { if (part) out.push(part); return; }
     if (part.startsWith("#")) {
@@ -1599,7 +1601,7 @@ const zOn = () => isOwner();
 async function zFetch(body) {
   const { data } = await sb.auth.getSession();
   const tok = data && data.session ? data.session.access_token : null;
-  return fetch(SB_URL + "/functions/v1/zenith", { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: JSON.stringify(body) , signal: AbortSignal.timeout ? AbortSignal.timeout(45000) : undefined });
+  return fetch(SB_URL + "/functions/v1/zenith", { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: JSON.stringify(body) , signal: AbortSignal.timeout ? AbortSignal.timeout(25000) : undefined });
 }
 const zNow = s => s + " Never use line breaks. Write everything as one paragraph. Current local time: " + new Date().toLocaleString([], { dateStyle: "full", timeStyle: "short" }) + ". Only use it when the time or date is really needed, never bring it up on your own.";
 async function zStream(history, onText) {
@@ -1651,7 +1653,7 @@ function zAsk(chat, list, bubble, m) {
   row.insertBefore(b, row.querySelector(".mmeta"));
   list.append(row);
   main.scrollTop = main.scrollHeight;
-  let full = "", shown = "", finished = false;
+  let full = "", shown = "", finished = false, failed = false;
   const step = () => {
     if (shown.length < full.length) {
       const m = /^\s*\S+\s+/.exec(full.slice(shown.length));
@@ -1664,13 +1666,17 @@ function zAsk(chat, list, bubble, m) {
       setTimeout(step, 10 + Math.random() * 3);
       return;
     }
-    if (finished) { ai.text = full; persist(); return; }
+    if (finished) {
+      // an error line stays on the screen but is never saved as something Zenith said
+      if (failed) { chat.msgs = chat.msgs.filter(x => x !== ai); persist(); return; }
+      ai.text = full; persist(); return;
+    }
     setTimeout(step, 60);
   };
   step();
   zStream(history, t => { full = t.replace(/\s*\n+\s*/g, " "); })
-    .then(t => { full = (t || "(no reply)").replace(/\s*\n+\s*/g, " "); finished = true; })
-    .catch(e => { full = /wrong password/.test(e.message) ? "wrong password, set it in settings" : "Zenith is not reachable right now"; finished = true; });
+    .then(t => { if (!t) { failed = true; full = "Zenith did not answer. Try again"; } else full = t.replace(/\s*\n+\s*/g, " "); finished = true; })
+    .catch(e => { failed = true; full = "Zenith is not reachable right now. Try again"; finished = true; });
 }
 const ZMOOD = "Sound natural and a little witty, like a friend, not like an assistant.";
 const ZSYS_POST = ZSYS + ZMOOD + " You are writing one original post for your own profile. Keep it under 35 words, around 20 on average. Plain text only. No hashtags and no emojis.";
@@ -1987,7 +1993,7 @@ function settingsV() {
     try {
       if (cur && Notification.permission === "granted") { await pushOff(); toast("Phone notifications are off"); }
       else { await pushOn(); toast("Phone notifications are on"); }
-    } catch (e) { toast((e && e.message) || "Could not change that"); }
+    } catch (e) { toast(plainErr(e, "Could not change that")); }
     paintPush();
   });
   const paintPush = async () => {
@@ -2311,7 +2317,8 @@ function shrinkImg(src, max = 160) {
 }
 function parseMedia(v) {
   if (!v) return [];
-  if (v.charAt(0) === "[") { try { return JSON.parse(v); } catch (e) { return []; } }
+  if (typeof v !== "string") return [];
+  if (v.charAt(0) === "[") { try { const j = JSON.parse(v); return Array.isArray(j) ? j.filter(x => typeof x === "string" && x) : []; } catch (e) { return []; } }
   return [v];
 }
 // "loading" until the first answer, "error" when the posts could not be fetched, "ok" after a good answer
@@ -3646,7 +3653,7 @@ function newAccountModal() {
         if (se || !sd.user) { say("Could not set it up. Try again"); return; }
         const id = sd.user.id;
         const ins = await tmp.from("accounts").insert({ id, username: u, display_name: n });
-        if (ins.error) { say(ins.error.code === "23505" ? "That username is taken" : "Could not save the account: " + ins.error.message); return; }
+        if (ins.error) { say(ins.error.code === "23505" ? "That username is taken" : "Could not save the account. " + plainErr(ins.error, "Try again")); return; }
         // its message key is made now and saved locked with the password, like for any new account
         try {
           const rec = await makeKeyPair();
@@ -4120,7 +4127,7 @@ function authMsg(error) {
   if (c === "over_email_send_rate_limit" || c === "over_request_rate_limit" || (error && error.status === 429)) return "Too many tries. Wait a few minutes and try again";
   if (c === "signup_disabled") return "New accounts are closed for now";
   if (/network|fetch/i.test(m)) return "Could not reach Nook. Check your connection";
-  return m || "Something went wrong. Try again";
+  return /^[A-Z][^:]*$/.test(m) && m.length < 120 ? m : "Something went wrong. Try again";
 }
 function setpwMsg(r) {
   const e = r.body && r.body.error;
@@ -4165,6 +4172,7 @@ function plainErr(e, fallback) {
   if (/row-level security|permission denied/i.test(m)) return "That is not allowed right now";
   if (/rate_limited/i.test(m)) return "Too many changes. Wait a little and try again";
   if (/need to open nook/i.test(m)) return "They have not opened messages yet";
+  if (/message_too_long/i.test(m)) return "That message is too long";
   return fallback || "Something went wrong. Try again";
 }
 async function callFn(name, body) {
@@ -4615,7 +4623,7 @@ async function restoreKeysModal(mode) {
 }
 async function backupSetupModal(changing) {
   let cur;
-  try { cur = await myKeys(); } catch (e) { toast(e.message || LOCKED_MSG); return; }
+  try { cur = await myKeys(); } catch (e) { toast(e && e.message === LOCKED_MSG ? LOCKED_MSG : plainErr(e, "Your message key could not be opened")); return; }
   const legacy = !cur.priv.extractable;
   const p1 = pwField("Recovery password"), p2 = pwField("Type it again");
   const msg = h("p", { class: "note", role: "alert" });
@@ -4704,6 +4712,8 @@ async function sealText(otherId, text) {
 }
 const ZMARK = "\u2063Z\u2063";
 const ZPOST = "\u2063P\u2063";
+// the mark and the post card only count when they come from the owner's account, so nobody else can pose as Zenith
+const OWNER_ID = "c8bd0469-c5e1-4741-8ee5-2baf3bc02221";
 const zUn = t => typeof t === "string" ? (t.startsWith(ZMARK) ? t.slice(ZMARK.length) : t.startsWith(ZPOST) ? "a post" : t) : t;
 function zPostOf(t) {
   if (typeof t !== "string" || !t.startsWith(ZPOST)) return null;
@@ -4746,8 +4756,11 @@ function loadEncMedia(md, otherId) {
 async function openRows(rows, otherId, waitFor) {
   const out = await Promise.all(rows.map(async m => {
     const t = await openText(otherId, m.body);
+    const fromOwner = m.sender_id === OWNER_ID;
+    const marked = typeof t === "string" && t.startsWith(ZMARK), card = typeof t === "string" && t.startsWith(ZPOST);
+    if (!fromOwner && (marked || card)) return Object.assign({}, m, { text: t.slice(marked ? ZMARK.length : ZPOST.length) });
     const zp = zPostOf(t);
-    return Object.assign({}, m, { text: zp ? "" : zUn(t) }, t.startsWith(ZMARK) ? { ai: true } : {}, zp ? { zpost: zp } : {});
+    return Object.assign({}, m, { text: zp || card ? "" : zUn(t) }, marked ? { ai: true } : {}, zp ? { zpost: zp } : {});
   }));
   // photos are opened before their bubbles show, so no grey box sits on the screen while they load (only the newest ones are waited for when there are many)
   const jobs = [];

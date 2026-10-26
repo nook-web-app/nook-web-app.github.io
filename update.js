@@ -54,9 +54,9 @@
     if (!reg) { if (manual) toast("Not available right now"); return; }
     let failed = false;
     let tm;
-    try { await Promise.race([reg.update(), new Promise((_, rej) => { tm = setTimeout(() => rej(new Error("slow")), 10000); })]); } catch (e) { failed = true; }
+    try { await Promise.race([fetchNew(), new Promise((_, rej) => { tm = setTimeout(() => rej(new Error("slow")), 10000); })]); } catch (e) { failed = true; }
     clearTimeout(tm);
-    await new Promise(r => setTimeout(r, 1500));
+    for (let i = 0; i < 8; i++) { await new Promise(r => setTimeout(r, 1500)); if (reg.waiting || !reg.installing) break; }
     if (reg.waiting) { if (manual) ask(reg.waiting, true); return; }
     if (manual && failed && !reg.installing) { toast("Could not check. Check your connection and try again"); return; }
     if (!reg.installing && manual) toast("Up to date");
@@ -79,8 +79,17 @@
   }).catch(() => {});
   // an app that stays open still hears about a new version: the check runs when it comes back to the front and every ten minutes
   let lastCheck = 0;
-  const poll = () => { if (!reg || document.visibilityState !== "visible" || Date.now() - lastCheck < 60000) return; lastCheck = Date.now(); reg.update().catch(() => {}); };
+  // the worker file is the same bytes at every release, so the browser alone never sees a new version: the notes file decides, and a new address for the worker makes it install
+  const fetchNew = async () => {
+    if (!reg) return;
+    const n = await notes();
+    const ver = String(n.ver || "").replace(/\s*!\s*$/, "");
+    if (/^\d+\.\d+\.\d+$/.test(ver) && ver !== APP_VERSION && !reg.waiting && !reg.installing) navigator.serviceWorker.register("sw.js?v=" + encodeURIComponent(ver)).catch(() => {});
+    else reg.update().catch(() => {});
+  };
+  const poll = () => { if (!reg || document.visibilityState !== "visible" || Date.now() - lastCheck < 60000) return; lastCheck = Date.now(); fetchNew(); };
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") touch(); else poll(); });
+  setTimeout(poll, 3000);
   setInterval(poll, 600000);
   window.addEventListener("pagehide", touch);
   setInterval(() => { if (document.visibilityState === "visible") touch(); }, 60000);

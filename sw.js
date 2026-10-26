@@ -1,3 +1,4 @@
+// release 3.22.1: this line changes the file once so phones that only watch this file see the new version
 // the cache name comes from the version in the registration address (sw.js?v=APP_VERSION), so it can never be forgotten at a release
 const VERSION = "nook-" + (new URL(self.location.href).searchParams.get("v") || "0");
 const SHARE_CACHE = "nook-share";

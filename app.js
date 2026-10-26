@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.12.5";
+const APP_VERSION = "3.12.6";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1048,7 +1048,7 @@ async function sharePost(p) {
 }
 // nc: inside an opened reply the list is flat and the numbers would only count down the chain, so the comment icon shows alone
 function acts(p, big, nc) {
-  const n = nc ? 0 : p.ra ? (p.rp || 0) : replyTotal(p.id);
+  const n = nc ? 0 : Math.max(p.ra ? (p.rp || 0) : 0, replyTotal(p.id));
   const ab = (cls, name, cnt, on, fn, label, fill) => h("button", { class: "ab " + cls + (on ? " on" : "") + (bump === p.id + cls ? " bump" : ""), "aria-label": label, onclick: e => { e.stopPropagation(); fn(); } }, ic(name, big ? 24 : 20, fill && on), cnt ? h("span", {}, cnt) : null);
   if (p.ra) return h("div", { class: "acts" + (big ? " big" : ""), "data-pid": p.id, "data-nc": nc ? "1" : null },
     ab("rl", "reply", n, false, () => openCompose({ parent: p.id }), "Reply"),
@@ -1873,7 +1873,7 @@ function zenCounts() {
     const p = byId(el.dataset.pid);
     const b = el.querySelector(".ab.rl");
     if (!p || !b) return;
-    const n = p.ra ? (p.rp || 0) : replyTotal(p.id);
+    const n = Math.max(p.ra ? (p.rp || 0) : 0, replyTotal(p.id));
     let sp = b.querySelector("span");
     if (n) { if (!sp) { sp = h("span", {}); b.append(sp); } sp.textContent = String(n); } else if (sp) sp.remove();
   });

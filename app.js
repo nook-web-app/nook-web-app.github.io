@@ -249,7 +249,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.6";
+const APP_VERSION = "3.22.7";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1717,6 +1717,13 @@ function chatV() {
     if (seq !== paintSeq || !dmBox.isConnected) return;
     dmBox.textContent = "";
     convos.forEach((cv, i) => dmBox.append(dmRow(cv, bodies[i])));
+    // the newest chats are downloaded in the background, so tapping one shows its messages right away
+    convos.slice(0, 3).forEach(cv => {
+      const k = "thread:" + sbUser.id + ":" + cv.other, hit = cacheRead(k);
+      if (hit && Date.now() - hit.t < 60000) return;
+      dmThread(cv.other).then(rows => cacheWrite(k, rows.slice(-100)), () => {});
+      sharedKey(cv.other).catch(() => {});
+    });
   };
   if (sbUser) {
     const hit = cacheRead("inbox:" + sbUser.id);
@@ -1742,8 +1749,7 @@ function chatV() {
     const last = c.msgs[c.msgs.length - 1];
     return h("div", { class: "lrow", onclick: () => go({ r: "conv", id: c.id }) }, avatar(48), h("div", { class: "nm" }, h("b", {}, c.name), h("span", { class: "sub" }, last ? last.text || (last.rpost || last.zpost ? "Shared a post" : "Sent a photo") : "No messages yet")), last ? h("span", { class: "time" }, ago(last.t)) : null);
   });
-  if (mine.length > 1) main.append(folder("notes", h("div", { class: "lrow" }, avatar(48), h("div", { class: "nm" }, h("b", {}, "Notes to self"), h("span", { class: "sub" }, mine.length + " chats")), h("span", { class: "time" }, ago(Math.max(...S.chats.map(lastT))))), mine));
-  else main.append(...mine);
+  main.append(...mine);
   fab("plus", "New chat", newChat);
 }
 
@@ -6793,21 +6799,8 @@ async function deleteChat(cv, inChat) {
 // the messages and the name of the other person are fetched first, so the chat opens already filled
 // opened (decrypted) messages of chats that are about to open, so the chat paints at once instead of showing an empty page first
 const dmPre = new Map();
-async function openDm(id) {
-  const k = "thread:" + sbUser.id + ":" + id;
-  try {
-    let rows;
-    const hit = cacheRead(k);
-    if (hit && Array.isArray(hit.v) && Date.now() - hit.t < 30000) rows = hit.v;
-    else {
-      const [got] = await Promise.all([Promise.race([dmThread(id), new Promise((_, rej) => setTimeout(rej, 2500))]), acctsFor([id])]);
-      rows = got.slice(-100);
-      cacheWrite(k, rows);
-    }
-    await acctsFor([id]);
-    const opened = await Promise.race([openRows(rows.filter(m => visibleMsg(m, id)), id, 12), new Promise(r => setTimeout(r, 3000))]);
-    if (Array.isArray(opened)) { dmPre.set(id, opened); setTimeout(() => dmPre.delete(id), 30000); }
-  } catch (e) {}
+function openDm(id) {
+  // the chat opens at once from what this phone already holds; the newest messages load inside it
   go({ r: "dm", id });
 }
 function dmV(c) {

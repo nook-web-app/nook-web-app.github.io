@@ -356,7 +356,6 @@ textarea{resize:none}
 .bub,.dmm,.lc{transition:transform .12s,opacity .2s}
 .lrow,.dm{position:relative;isolation:isolate}
 .lrow::before,.dm::before{content:"";position:absolute;inset:3px 6px;border-radius:var(--r-m);z-index:-1;pointer-events:none;transition:background-color .15s}
-.dm:active::before,.lrow:active::before{background-color:var(--bg2)}
 .si:active{background-color:var(--bg2)}
 }
 :focus-visible{outline:none}

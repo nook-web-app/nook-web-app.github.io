@@ -47,19 +47,19 @@ async function folderFiles(bucket: string, folder: string): Promise<string[]> {
 }
 
 // copy everything a banned account owns into the private archive bucket; the originals go too, except chat photos (the chats stay, so their photos stay)
-async function archiveUser(user: string): Promise<{ copied: number; removed: number }> {
-  let copied = 0, removed = 0;
+async function archiveUser(user: string): Promise<{ copied: number; removed: number; failed: number }> {
+  let copied = 0, removed = 0, failed = 0;
   for (const bucket of BUCKETS) {
     const files = await folderFiles(bucket, user);
     const done: string[] = [];
     for (const f of files) {
       const dest = user + "/" + bucket + "/" + f.slice(user.length + 1);
       const { error } = await admin.storage.from(bucket).copy(f, dest, { destinationBucket: ARCHIVE });
-      if (!error || /already exists|Duplicate/i.test(error.message || "")) { done.push(f); copied++; }
+      if (!error || /already exists|Duplicate/i.test(error.message || "")) { done.push(f); copied++; } else failed++;
     }
     if (done.length && bucket !== "dm-media") removed += await removeAll(bucket, done);
   }
-  return { copied, removed };
+  return { copied, removed, failed };
 }
 
 // the 30 days are over: remove the archived copies
@@ -86,6 +86,7 @@ Deno.serve(async (req) => {
 
   let body: { bucket?: string; paths?: unknown; user_id?: string | null; action?: string };
   try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
+  if (!body || typeof body !== "object") return json({ error: "bad json" }, 400);
   if (body.action === "archive" || body.action === "drop_archive") {
     if (typeof body.user_id !== "string" || !/^[0-9a-f-]{36}$/i.test(body.user_id)) return json({ error: "bad user" }, 400);
     try {

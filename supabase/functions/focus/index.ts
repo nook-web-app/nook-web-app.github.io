@@ -38,10 +38,11 @@ async function fetchPic(u: string): Promise<{ inline_data: { mime_type: string; 
   const x = publicHttps(u);
   if (!x) return null;
   try {
-    const r = await fetch(x, { signal: AbortSignal.timeout(6000), headers: { accept: "image/*", "user-agent": "Mozilla/5.0 (compatible; NookPreview/1.0)" } });
-    if (!r.ok || !publicHttps(r.url)) { why = "status " + r.status + " " + r.url.slice(0, 60); return null; }
+    const r = await fetch(x, { redirect: "manual", signal: AbortSignal.timeout(6000), headers: { accept: "image/*", "user-agent": "Mozilla/5.0 (compatible; NookPreview/1.0)" } });
+    if (!r.ok || !publicHttps(r.url)) { why = "status " + r.status; return null; }
     const type = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
     if (!PIC_TYPES.includes(type)) { why = "type " + type; return null; }
+    if (Number(r.headers.get("content-length") || 0) > 4 * 1024 * 1024) { why = "size"; return null; }
     const buf = new Uint8Array(await r.arrayBuffer());
     if (!buf.length || buf.length > 4 * 1024 * 1024) { why = "size " + buf.length; return null; }
     let bin = "";
@@ -91,12 +92,13 @@ Deno.serve(async (req) => {
 
   let body: { url?: unknown } = {};
   try { body = await req.json(); } catch { return json({ error: "bad request" }, 400); }
+  if (!body || typeof body !== "object") return json({ error: "bad request" }, 400);
   const url = typeof body.url === "string" ? body.url : "";
   if (!publicHttps(url)) return json({ error: "bad url" }, 400);
   const known = asked.get(url);
   if (known) return json(known);
   const pic = await fetchPic(url);
-  if (!pic) return json({ error: "no picture", why }, 422);
+  if (!pic) { console.error("focus no picture", why); return json({ error: "no picture" }, 422); }
   const key = await geminiKey();
   if (!key) return json({ error: "no key" }, 500);
   for (const model of MODELS) {

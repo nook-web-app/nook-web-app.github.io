@@ -18,6 +18,7 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   let body: { tokens?: unknown };
   try { body = await req.json(); } catch { return json({ error: "bad_request" }, 400); }
+  if (!body || typeof body !== "object") return json({ error: "bad_request" }, 400);
   const jwt = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   const { data: me, error } = jwt ? await admin.auth.getUser(jwt) : { data: { user: null }, error: true };
   if (error || !me || !me.user) return json({ error: "not_signed_in" }, 401);
@@ -28,7 +29,8 @@ Deno.serve(async (req) => {
     const { data } = await admin.auth.getUser(t);
     if (data && data.user) ids.add(data.user.id);
   }
-  const { data: have } = await admin.from("accounts").select("id").in("id", [...ids]);
+  const { data: have, error: he } = await admin.from("accounts").select("id").in("id", [...ids]);
+  if (he) return json({ error: "server" }, 500);
   const list = (have || []).map((r) => r.id as string);
   if (list.length < 2) return json({ ok: true, linked: 0 });
   const rows: { a: string; b: string }[] = [];

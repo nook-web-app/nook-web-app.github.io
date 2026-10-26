@@ -34,6 +34,7 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   let body: { action?: unknown; email?: unknown; password?: unknown; current?: unknown; check?: unknown; target?: unknown };
   try { body = await req.json(); } catch { return json({ error: "bad_request" }, 400); }
+  if (!body || typeof body !== "object") return json({ error: "bad_request" }, 400);
   const ip = await ipTag(req);
   const action = typeof body.action === "string" ? body.action : body.check === true ? "check" : "login";
   const password = typeof body.password === "string" ? body.password : "";

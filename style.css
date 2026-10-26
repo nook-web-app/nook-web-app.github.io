@@ -67,9 +67,6 @@ textarea{resize:none}
 .av>img.pic{border-radius:50%}
 .pic.blur{filter:blur(3px);transform:scale(1.04)}
 .banner:has(> .pic.blur){background:none}
-.seg{display:flex;gap:8px;margin-top:6px}
-.seg button{flex:1;border:0;border-radius:var(--r-s);background:var(--bg2);color:var(--fg);padding:11px;font-weight:600}
-.seg button.on{background:var(--fill,var(--accent));color:var(--on)}
 .imgs.n1 img{height:auto;max-height:min(460px,60vh)}
 .imgs.n2{grid-template-columns:1fr 1fr;aspect-ratio:2/1}
 .imgs.n3{grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;aspect-ratio:1.7/1}
@@ -116,7 +113,7 @@ textarea{resize:none}
 .srch{padding:12px var(--g) 0}
 .srch+.hint{margin:0;padding:8px var(--g)}
 .fldh{display:flex;flex-direction:column;gap:5px}
-.hint{margin:0 4px;font-size:var(--fs-sm);color:var(--muted);min-height:1.2em}
+.hint{font-size:var(--fs-sm);color:var(--muted);min-height:1.2em}
 .hint.warn{color:var(--danger)}
 .banner{position:relative;overflow:hidden;aspect-ratio:1000/330;background:linear-gradient(135deg,var(--b1),var(--b2))}
 .pinfo{padding-block:0 8px}
@@ -229,6 +226,7 @@ textarea{resize:none}
 .bub.typing i{width:7px;height:7px;border-radius:50%;background:var(--muted);animation:zdot 1s ease-in-out infinite}
 .bub.typing i:nth-child(2){animation-delay:.15s}
 .bub.typing i:nth-child(3){animation-delay:.3s}
+@media (prefers-reduced-motion:reduce){.bub.typing i{animation:none}}
 @keyframes zdot{0%,60%,100%{transform:translateY(0);opacity:.35}30%{transform:translateY(-4px);opacity:1}}
 .ov{position:fixed;inset:0 0 var(--kb,0px) 0;z-index:30;max-width:var(--max,600px);margin:0 auto;background:var(--bg);display:flex;flex-direction:column;padding-top:env(safe-area-inset-top,0px)}
 .mbar{grid-template-columns:auto 1fr auto;border-bottom:1px solid var(--line);flex:none}
@@ -296,7 +294,6 @@ textarea{resize:none}
 #ptr.snap{transition:transform .22s cubic-bezier(.2,.8,.2,1),opacity .2s}
 #ptr.spin svg{animation:ptrspin .7s linear infinite}
 @keyframes ptrspin{to{transform:rotate(360deg)}}
-:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .cta:focus-visible{outline:0}
 .vh{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;font-size:0}
 .ib.off{opacity:.4;pointer-events:none}
@@ -390,11 +387,10 @@ button:focus-visible,[role=button]:focus-visible,a:focus-visible,input:focus-vis
 .lrow .sub.tp{color:var(--fg)}
 @keyframes slideIn{from{opacity:0;transform:translateX(-14px)}to{opacity:1;transform:none}}
 .mrow.them.new{animation:fadeIn .18s ease-out}
+.mrow:not(.zdm):not(.ai).tmpm .bub,.mrow:not(.zdm):not(.ai).tmpm .dmm,.mrow:not(.zdm):not(.ai).tmpm .lc{opacity:.7}
 @media (prefers-reduced-motion: no-preference){
 @keyframes sendWait{0%,100%{opacity:.62}50%{opacity:.9}}
 @keyframes landPop{0%{transform:scale(.96)}55%{transform:scale(1.035)}100%{transform:none}}
-.mrow:not(.zdm):not(.ai).tmpm .bub,.mrow:not(.zdm):not(.ai).tmpm .dmm,.mrow:not(.zdm):not(.ai).tmpm .lc{opacity:.7}
-@media (prefers-reduced-motion:reduce){.mrow.tmpm .bub,.mrow.tmpm .dmm,.mrow.tmpm .lc{opacity:1}}
 @keyframes sendPop{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:none}}
 .mrow:not(.them):not(.ai).new{animation:sendPop .2s ease-out;transform-origin:100% 100%}
 }

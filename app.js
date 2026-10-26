@@ -47,6 +47,7 @@ async function takeHashLogin() {
   const recent = asked && Date.now() - asked < 2 * 3600 * 1000;
   // somebody who is already signed in only accepts the link when they asked for the reset on this phone
   if (p.get("type") !== "recovery" || !p.get("access_token") || !p.get("refresh_token") || (signedIn && !recent)) { if (signedIn) setTimeout(() => toast("That link is for a reset requested on another device. Ask again here"), 800); return; }
+  if (!sb) { setTimeout(() => { try { toast("Could not check the reset link. Check your connection, or ask for a new link"); } catch (e) {} }, 1500); return; }
   const { error } = await sb.auth.setSession({ access_token: p.get("access_token"), refresh_token: p.get("refresh_token") });
   if (!error) { RECOVERY = true; try { localStorage.removeItem("nook-reset-asked"); } catch (e) {} }
   else setTimeout(() => { try { toast("Could not check the reset link. Check your connection, or ask for a new link"); } catch (e) {} }, 1500);
@@ -160,7 +161,7 @@ function view(src) {
       const bin = atob(src.slice(src.indexOf(",") + 1));
       const arr = new Uint8Array(bin.length);
       for (let k = 0; k < bin.length; k++) arr[k] = bin.charCodeAt(k);
-      u = URL.createObjectURL(new Blob([arr], { type: (/^data:([^;,]+)/.exec(src) || [0, "image/jpeg"])[1] }));
+      u = URL.createObjectURL(new Blob([arr], { type: (/^data:(image\/[^;,]+)/.exec(src) || [0, "image/jpeg"])[1] }));
     } catch (e) { u = src; }
     urlCache.set(src, u);
   }
@@ -177,7 +178,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.20.7";
+const APP_VERSION = "3.20.8";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -215,7 +216,8 @@ function idbLoad(d) {
 }
 function idbSave(d, meta, fresh, drop) {
   // a save that never finishes is given up after a while, so the queue behind it keeps moving
-  return Promise.race([idbSaveNow(d, meta, fresh, drop), new Promise((_, rej) => setTimeout(() => rej(new Error("slow save")), 10000))]);
+  let tm;
+  return Promise.race([idbSaveNow(d, meta, fresh, drop), new Promise((_, rej) => { tm = setTimeout(() => rej(new Error("slow save")), 10000); })]).finally(() => clearTimeout(tm));
 }
 function idbSaveNow(d, meta, fresh, drop) {
   return new Promise((res, rej) => {
@@ -332,8 +334,10 @@ const zenThread = p => { for (let q = p && p.parent ? byId(p.parent) : null, n =
 const cardless = p => { if (!p.text || (p.imgs && p.imgs.length) || !firstUrl(p.text)) return p.text; return p.text.replace(/https?:\/\/[^\s<>"]+/i, "").replace(/[ \t]{2,}/g, " ").trim(); };
 // every reply under a post counts, the ones to replies too
 const replyTotal = id => flat(id, 0, []).length;
-function flat(id, d, out) {
-  kids(id).sort((a, b) => a.t - b.t).forEach(k => { out.push({ p: k, d }); flat(k.id, d + 1, out); });
+function flat(id, d, out, seen) {
+  seen = seen || new Set([id]);
+  // a parent loop in stored data must not run forever
+  kids(id).sort((a, b) => a.t - b.t).forEach(k => { if (seen.has(k.id)) return; seen.add(k.id); out.push({ p: k, d }); flat(k.id, d + 1, out, seen); });
   return out;
 }
 // home feed order. Everything is worked out on this phone from things the person did on purpose
@@ -410,7 +414,7 @@ function rankFeed(arr, tab) {
   const key = [tab, arr.length, maxT, hidden.size, Object.keys(less.a).length + ":" + Object.keys(less.w).length, [...langs].join(), follows.size].join("|");
   const hit = rankCache.get(tab);
   // the order stays the same while the posts, the follows and the choices stay the same, so likes do not shuffle the page
-  if (hit && hit.key === key) return hit.ids.map(id => byId(id)).filter(Boolean);
+  if (hit && hit.key === key) return hit.ids.map(id => byId(id)).filter(p => p && !hidden.has(p.id));
   const aff = new Map();
   const add = (id, v) => { if (id) aff.set(id, (aff.get(id) || 0) + v); };
   S.posts.forEach(p => {
@@ -476,7 +480,7 @@ function txBody(text, extra) {
   const LIMIT = 700;
   if (String(text).length <= LIMIT) { box.append(...rich(text)); return box; }
   const more = h("button", { class: "tbtn", type: "button", style: "padding:6px 0;color:var(--lnk)", onclick: e => { e.stopPropagation(); box.textContent = ""; box.append(...rich(text)); } }, "Show more");
-  box.append(...rich(String(text).slice(0, 600) + "…"), h("div", {}, more));
+  box.append(...rich([...String(text)].slice(0, 600).join("") + "…"), h("div", {}, more));
   return box;
 }
 function feedPosts(f) {
@@ -563,7 +567,7 @@ function copy(text) {
     document.body.append(t);
     t.readOnly = true;
     t.select();
-    try { document.execCommand("copy"); done(); } catch (e) { toast("Could not copy"); }
+    try { if (!document.execCommand("copy")) throw new Error("copy"); done(); } catch (e) { toast("Could not copy"); }
     t.remove();
   };
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fb);
@@ -660,7 +664,7 @@ function getPreview(url) {
       if (d) {
         S.previews[url] = d;
         const k = Object.keys(S.previews);
-        if (k.length > 150) delete S.previews[k[0]];
+        if (k.length > 150) { delete S.previews[k[0]]; pvMem.delete(k[0]); }
         persist();
       }
       else setTimeout(() => pvMem.delete(url), 600000);
@@ -798,11 +802,11 @@ function settleScroll(y) {
   main.scrollTop = y;
   if (!y) return;
   let n = 0, stop = false;
-  const off = () => { stop = true; };
-  main.addEventListener("touchstart", off, { once: true, passive: true });
-  main.addEventListener("wheel", off, { once: true, passive: true });
+  const off = () => { stop = true; main.removeEventListener("touchstart", off); main.removeEventListener("wheel", off); };
+  main.addEventListener("touchstart", off, { passive: true });
+  main.addEventListener("wheel", off, { passive: true });
   const tick = () => {
-    if (stop || n++ > 120) return;
+    if (stop || n++ > 120) { off(); return; }
     if (Math.abs(main.scrollTop - y) > 1 && main.scrollHeight - main.clientHeight >= y - 1) main.scrollTop = y;
     requestAnimationFrame(tick);
   };
@@ -874,7 +878,7 @@ function wrapLines(ctx, text, maxW) {
   return out;
 }
 function loadPicImg(src, cors) {
-  return new Promise(res => { const i = new Image(); if (cors) i.crossOrigin = "anonymous"; i.referrerPolicy = "no-referrer"; i.onload = () => res(i); i.onerror = () => res(null); i.src = src; });
+  return new Promise(res => { const i = new Image(); if (cors) i.crossOrigin = "anonymous"; i.referrerPolicy = "no-referrer"; const t = setTimeout(() => res(null), 8000); i.onload = () => { clearTimeout(t); res(i); }; i.onerror = () => { clearTimeout(t); res(null); }; i.src = src; });
 }
 async function postPic(p) {
   const W = 960, pad = 56, av = 80, fs = 34, lh = 48, cs = getComputedStyle(document.documentElement);
@@ -925,7 +929,7 @@ async function postPic(p) {
     x.fillText(p.ai ? "Z" : (who.name || who.handle || "?").trim().charAt(0).toUpperCase(), ax, ay + 1);
   }
   x.textAlign = "left"; x.textBaseline = "alphabetic";
-  const name = p.ai ? "Zenith" : who.name, handle = p.ai ? "@zenith" : "@" + who.handle;
+  const name = p.ai ? "Zenith" : (who.name || who.handle || "user"), handle = p.ai ? "@zenith" : "@" + who.handle;
   x.fillStyle = fg; x.font = "700 " + fs + "px system-ui, sans-serif"; x.fillText(name, pad + av + 20, pad + 36);
   x.fillStyle = mu; x.font = "400 " + Math.round(fs * 0.85) + "px system-ui, sans-serif"; x.fillText(handle, pad + av + 20, pad + 36 + 36);
   let y = pad + av + 32;
@@ -968,7 +972,7 @@ async function sharePic(p) {
   try {
     const blob = await postPic(p);
     const file = new File([blob], "nook-post.png", { type: "image/png" });
-    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file] }); return; }
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file] }); return; } catch (e) { if (e && e.name === "AbortError") return; } }
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob); a.download = "nook-post.png";
     document.body.append(a); a.click(); a.remove();
@@ -1364,11 +1368,13 @@ function chatV() {
   topEl.append(bar(menuBtn(), ttl("Chats")));
   const dmBox = h("div");
   main.append(dmBox);
+  let paintSeq = 0;
   const paintInbox = async convos => {
+    const seq = ++paintSeq;
     await loadDmMutes();
     convos = convos.filter(cv => !dmHideSet.has(cv.other)).sort((a, b) => (dmPinned(b.other) ? 1 : 0) - (dmPinned(a.other) ? 1 : 0));
     const bodies = await Promise.all(convos.map(cv => (cv.last ? openText(cv.other, cv.last.body).then(zUn) : "")));
-    if (!dmBox.isConnected) return;
+    if (seq !== paintSeq || !dmBox.isConnected) return;
     dmBox.textContent = "";
     convos.forEach((cv, i) => dmBox.append(dmRow(cv, bodies[i])));
   };
@@ -1384,7 +1390,7 @@ function chatV() {
       if (next !== sig) { sig = next; paintInbox(convos); }
     }, () => { if (!hit && dmBox.isConnected) dmBox.textContent = ""; });
     refreshChat = pull;
-    const iv = setInterval(pull, 5000);
+    const iv = setInterval(() => { if (!document.hidden) pull(); }, 5000);
     pageStop = () => clearInterval(iv);
     pull();
   }
@@ -1410,6 +1416,7 @@ function newChat() {
 }
 function convV(c) {
   const chat = S.chats.find(x => x.id === c.id);
+  if (!chat) { go({ r: "chat" }); return; }
   topEl.append(h("div", { class: "bar chb" }, backBtn(),
     h("div", { class: "who" }, avatar(36), h("div", { class: "wn" }, h("b", {}, chat.name), h("span", {}, "@" + S.profile.handle))),
     ibtn("dots", "Chat options", () => sheet([
@@ -1551,6 +1558,7 @@ function listForm(l, after) {
 }
 function listV(c) {
   const l = S.lists.find(x => x.id === c.id);
+  if (!l) { go({ r: "lists" }); return; }
   topEl.append(bar(backBtn(), ttl(l.name), ibtn("dots", "List options", () => sheet([
     { icon: "edit", label: "Edit list", fn: () => listForm(l) },
     { icon: "trash", label: "Delete list", danger: true, fn: () => confirmSheet("Delete this list? The posts stay.", "Delete", () => { S.lists = S.lists.filter(x => x !== l); persist(); back(); }) }]))));
@@ -1563,7 +1571,7 @@ async function wipeServerExtras() {
   const me = sbUser.id;
   const { data: msgs } = await sb.from("messages").select("sender_id, recipient_id").or("sender_id.eq." + me + ",recipient_id.eq." + me).limit(1000);
   const others = [...new Set((msgs || []).map(m => (m.sender_id === me ? m.recipient_id : m.sender_id)))];
-  for (const o of others) await sb.rpc("clear_chat", { p_other: o });
+  for (const r of await Promise.all(others.map(o => sb.rpc("clear_chat", { p_other: o })))) if (r.error) throw r.error;
   const steps = [
     sb.from("messages").delete().eq("sender_id", me),
     sb.from("likes").delete().eq("user_id", me),
@@ -1715,8 +1723,8 @@ async function restoreBackup(file) {
       const postsJ = text("posts/posts.json"), repJ = text("posts/comments/replies.json");
       const all = [...(postsJ ? JSON.parse(postsJ) : []), ...(repJ ? JSON.parse(repJ) : [])];
       for (const r of all) {
-        if (byId(r.id)) continue;
         if (!r || typeof r.id !== "string") continue;
+        if (byId(r.id)) continue;
         S.posts.push({ id: r.id, text: String(r.text || ""), t: Number(r.t) || Date.now(), imgs: (r.media || []).map(media).filter(Boolean), parent: r.parent || null, liked: !!r.liked, reposted: false, saved: !!r.saved, pinned: !!r.pinned, edited: !!r.edited });
         n++;
       }
@@ -1760,7 +1768,7 @@ const zOn = () => isOwner();
 async function zFetch(body) {
   const { data } = await sb.auth.getSession();
   const tok = data && data.session ? data.session.access_token : null;
-  return fetch(SB_URL + "/functions/v1/zenith", { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: JSON.stringify(body) , signal: AbortSignal.timeout ? AbortSignal.timeout(25000) : undefined });
+  return fetch(SB_URL + "/functions/v1/zenith", { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: JSON.stringify(body) , signal: AbortSignal.timeout ? AbortSignal.timeout(body.stream ? 90000 : 25000) : undefined });
 }
 const zNow = s => s + " Never use line breaks. Write everything as one paragraph. Current local time: " + new Date().toLocaleString([], { dateStyle: "full", timeStyle: "short" }) + ". Only use it when the time or date is really needed, never bring it up on your own.";
 async function zStream(history, onText) {
@@ -1902,9 +1910,9 @@ function zenCounts() {
 const zenRefresh = () => {
   const sig = S.posts.length + ":" + S.posts.filter(p => p.zenLike).length;
   if (sig === zenSig) return;
-  zenSig = sig;
   const cur = stack[stack.length - 1];
   if (layer.childElementCount || cur.r === "conv") return;
+  zenSig = sig;
   // on a post only the replies below are redrawn, so nothing above them can move
   const rb = cur.r === "thread" ? main.querySelector(".rb") : null;
   if (rb && byId(cur.id)) {
@@ -2011,7 +2019,7 @@ async function zenSync() {
 }
 async function zenPull() {
   if (!sbUser || !S || !isOwner()) return;
-  const { data, error } = await sb.from("zenith_docs").select("kind, doc_id, data").eq("owner_id", sbUser.id).limit(5000);
+  const { data, error } = await pageAll((a, b) => sb.from("zenith_docs").select("kind, doc_id, data").eq("owner_id", sbUser.id).order("kind").order("doc_id").range(a, b));
   if (error) return;
   const byLocal = new Map(S.posts.map(p => [p.id, p]));
   const byRemote = new Map(S.posts.filter(p => p.remote).map(p => [p.remote, p]));
@@ -2641,7 +2649,7 @@ function shrinkImg(src, max = 160) {
       cx.closePath();
       cx.clip();
       cx.drawImage(im, 0, 0, c.width, c.height);
-      res(c.toDataURL("image/png"));
+      try { res(c.toDataURL("image/png")); } catch (e) { res(null); }
     };
     im.onerror = () => res(null);
     im.src = src;
@@ -2662,6 +2670,17 @@ function feedFail() {
   if (cur && cur.r === "home" && !layer.childElementCount && !S.posts.length) render();
 }
 // counts are asked for in small groups, so a long list of ids never makes the address too long
+// the server hands out at most 1000 rows per call, so a long list is read page by page
+async function pageAll(mk) {
+  const out = [];
+  for (let from = 0; from < 20000; from += 1000) {
+    const r = await mk(from, from + 999);
+    if (!r || r.error) return { data: null, error: (r && r.error) || new Error("page") };
+    out.push(...(r.data || []));
+    if ((r.data || []).length < 1000) break;
+  }
+  return { data: out, error: null };
+}
 async function rowsFor(table, ids) {
   const parts = [];
   for (let i = 0; i < ids.length; i += 80) parts.push(ids.slice(i, i + 80));
@@ -2680,7 +2699,11 @@ async function loadFeed() {
     const fq = await sb.from("follows").select("followee_id").eq("follower_id", sbUser.id).limit(1000);
     const fids = (fq.data || []).map(r => r.followee_id);
     if (fids.length) {
-      const rq = await sb.from("reposts").select("user_id, post_id, created_at").in("user_id", fids).order("created_at", { ascending: false }).limit(60);
+      // the ids go in small groups, or the address gets too long
+      const rparts = [];
+      for (let i = 0; i < fids.length; i += 80) rparts.push(fids.slice(i, i + 80));
+      const rqs = await Promise.all(rparts.map(c => sb.from("reposts").select("user_id, post_id, created_at").in("user_id", c).order("created_at", { ascending: false }).limit(60)));
+      const rq = { data: rqs.flatMap(r => (r && r.data) || []).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).slice(0, 60) };
       rpRows = (rq.data || []).filter(r => r.user_id !== sbUser.id);
       const have = new Set(posts.map(p => p.id));
       const miss = [...new Set(rpRows.map(r => r.post_id))].filter(id => !have.has(id)).slice(0, 60);
@@ -2694,10 +2717,10 @@ async function loadFeed() {
   if (S.pendDel && S.pendDel.length) { try { await deleteRemote(S.pendDel.map(r => ({ remote: r }))); } catch (e) {} }
   const ids = posts.map(p => p.id);
   const feedRes = await Promise.all([
-    sb.from("likes").select("post_id").eq("user_id", sbUser.id),
-    sb.from("reposts").select("post_id, created_at").eq("user_id", sbUser.id),
-    sb.from("blocks").select("blocked_id").eq("blocker_id", sbUser.id),
-    sb.from("blocks").select("blocker_id").eq("blocked_id", sbUser.id),
+    pageAll((a, b) => sb.from("likes").select("post_id").eq("user_id", sbUser.id).order("post_id").range(a, b)),
+    pageAll((a, b) => sb.from("reposts").select("post_id, created_at").eq("user_id", sbUser.id).order("post_id").range(a, b)),
+    pageAll((a, b) => sb.from("blocks").select("blocked_id").eq("blocker_id", sbUser.id).order("blocked_id").range(a, b)),
+    pageAll((a, b) => sb.from("blocks").select("blocker_id").eq("blocked_id", sbUser.id).order("blocker_id").range(a, b)),
     rowsFor("likes", ids),
     rowsFor("reposts", ids),
     rowsFor("post_shares", ids),
@@ -2965,7 +2988,8 @@ function userV(cur) {
       // what this person reposted sits in their posts too, at the time they reposted it
       const items = mine.filter(p => !p.parent).map(p => ({ p, t: p.t, pin: p.pinned ? 1 : 0 }));
       const had = new Set(items.map(x => x.p.remote));
-      (theirReposts || []).forEach(r => { const p = S.posts.find(x => x.remote === r.post_id); if (p && !p.parent && !had.has(p.remote) && !(p.ra && p.ra.id === cur.id)) items.push({ p, t: r.t, pin: 0, rp: true }); });
+      const byRemote = new Map(S.posts.filter(x => x.remote).map(x => [x.remote, x]));
+      (theirReposts || []).forEach(r => { const p = byRemote.get(r.post_id); if (p && !p.parent && !had.has(p.remote) && !(p.ra && p.ra.id === cur.id)) items.push({ p, t: r.t, pin: 0, rp: true }); });
       items.sort((x, y) => y.pin - x.pin || y.t - x.t);
       const who2 = new Set(items.filter(x => x.rp).map(x => x.p.id));
       listEl.append(postList(items.map(x => x.p), { pin: true, lab: p => (who2.has(p.id) ? (pnEl.textContent || who.name || "They") + " reposted" : null), empty: emptyState("smile", "No posts yet.") }));
@@ -3110,7 +3134,7 @@ async function setBlocked(id, on) {
     ? await sb.from("blocks").insert({ blocker_id: sbUser.id, blocked_id: id })
     : await sb.from("blocks").delete().eq("blocker_id", sbUser.id).eq("blocked_id", id);
   if (error && !(on && error.code === "23505")) return false;
-  await sb.from("follows").delete().or("and(follower_id.eq." + sbUser.id + ",followee_id.eq." + id + "),and(follower_id.eq." + id + ",followee_id.eq." + sbUser.id + ")");
+  if (on) await sb.from("follows").delete().or("and(follower_id.eq." + sbUser.id + ",followee_id.eq." + id + "),and(follower_id.eq." + id + ",followee_id.eq." + sbUser.id + ")");
   loadFeed().catch(() => {});
   return true;
 }
@@ -3153,7 +3177,7 @@ async function uploadMedia(srcs) {
     const ext = (blob.type.split("/")[1] || "bin").replace("jpeg", "jpg");
     const path = sbUser.id + "/" + Date.now() + "-" + i + "." + ext;
     const { error } = await sb.storage.from("media").upload(path, blob, { contentType: blob.type });
-    if (error) return null;
+    if (error) { if (urls.length) sb.storage.from("media").remove(urls.map(u => storagePath(u, "media")).filter(Boolean)).catch(() => {}); return null; }
     urls.push(sb.storage.from("media").getPublicUrl(path).data.publicUrl);
   }
   return urls;
@@ -3216,7 +3240,8 @@ async function pushPostNow(np, par, hasImgs, quiet) {
   if (!error && data && !S.posts.includes(np)) { S.pendDel = (S.pendDel || []).concat(data.id); persist(); serverDelete([{ remote: data.id, media: urls || [] }]); return; }
   if (!error && data) { np.remote = data.id; np.media = urls || []; persist(); if (isOwner()) { setTimeout(zenNudge, 22000); setTimeout(zenNudge, 50000); } }
   else {
-    if (urls && urls.length) sb.storage.from("media").remove(urls.map(u => storagePath(u, "media")).filter(Boolean)).then(() => {}, () => {});
+    // a lost reply (no error code) may still have stored the post, so its photos are kept
+    if (urls && urls.length && error && error.code) sb.storage.from("media").remove(urls.map(u => storagePath(u, "media")).filter(Boolean)).then(() => {}, () => {});
     // posting is paused: this post is dropped instead of being tried again and again
     const lk = /post_locked:(\d+)/.exec(String((error && error.message) || ""));
     if (lk) {
@@ -3384,11 +3409,14 @@ async function openCropper(file, o) {
         c.strokeStyle = "rgba(255,255,255,0.3)"; c.lineWidth = 1; c.stroke();
       }
     };
+    // moves are drawn once per frame, not once per event
+    let rq = 0;
+    const schedule = () => { if (!rq) rq = requestAnimationFrame(() => { rq = 0; draw(); }); };
     const zoomAt = (g, px, py) => {
       const ns = Math.min(Math.max(s * g, minS), minS * 4);
       const f = ns / s;
       cx = px + (cx - px) * f; cy = py + (cy - py) * f; s = ns;
-      clamp(); draw();
+      clamp(); schedule();
     };
     const pts = new Map();
     cv.addEventListener("pointerdown", e => { try { cv.setPointerCapture(e.pointerId); } catch (x) {} pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); });
@@ -3396,7 +3424,7 @@ async function openCropper(file, o) {
       const p = pts.get(e.pointerId);
       if (!p) return;
       const np = { x: e.clientX, y: e.clientY };
-      if (pts.size === 1) { cx += np.x - p.x; cy += np.y - p.y; clamp(); draw(); }
+      if (pts.size === 1) { cx += np.x - p.x; cy += np.y - p.y; clamp(); schedule(); }
       else if (pts.size === 2) {
         const other = Array.from(pts.entries()).find(en => en[0] !== e.pointerId)[1];
         const od = Math.hypot(p.x - other.x, p.y - other.y);
@@ -3408,7 +3436,7 @@ async function openCropper(file, o) {
           const ns = Math.min(Math.max(s * nd / od, minS), minS * 4);
           const g = ns / s;
           cx = mx + (cx - pmx) * g; cy = my + (cy - pmy) * g; s = ns;
-          clamp(); draw();
+          clamp(); schedule();
         }
       }
       pts.set(e.pointerId, np);
@@ -3454,7 +3482,7 @@ function editProfile() {
     });
     return h("label", { class: "pick", title: label }, ic("camera", size), inp);
   };
-  name.addEventListener("input", paint);
+  name.addEventListener("input", () => { avl.textContent = (name.value || handle.value || "?").trim().charAt(0).toUpperCase(); });
   bn.append(pickImg("Change banner", 18, { w: 1000, h: 330, gw: 600, gh: 198, title: "Crop banner" }, d => { bannerData = d; }));
   const eav = h("div", { class: "eav" }, av, pickImg("Change avatar", 16, { w: 320, h: 320, gw: 240, gh: 240, round: true, title: "Crop profile photo" }, d => { avatarData = d; }));
   const seg = h("div", { class: "seg" });
@@ -3638,7 +3666,7 @@ async function wipeLocal(keepKeys) {
   // the chat key stays while a banned person can still download their backup, so old messages can be opened
   try { if ("caches" in window) caches.delete("nook-share"); } catch (e) {}
   // only the key of the account being cleared goes; other accounts on this phone keep theirs
-  if (!keepKeys) { try { if (sbUser) { const kdb = await keyDb(); await new Promise(res => { const t = kdb.transaction("k", "readwrite"); t.objectStore("k").delete(sbUser.id); t.oncomplete = res; t.onerror = res; t.onabort = res; }); } else indexedDB.deleteDatabase("nook-keys"); } catch (e) {} }
+  if (!keepKeys) { try { if (sbUser) { const kdb = await keyDb(); await new Promise(res => { const t = kdb.transaction("k", "readwrite"); t.objectStore("k").delete(sbUser.id); t.oncomplete = res; t.onerror = res; t.onabort = res; }); } else { let mk = null; try { mk = localStorage.getItem(LOCAL_UID); } catch (x) {} if (mk) { const kdb = await keyDb(); await new Promise(res => { const t = kdb.transaction("k", "readwrite"); t.objectStore("k").delete(mk); t.oncomplete = res; t.onerror = res; t.onabort = res; }); } } } catch (e) {} }
 }
 let banShown = false;
 function showBanned(email) {
@@ -3675,7 +3703,7 @@ function ageV() {
   const msg = h("p", { class: "note", role: "alert" });
   const day = h("input", { class: "in", type: "text", inputmode: "numeric", pattern: "[0-9]*", maxlength: "3", placeholder: "Your age", autocomplete: "off", "aria-label": "Your age" });
   day.addEventListener("input", () => { day.value = day.value.replace(/\D/g, "").slice(0, 3); });
-  day.addEventListener("keydown", e => { if (e.key === "Enter") send(); });
+  day.addEventListener("keydown", e => { if (e.key === "Enter" && !go1.disabled) send(); });
   const go1 = h("button", { class: "pri", onclick: send }, "Continue");
   async function send() {
     const years = Number(day.value);
@@ -4032,13 +4060,15 @@ async function pushDetach() {
 }
 // each saved account keeps its own login (the refresh token) and its own local data (lists, notes, settings); a password is only asked when an account is added
 let switching = false, leaving = false;
+// one connection is kept and reused instead of opening a new one for every call
+let acctDbP = null;
 function acctDb() {
-  return new Promise((res, rej) => {
+  return acctDbP || (acctDbP = new Promise((res, rej) => {
     const r = indexedDB.open("nook-accts", 1);
     r.onupgradeneeded = () => r.result.createObjectStore("a");
-    r.onsuccess = () => res(r.result);
-    r.onerror = () => rej(r.error);
-  });
+    r.onsuccess = () => { const d = r.result; d.onclose = () => { acctDbP = null; }; d.onversionchange = () => { d.close(); acctDbP = null; }; res(d); };
+    r.onerror = () => { acctDbP = null; rej(r.error); };
+  }));
 }
 async function acctGet(k) {
   const db = await acctDb();
@@ -4090,8 +4120,13 @@ async function enterAccount(entry) {
   switching = true;
   try {
     enterFail = "";
-    const got = await Promise.race([sb.auth.refreshSession({ refresh_token: entry.rt }), wait(12000).then(() => null)]);
-    if (!got) { enterFail = "offline"; return false; }
+    const rp = sb.auth.refreshSession({ refresh_token: entry.rt });
+    const got = await Promise.race([rp, wait(12000).then(() => null)]);
+    if (!got) {
+      // a late answer still rotated the login, so the new one is kept or the saved one is spent
+      rp.then(async r => { if (r && r.data && r.data.session) await acctPut("list", (await acctList()).map(x => x.id === entry.id ? Object.assign({}, x, { rt: r.data.session.refresh_token }) : x)); }).catch(() => {});
+      enterFail = "offline"; return false;
+    }
     const { data, error } = got;
     // only a real refusal of the saved login removes the account; a bad connection, a busy server or a limit never does
     if (error && error.status === 429) { enterFail = "busy"; return false; }
@@ -4320,7 +4355,8 @@ async function refreshAcctEntries(list) {
     const name = r.display_name || r.username;
     if (a.username !== r.username || a.name !== name || (a.avatar || null) !== av) { a.username = r.username; a.name = name; a.avatar = av; changed = true; }
   });
-  if (changed) await acctPut("list", list);
+  // written onto the list as it is now, so a login that rotated while this ran is not put back
+  if (changed) await acctPut("list", (await acctList()).map(x => { const a = list.find(y => y.id === x.id); return a ? Object.assign({}, x, { username: a.username, name: a.name, avatar: a.avatar }) : x; }));
   return list;
 }
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -4333,13 +4369,13 @@ async function linkSavedAccounts(newId, newToken) {
     const list = await acctList();
     const tokens = newToken ? [newToken] : [];
     const tmp = window.supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
-    let changed = false;
-    for (const a of list) {
-      if (a.id === sbUser.id || a.id === newId || !a.rt) continue;
+    const rotated = new Map();
+    await Promise.all(list.filter(a => a.id !== sbUser.id && a.id !== newId && a.rt).map(async a => {
       const r = await tmp.auth.refreshSession({ refresh_token: a.rt });
-      if (r.data && r.data.session) { tokens.push(r.data.session.access_token); a.rt = r.data.session.refresh_token; changed = true; }
-    }
-    if (changed) await acctPut("list", list);
+      if (r.data && r.data.session) { tokens.push(r.data.session.access_token); rotated.set(a.id, r.data.session.refresh_token); }
+    }));
+    // written onto the list as it is now, so accounts added while this ran are not lost
+    if (rotated.size) await acctPut("list", (await acctList()).map(x => rotated.has(x.id) ? Object.assign({}, x, { rt: rotated.get(x.id) }) : x));
     await fetch(SB_URL + "/functions/v1/link-accounts", { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, authorization: "Bearer " + mine.access_token }, body: JSON.stringify({ tokens }) });
   } catch (e) {}
 }
@@ -4374,6 +4410,7 @@ function linkedLoginModal(x) {
         if (!r) { say("Could not reach Nook. Check your connection"); return; }
         if (r.body && r.body.error === "banned") { say("That account is banned"); return; }
         if (!r.ok) { say(r.body && r.body.error === "not_linked" ? "That account is not linked anymore" : signinMsg(r)); return; }
+        if (!(r.body && r.body.session)) { say("Could not sign in. Try again"); return; }
         const list = await acctList();
         await acctPut("list", list.filter(a => a.id !== x.id).concat({ id: x.id, rt: r.body.session.refresh_token, username: x.username, name: x.name, avatar: x.avatar, main: false }));
         close(() => switchAccount(x.id));
@@ -4382,16 +4419,19 @@ function linkedLoginModal(x) {
   });
 }
 async function openAccounts() {
+  // the linked-accounts query starts now and runs beside the others
+  const linksP = Promise.race([sb.from("account_links").select("b").eq("a", sbUser.id), wait(1200).then(() => ({ data: null }))]);
+  linksP.catch(() => {});
   const all0 = await acctList();
   const all = await Promise.race([refreshAcctEntries(all0).catch(() => all0), wait(700).then(() => all0)]);
   // the linked accounts that are not on this phone yet
   let others = [], linkedIds = new Set();
   try {
-    const { data: ls } = await Promise.race([sb.from("account_links").select("b").eq("a", sbUser.id), wait(1200).then(() => ({ data: null }))]);
+    const { data: ls } = await linksP;
     linkedIds = new Set((ls || []).map(r => r.b));
     const missing = [...linkedIds].filter(id => !all.some(a => a.id === id));
     if (missing.length) {
-      const m = await cachedAccounts(missing);
+      const m = await Promise.race([cachedAccounts(missing), wait(1200).then(() => new Map())]);
       others = missing.map(id => { const x = m.get(id) || {}; return { id, username: x.username || "", name: x.display_name || x.username || "", avatar: typeof x.avatar === "string" && x.avatar.length < 400000 ? x.avatar : null }; }).filter(x => x.username);
     }
   } catch (e) {}
@@ -4675,7 +4715,7 @@ async function preloadAvatars(own) {
   try {
     add(own);
     add(S && S.profile && S.profile.avatar);
-    Object.keys(localStorage).filter(k => k.startsWith(CACHE_PFX + "acct:")).forEach(k => { try { const r = JSON.parse(localStorage.getItem(k)); add(r && r.v && r.v.avatar); } catch (e) {} });
+    Object.keys(localStorage).filter(k => k.startsWith(CACHE_PFX + "acct:")).slice(0, 40).forEach(k => { try { const r = JSON.parse(localStorage.getItem(k)); add(r && r.v && r.v.avatar); } catch (e) {} });
     const inbox = cacheRead("inbox:" + sbUser.id);
     ((inbox && inbox.v) || []).forEach(cv => add(cv.avatar));
   } catch (e) {}
@@ -4718,7 +4758,7 @@ function countsOf(id, paint) {
   ]).then(([a, b]) => {
     const v = { followers: a.count || 0, following: b.count || 0 };
     if (!a.error && !b.error) cacheWrite("fc:" + id, v);
-    if (paint) paint(v);
+    if (paint && !a.error && !b.error) paint(v);
     return v;
   });
 }
@@ -4748,9 +4788,11 @@ function loadingEl() {
 const nickMap = new Map();
 const clearMap = new Map();
 let socialAt = 0;
-let socialP = null;
+let socialP = null, socialOwner = null;
 function loadSocial(force) {
   if (!sbUser) return Promise.resolve();
+  // another account in the same page must not see the last one's nicknames or chat clears
+  if (socialOwner !== sbUser.id) { socialOwner = sbUser.id; socialP = null; nickMap.clear(); clearMap.clear(); }
   if (!socialP) {
     const nk = cacheRead("nicks:" + sbUser.id);
     if (nk && nk.v) Object.keys(nk.v).forEach(k => nickMap.set(k, nk.v[k]));
@@ -4928,7 +4970,12 @@ async function passkeyAsk() {
   if (!f.ok || !f.body.session) return { err: pkMsg(f.body && f.body.error, f.body && f.body.detail), banned: !!(f.body && f.body.error === "banned") };
   return { session: f.body.session };
 }
+let badgeT = 0;
 function refreshBadge() {
+  clearTimeout(badgeT);
+  badgeT = setTimeout(refreshBadgeNow, 400);
+}
+function refreshBadgeNow() {
   if (!sbUser) return;
   sb.from("notifications").select("id", { count: "exact", head: true }).eq("user_id", sbUser.id).neq("kind", "message").is("read_at", null).then(a => {
     unreadN = a.count || 0;
@@ -4937,7 +4984,8 @@ function refreshBadge() {
   Promise.all([
     sb.from("messages").select("sender_id").eq("recipient_id", sbUser.id).is("read_at", null).limit(500),
     Promise.resolve(sb.from("dm_mutes").select("target_id, until_at, hidden").eq("owner_id", sbUser.id)).catch(() => ({ data: null }))
-  ]).then(([{ data }, mu]) => {
+  ]).then(([{ data, error }, mu]) => {
+    if (error) return;
     if (mu && mu.data) { dmMuteSet.clear(); dmHideSet.clear(); mu.data.forEach(r => { if (r.hidden) dmHideSet.add(r.target_id); else dmMuteSet.set(r.target_id, r.until_at ? Date.parse(r.until_at) : 0); }); }
     const n = new Set((data || []).map(x => x.sender_id).filter(id => !dmMuted(id))).size;
     if (n !== unreadPeople) { unreadPeople = n; buildNav(null); }
@@ -4963,12 +5011,15 @@ function markRead(ids) {
   sb.from("messages").update({ read_at: new Date().toISOString() }).in("id", ids).eq("recipient_id", sbUser.id).then(() => refreshBadge());
 }
 async function dmThread(otherId) {
+  // the id goes into a filter string, so it must look like an id
+  if (!/^[0-9a-f-]{36}$/i.test(String(otherId))) throw new Error("bad id");
   await loadSocial(true);
   const { data, error } = await sb.from("messages").select("id, sender_id, recipient_id, body, media, created_at, read_at")
     .or("and(sender_id.eq." + sbUser.id + ",recipient_id.eq." + otherId + "),and(sender_id.eq." + otherId + ",recipient_id.eq." + sbUser.id + ")")
-    .order("created_at", { ascending: true }).limit(300);
+    .order("created_at", { ascending: false }).limit(300);
   if (error) throw error;
-  return (data || []).filter(m => visibleMsg(m, otherId));
+  // the newest 300 are kept, oldest first
+  return (data || []).reverse().filter(m => visibleMsg(m, otherId));
 }
 async function warmInbox() {
   const convos = await dmInbox();
@@ -5264,7 +5315,7 @@ async function checkLinks() {
   try {
     const since = new Date(Date.now() - LINK_MIN * 60000).toISOString();
     const { data } = await sb.from("key_links").select("id, req_pub").eq("status", "pending").gt("created_at", since).order("created_at", { ascending: false }).limit(1);
-    if (data && data[0] && !linkShown.has(data[0].id)) { linkShown.add(data[0].id); approveLinkModal(data[0]); }
+    if (data && data[0] && !linkShown.has(data[0].id)) { linkShown.add(data[0].id); approveLinkModal(data[0]).catch(() => {}); }
   } catch (e) {}
 }
 function watchLinks() {
@@ -5359,13 +5410,16 @@ async function restoreKeysModal(mode) {
         const { data: me, error: me_err } = await sb.from("accounts").select("public_key").eq("id", sbUser.id).maybeSingle();
         if (me_err) { msg.textContent = "Could not reach Nook. Check your connection and try again"; return; }
         if (me && me.public_key && me.public_key !== rec.pub) { msg.textContent = "That saved key is older than the one on your account. Use another way"; return; }
+        if (!me || !me.public_key) {
+          const up = await sb.from("accounts").update({ public_key: rec.pub }).eq("id", sbUser.id);
+          if (up.error) { msg.textContent = "Could not reach Nook. Try again"; return; }
+        }
         await saveLocalKeys(await keyDb(), sbUser.id, rec);
-        if (!me || !me.public_key) await sb.from("accounts").update({ public_key: rec.pub }).eq("id", sbUser.id);
         e2eLocked = false;
         close();
         toast("Messages unlocked");
         setTimeout(() => location.reload(), 500);
-      } finally { m.act.disabled = false; }
+      } catch (e) { msg.textContent = "Something went wrong. Try again"; } finally { m.act.disabled = false; }
     }
   });
 }
@@ -5554,7 +5608,7 @@ async function openSharedPost(id) {
       return {
         id: "r" + r.id, remote: r.id, parent: r.id === id ? null : "r" + id,
         text: r.body || "", t: Date.parse(r.created_at), imgs: parseMedia(r.media_url),
-        ra: { id: r.user_id, name: a.display_name == null ? a.username : a.display_name, handle: a.username, avatar: a.avatar || null },
+        ra: { id: r.user_id, name: a.display_name || a.username || "user", handle: a.username, avatar: a.avatar || null },
         liked: false, reposted: false, saved: false, lc: 0, rpc: 0, rp: r.id === id ? rows.length - 1 : 0, pinned: false, sharedAt: now
       };
     });
@@ -5575,8 +5629,10 @@ function zPostOf(t) {
   } catch (e) { return null; }
 }
 // his picture as a small link other people can load; made once per picture
-let zPfpChecked = "";
-async function zenPfpUrl() {
+let zPfpChecked = "", zPfpBusy = null;
+// callers that overlap share one run, so a stale link is not uploaded again for each of them
+function zenPfpUrl() { return zPfpBusy || (zPfpBusy = zenPfpOnce().finally(() => { zPfpBusy = null; })); }
+async function zenPfpOnce() {
   if (!S.zen.pfp) return null;
   if (S.zen.pfpUrl && S.zen.pfpUrlAt === S.zen.pfpAt) {
     // the stored file can be gone, so the link is checked once per session before it is shared again
@@ -5617,6 +5673,8 @@ function loadEncMedia(md, otherId) {
   if (!e2eEnc.has(md.url)) {
     const p = (async () => {
       const key = await sharedKey(otherId);
+      // a peer chooses this link, so only this app's own storage is fetched
+      if (typeof md.url !== "string" || !md.url.startsWith(SB_URL + "/storage/v1/object/public/" + DM_BUCKET + "/")) throw new Error("gone");
       const res = await fetch(md.url);
       if (!res.ok) throw new Error("gone");
       const buf = await res.arrayBuffer();
@@ -5736,10 +5794,11 @@ function storagePath(url, bucket) {
 function deleteDm(m, row, otherId) {
   const paths = (m.media || []).map(md => storagePath(md.url, DM_BUCKET)).filter(Boolean);
   foldAway(row);
-  threadDrop(otherId, m.id);
-  inboxDrop(otherId, m.id);
   sb.from("messages").delete().eq("id", m.id).select("id").then(({ data, error }) => {
     if (error || !data || !data.length) { toast(error ? "Could not delete that message. " + plainErr(error, "Try again") : "Could not delete that message"); render(); return; }
+    // the caches only forget it once the server has
+    threadDrop(otherId, m.id);
+    inboxDrop(otherId, m.id);
     if (paths.length) sb.storage.from(DM_BUCKET).remove(paths).then(() => {}, () => {});
   });
 }
@@ -6024,8 +6083,11 @@ function dmV(c) {
   let stick = true, stickT = 0;
   const stickFor = ms => { stick = true; clearTimeout(stickT); stickT = setTimeout(() => { stick = false; }, ms); };
   stickFor(3500);
-  if (typeof ResizeObserver === "function") new ResizeObserver(() => { if (stick) scrollEnd(); }).observe(list);
-  ["touchstart", "wheel"].forEach(ev => main.addEventListener(ev, () => { stick = false; }, { passive: true }));
+  // both are let go when the chat closes, so opening many chats does not pile them up
+  const dmRo = typeof ResizeObserver === "function" ? new ResizeObserver(() => { if (stick) scrollEnd(); }) : null;
+  if (dmRo) dmRo.observe(list);
+  const dmAc = new AbortController();
+  ["touchstart", "wheel"].forEach(ev => main.addEventListener(ev, () => { stick = false; }, { passive: true, signal: dmAc.signal }));
   const nearEnd = () => main.scrollHeight - main.scrollTop - main.clientHeight < 160;
   const sync = () => {
     send.disabled = busy || !!locked || jobs.length > 0 || (!ta.value.trim() && !pend.length);
@@ -6222,9 +6284,11 @@ function dmV(c) {
     cacheWrite(tkey, rows.slice(-100));
     return syncRows(rows, { prune: true });
   });
+  let pulling = false;
   const poll = setInterval(() => {
-    if (busy || document.hidden || !liveDm || liveDm.id !== c.id) return;
-    pull().catch(() => {});
+    if (busy || pulling || document.hidden || !liveDm || liveDm.id !== c.id) return;
+    pulling = true;
+    pull().catch(() => {}).finally(() => { pulling = false; });
     refreshStatus();
   }, 5000);
   const onVis = () => { if (document.visibilityState === "visible" && liveDm && liveDm.id === c.id) { pull().catch(() => {}); refreshStatus(); } };
@@ -6240,7 +6304,7 @@ function dmV(c) {
       if (el) foldAway(el, after); else after();
     },
     typing,
-    stop: () => { clearInterval(poll); document.removeEventListener("visibilitychange", onVis); cancelAnimationFrame(tRaf); sendTyping(c.id, false); }
+    stop: () => { clearInterval(poll); document.removeEventListener("visibilitychange", onVis); if (dmRo) dmRo.disconnect(); dmAc.abort(); cancelAnimationFrame(tRaf); sendTyping(c.id, false); }
   };
   main.style.cssText = "display:flex;flex-direction:column";
   list.append(tEl);
@@ -6480,7 +6544,7 @@ function foldAway(el, done) {
   el.style.opacity = "0";
   let fin = false;
   const end = () => { if (fin) return; fin = true; el.remove(); if (done) done(); };
-  el.addEventListener("transitionend", e => { if (e.propertyName === "height") end(); });
+  el.addEventListener("transitionend", e => { if (e.target === el && e.propertyName === "height") end(); });
   setTimeout(end, 280);
 }
 // drag a row to the left to delete it: del() says whether the server removed it, gone() runs after the row is out
@@ -6703,6 +6767,7 @@ function startRealtime() {
       }
     });
   rtChan = ch;
+  if (tpChan) { try { sb.removeChannel(tpChan); } catch (e) {} }
   tpChan = sb.channel("tp-" + sbUser.id)
     .on("broadcast", { event: "typing" }, ({ payload }) => onTyping(payload && payload.from, payload ? payload.on : undefined))
     .subscribe();
@@ -6916,7 +6981,7 @@ async function boot() {
 // each chat and each message is one row the server cannot read; nothing here ever makes the screen wait
 const isNoteChat = c => !(c.msgs || []).some(m => m.ai);
 const noteHash = new Map();
-const imgH = src => { let v = noteHash.get(src); if (!v) { v = srcHash(src); if (noteHash.size > 3000) noteHash.clear(); noteHash.set(src, v); } return v; };
+const imgH = src => { let v = noteHash.get(src); if (!v) { v = srcHash(src); if (noteHash.size > 200) noteHash.clear(); noteHash.set(src, v); } return v; };
 const noteCSig = c => srcHash("c|" + (c.name || "") + "|" + (c.t || 0));
 const noteImgSig = m => (m.imgs || []).map(imgH).join(",");
 const noteMSig = m => srcHash("m|" + (m.text || "") + "|" + (m.t || 0) + "|" + noteImgSig(m) + "|" + JSON.stringify(m.rpost || null) + JSON.stringify(m.zpost || null));
@@ -6983,7 +7048,7 @@ function xApply(id, p, first) {
   }
 }
 // replies that only live on this phone (they sit under a private answer of Zenith and cannot be posted) are kept sealed on the server too
-const privPosts = () => S.posts.filter(p => !p.ra && !p.ai && !p.remote && p.parent && !(byId(p.parent) || {}).remote);
+const privPosts = () => { const withRemote = new Set(S.posts.filter(x => x.remote).map(x => x.id)); return S.posts.filter(p => !p.ra && !p.ai && !p.remote && p.parent && !withRemote.has(p.parent)); };
 const privSig = p => srcHash("p|" + (p.text || "") + "|" + (p.t || 0) + "|" + (p.parent || "") + "|" + (p.liked ? 1 : 0) + (p.reposted ? 1 : 0) + (p.saved ? 1 : 0));
 async function notePriv(ns, key, r) {
   const lid = r.id.slice(2), here = S.posts.find(x => x.id === lid);
@@ -7009,8 +7074,9 @@ async function notePriv(ns, key, r) {
   return true;
 }
 async function noteExtra(ns, key, r) {
-  if (r.deleted || !xDocs()[r.id]) return false;
-  const known = ns.pushed[r.id], cur = xDocs()[r.id];
+  const docs = xDocs();
+  if (r.deleted || !docs[r.id]) return false;
+  const known = ns.pushed[r.id], cur = docs[r.id];
   // changed on this phone since the last sync: this phone wins and the change goes up
   if (known && known !== xSig(cur)) return false;
   const p = await noteOpen(key, r.body);
@@ -7372,12 +7438,14 @@ if (window.visualViewport) {
   };
   // listened to on the whole document: the finger can lift over something that was removed from the page, and then main never hears of it
   document.addEventListener("touchend", end, true);
-  document.addEventListener("touchcancel", end, true);
+  // a gesture the system took over, or going to the background, drops the pull instead of reloading the app
+  const cancel = () => { const was = live; y0 = null; live = false; pull = 0; if (was) reset(); };
+  document.addEventListener("touchcancel", cancel, true);
   // and a pull that nobody finishes is dropped after a moment
   let lastMove = 0;
   main.addEventListener("touchmove", () => { lastMove = Date.now(); }, { passive: true });
   setInterval(() => { if (live && !busy && Date.now() - lastMove > 2500) end(); }, 1000);
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden" && live && !busy) end(); });
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden" && live && !busy) cancel(); });
 })();
 window.addEventListener("pagehide", flush);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flush(); });

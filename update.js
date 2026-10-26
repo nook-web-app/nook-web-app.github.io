@@ -21,7 +21,7 @@
     return forced ? "required" : (a[0] === b[0] && a[1] === b[1] ? "patch" : "ask");
   };
   const applyWhenHidden = w => {
-    const go = () => { accepted = true; w.postMessage("skip"); };
+    const go = () => { accepted = true; (reg && reg.waiting || w).postMessage("skip"); };
     if (document.visibilityState === "hidden") go();
     else document.addEventListener("visibilitychange", function f() { if (document.visibilityState === "hidden") { document.removeEventListener("visibilitychange", f); go(); } });
   };
@@ -34,7 +34,7 @@
     const forced = kind === "required";
     if (forced) applyWhenHidden(w);
     const close = () => { if (forced) return; asked = false; dismiss(scrim, sh); };
-    const go = () => { accepted = true; w.postMessage("skip"); dismiss(scrim, sh); };
+    const go = () => { accepted = true; (reg && reg.waiting || w).postMessage("skip"); dismiss(scrim, sh); };
     const scrim = h("div", { class: "scrim", onclick: close });
     const sh = h("div", { class: "sheet", role: "dialog" },
       h("div", { class: "grab" }, h("i")),

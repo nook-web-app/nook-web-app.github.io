@@ -53,10 +53,11 @@ async function fetchPic(u: string): Promise<{ inline_data: { mime_type: string; 
   const x = publicHttps(u);
   if (!x) return null;
   try {
-    const r = await fetch(x, { signal: AbortSignal.timeout(6000), headers: { accept: "image/*", "user-agent": "Mozilla/5.0 (compatible; NookPreview/1.0)" } });
+    const r = await fetch(x, { redirect: "manual", signal: AbortSignal.timeout(6000), headers: { accept: "image/*", "user-agent": "Mozilla/5.0 (compatible; NookPreview/1.0)" } });
     if (!r.ok || !publicHttps(r.url)) return null;
     const type = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
     if (!PIC_TYPES.includes(type)) return null;
+    if (Number(r.headers.get("content-length") || 0) > 4 * 1024 * 1024) return null;
     const buf = new Uint8Array(await r.arrayBuffer());
     if (!buf.length || buf.length > 4 * 1024 * 1024) return null;
     let bin = "";
@@ -81,10 +82,12 @@ async function linkInfo(body: string): Promise<{ note: string; pics: unknown[] }
 }
 
 let cached: string | null = null;
+let cachedAt = 0;
 async function expectedSecret(): Promise<string | null> {
-  if (cached) return cached;
+  if (cached && Date.now() - cachedAt < 60000) return cached;
   const { data } = await admin.rpc("nook_purge_secret");
   cached = typeof data === "string" && data ? data : null;
+  cachedAt = Date.now();
   return cached;
 }
 function same(a: string, b: string): boolean {
@@ -108,7 +111,7 @@ async function ensureZenith(): Promise<string> {
   if (made.error || !made.data.user) throw new Error("could not make the Zenith account");
   const id = made.data.user.id;
   const ins = await admin.from("accounts").insert({ id, username: "zenith", display_name: "Zenith", bio: "Zenith is an AI model", age_verified: true });
-  if (ins.error) throw new Error("could not save the Zenith account");
+  if (ins.error) { await admin.auth.admin.deleteUser(id); throw new Error("could not save the Zenith account"); }
   zenId = id;
   return id;
 }
@@ -313,7 +316,8 @@ async function importOld(owner: string, zen: string): Promise<Response> {
     }
     const ins = await admin.from("posts").insert({ user_id: zen, body: String(d.text).slice(0, 600), parent_id: parent, created_at: new Date(Number(d.t) || Date.now()).toISOString(), mod_status: "safe", text_pending: false }).select("id").single();
     if (ins.error || !ins.data) { skipped++; continue; }
-    await admin.from("zenith_docs").update({ data: { ...d, pub: ins.data.id }, updated_at: new Date().toISOString() }).eq("owner_id", owner).eq("kind", "post").eq("doc_id", r.doc_id);
+    const mk = await admin.from("zenith_docs").update({ data: { ...d, pub: ins.data.id }, updated_at: new Date().toISOString() }).eq("owner_id", owner).eq("kind", "post").eq("doc_id", r.doc_id);
+    if (mk.error) { await admin.from("posts").delete().eq("id", ins.data.id); skipped++; continue; }
     done++;
   }
   return json({ ok: true, done, skipped, of: rows.length });

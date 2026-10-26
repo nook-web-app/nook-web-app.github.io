@@ -40,6 +40,7 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   let body: { action?: string; response?: any; name?: string };
   try { body = await req.json(); } catch { return json({ error: "bad_request" }, 400); }
+  if (!body || typeof body !== "object") return json({ error: "bad_request" }, 400);
   try {
     if (body.action === "auth-start") {
       // a flood of sign in tries is slowed down
@@ -61,7 +62,7 @@ Deno.serve(async (req) => {
         response: resp, expectedChallenge: challengeOf(resp), expectedOrigin: ORIGIN, expectedRPID: RP_ID, requireUserVerification: true,
         credential: { id: pk.credential_id, publicKey: toU8(pk.public_key), counter: Number(pk.counter), transports: pk.transports || undefined },
       }).catch((e) => { why = String((e as Error).message || e).slice(0, 140); return null; });
-      if (!v || !v.verified) return json({ error: "failed", detail: why || "not verified" }, 401);
+      if (!v || !v.verified) { console.error("verify", why || "not verified"); return json({ error: "failed" }, 401); }
       const [, ban, ur] = await Promise.all([
         admin.from("passkeys").update({ counter: v.authenticationInfo.newCounter }).eq("id", pk.id),
         admin.from("bans").select("user_id").eq("user_id", pk.user_id).maybeSingle(),
@@ -72,7 +73,7 @@ Deno.serve(async (req) => {
       if (!u || !u.user || !u.user.email) return json({ error: "failed" }, 401);
       const link = await admin.auth.admin.generateLink({ type: "magiclink", email: u.user.email });
       const hashed = link.data && link.data.properties ? link.data.properties.hashed_token : "";
-      if (link.error || !hashed) return json({ error: "server", detail: "link: " + (link.error ? link.error.message : "no token") }, 500);
+      if (link.error || !hashed) { console.error("link", link.error ? link.error.message : "no token"); return json({ error: "server" }, 500); }
       // the newer name for a magic link is "email"; the old one is tried when it is refused
       let s = await mk().auth.verifyOtp({ token_hash: hashed, type: "email" });
       if (s.error || !s.data.session) {
@@ -84,7 +85,7 @@ Deno.serve(async (req) => {
       }
       if (s.error || !s.data.session) {
         const code = String((s.error as { code?: string } | null)?.code || "");
-        return json({ error: code === "user_banned" ? "banned" : "server", detail: "otp: " + (s.error ? s.error.message : "no session") }, code === "user_banned" ? 403 : 500);
+        { console.error("otp", s.error ? s.error.message : "no session"); return json({ error: code === "user_banned" ? "banned" : "server" }, code === "user_banned" ? 403 : 500); }
       }
       return json({ session: { access_token: s.data.session.access_token, refresh_token: s.data.session.refresh_token } });
     }
@@ -96,7 +97,9 @@ Deno.serve(async (req) => {
     const user = data.user;
 
     if (body.action === "reg-start") {
-      const mine = ((await admin.from("passkeys").select("credential_id, transports").eq("user_id", user.id)).data || []);
+      const mineRes = await admin.from("passkeys").select("credential_id, transports").eq("user_id", user.id);
+      if (mineRes.error) return json({ error: "server" }, 500);
+      const mine = mineRes.data || [];
       if (mine.length >= 5) return json({ error: "too_many" }, 400);
       const o = await generateRegistrationOptions({
         rpName: "Nook", rpID: RP_ID, userName: user.email || user.id, userDisplayName: user.email || "Nook", userID: new TextEncoder().encode(user.id),
@@ -121,6 +124,7 @@ Deno.serve(async (req) => {
     }
     return json({ error: "bad_request" }, 400);
   } catch (e) {
-    return json({ error: "server", detail: String((e as Error).message || e).slice(0, 120) }, 500);
+    console.error("passkey", String((e as Error).message || e).slice(0, 120));
+    return json({ error: "server" }, 500);
   }
 });

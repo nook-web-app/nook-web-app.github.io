@@ -26,6 +26,7 @@ Deno.serve(async (req) => {
   const jwt = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   const { data: u, error: ue } = jwt ? await admin.auth.getUser(jwt) : { data: { user: null }, error: true };
   if (ue || !u || !u.user) return json({ error: "not signed in" }, 401);
+  if (u.user.banned_until && Date.parse(u.user.banned_until) > Date.now()) return json({ error: "banned" }, 403);
   const id = u.user.id;
   const { data: a } = await admin.from("accounts").select("age_hold").eq("id", id).maybeSingle();
   if (!a) return json({ error: "no account" }, 404);

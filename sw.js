@@ -1,4 +1,4 @@
-const VERSION = "nook-3.20.7";
+const VERSION = "nook-3.20.8";
 const SHARE_CACHE = "nook-share";
 const SHELL = ["./", "index.html", "style.css", "guard.js", "app.js", "update.js", "supabase.js", "fonts/inter-latin.woff2", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => {
@@ -10,18 +10,20 @@ async function handleShare(request) {
   const home = new URL("./index.html", self.registration.scope).href;
   // a share comes from the phone's share menu; a form sent by another website is ignored
   if (request.headers.get("sec-fetch-site") === "cross-site") return Response.redirect(home, 303);
+  let data = null;
   try {
-    const data = await request.formData();
+    data = await request.formData();
     const c = await caches.open(SHARE_CACHE);
     await Promise.all((await c.keys()).map(k => c.delete(k)));
-    const files = data.getAll("media").filter(f => f && typeof f.arrayBuffer === "function" && /^image\//.test(f.type || "") && f.size <= 20 * 1024 * 1024).slice(0, 20);
+    const files = data.getAll("media").filter(f => f && typeof f.arrayBuffer === "function" && /^image\/(jpeg|png|gif|webp|heic|heif|avif)$/.test(f.type || "") && f.size <= 10 * 1024 * 1024).slice(0, 10).filter((f, i, a) => a.slice(0, i + 1).reduce((n, x) => n + x.size, 0) <= 50 * 1024 * 1024);
     await Promise.all(files.map((f, i) => c.put(new URL("share/" + i, self.registration.scope).href, new Response(f, { headers: { "Content-Type": f.type || "application/octet-stream", "X-Name": encodeURIComponent(f.name || "shared") } }))));
     const q = new URLSearchParams();
     ["title", "text", "url"].forEach(k => { const v = data.get(k); if (v) q.set(k, String(v)); });
     q.set("shared", String(files.length));
     return Response.redirect(home + "?" + q.toString(), 303);
   } catch (err) {
-    return Response.redirect(home, 303);
+    const q = ["title", "text", "url"].filter(k => data && data.get(k)).map(k => k + "=" + encodeURIComponent(String(data.get(k)))).join("&");
+    return Response.redirect(q ? home + "?" + q : home, 303);
   }
 }
 self.addEventListener("activate", e => {

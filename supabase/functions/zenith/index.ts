@@ -33,10 +33,11 @@ async function fetchPic(u: string): Promise<{ inline_data: { mime_type: string; 
   const x = publicHttps(u);
   if (!x) return null;
   try {
-    const r = await fetch(x, { signal: AbortSignal.timeout(6000), headers: { accept: "image/*", "user-agent": "Mozilla/5.0 (compatible; NookPreview/1.0)" } });
+    const r = await fetch(x, { redirect: "manual", signal: AbortSignal.timeout(6000), headers: { accept: "image/*", "user-agent": "Mozilla/5.0 (compatible; NookPreview/1.0)" } });
     if (!r.ok || !publicHttps(r.url)) return null;
     const type = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
     if (!PIC_TYPES.includes(type)) return null;
+    if (Number(r.headers.get("content-length") || 0) > 4 * 1024 * 1024) return null;
     const buf = new Uint8Array(await r.arrayBuffer());
     if (!buf.length || buf.length > 4 * 1024 * 1024) return null;
     let bin = "";
@@ -101,7 +102,9 @@ Deno.serve(async (req) => {
     let avatar: string | null = null;
     if (src) {
       // an account may only show pictures from its own folder, so the owner's file is copied into his
-      const dl = await admin.storage.from("media").download(decodeURIComponent(src.slice(base.length).split("?")[0]));
+      let spath = "";
+      try { spath = decodeURIComponent(src.slice(base.length).split("?")[0]); } catch { return json({ ok: false, why: "could not read the picture" }); }
+      const dl = await admin.storage.from("media").download(spath);
       if (dl.error || !dl.data) return json({ ok: false, why: "could not read the picture" });
       const dest = za.id + "/zenith-" + Date.now() + ".jpg";
       const up = await admin.storage.from("media").upload(dest, dl.data, { contentType: dl.data.type || "image/jpeg", upsert: true });

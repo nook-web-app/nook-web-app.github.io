@@ -46,6 +46,7 @@ Deno.serve(async (req) => {
 
   let body: { notification_id?: string };
   try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
+  if (!body || typeof body !== "object") return json({ error: "bad json" }, 400);
   const id = String(body.notification_id || "");
   if (!/^[0-9a-f-]{36}$/i.test(id)) return json({ error: "bad id" }, 400);
 
@@ -72,7 +73,7 @@ Deno.serve(async (req) => {
       else if (text.startsWith("e2e1:")) {
         const { data: a } = await admin.from("accounts").select("public_key").eq("id", n.actor_id).maybeSingle();
         if (text.length <= 2400 && a && a.public_key) { msg.enc = text; msg.key = a.public_key; msg.uid = n.user_id; }
-      } else if (text.length <= 300) msg.text = text;
+      }
     }
   }
   const payload = JSON.stringify({

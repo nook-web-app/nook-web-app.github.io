@@ -9,7 +9,6 @@ const cors = {
 };
 const ARCHIVE = "ban-archive";
 const BUCKETS = ["media", "dm-media"];
-const MAX_FILES = 1000;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
@@ -17,7 +16,7 @@ function json(body: unknown, status = 200): Response {
 
 async function listFolder(folder: string): Promise<string[]> {
   const out: string[] = [];
-  for (let offset = 0; out.length < MAX_FILES; offset += 100) {
+  for (let offset = 0; ; offset += 100) {
     const { data, error } = await admin.storage.from(ARCHIVE).list(folder, { limit: 100, offset });
     if (error) throw error;
     const rows = data || [];
@@ -32,6 +31,7 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   let body: { email?: unknown; password?: unknown };
   try { body = await req.json(); } catch { return json({ error: "Bad request" }, 400); }
+  if (!body || typeof body !== "object") return json({ error: "Bad request" }, 400);
   if (typeof body.email !== "string" || typeof body.password !== "string") return json({ error: "Enter your email and password" }, 400);
 
   const mixed = await pepper(admin, body.password);

@@ -109,6 +109,7 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
+  if (!body || typeof body !== "object") return json({ error: "bad json" }, 400);
   const action = String(body.action || "");
 
   if (action === "recover") {

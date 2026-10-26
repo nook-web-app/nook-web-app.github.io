@@ -37,10 +37,12 @@ const TEXT_SYSTEM = "You review the text of posts on a social app for adults. Th
   "Everything else is SAFE: swearing, jokes, banter, dark humor, slang, opinions, arguments, news, quotes, song lyrics, mild flirting and talk about hard topics without attacking anyone. When in doubt answer SAFE.";
 
 let cached: string | null = null;
+let cachedAt = 0;
 async function expectedSecret(): Promise<string | null> {
-  if (cached) return cached;
+  if (cached && Date.now() - cachedAt < 60000) return cached;
   const { data } = await admin.rpc("nook_purge_secret");
   cached = typeof data === "string" && data ? data : null;
+  cachedAt = Date.now();
   return cached;
 }
 function same(a: string, b: string): boolean {
@@ -197,7 +199,8 @@ const MIME_OF = { png: "image/png", jpg: "image/jpeg", webp: "image/webp" } as c
 async function partsFor(url: string): Promise<unknown[] | "big" | null> {
   const m = /\/object\/public\/media\/([^?#]+)/.exec(url);
   if (!m) return null;
-  const path = decodeURIComponent(m[1]);
+  let path = "";
+  try { path = decodeURIComponent(m[1]); } catch { return null; }
   const { data, error } = await admin.storage.from("media").download(path);
   if (error || !data) return null;
   const bytes = new Uint8Array(await data.arrayBuffer());
@@ -423,6 +426,7 @@ Deno.serve(async (req) => {
   if (!want || !same(want, req.headers.get("x-purge-secret") || "")) return json({ error: "forbidden" }, 403);
   let body: { post_id?: string; account_id?: string; sweep?: boolean; ping?: boolean };
   try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
+  if (!body || typeof body !== "object") return json({ error: "bad json" }, 400);
   if (body.ping) return json({ ok: true });
   if (body.post_id && (body as { debug?: boolean }).debug) {
     C().lastNote = "";

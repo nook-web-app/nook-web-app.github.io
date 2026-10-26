@@ -249,7 +249,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.4";
+const APP_VERSION = "3.22.5";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1139,6 +1139,18 @@ function go(r) {
   scrolls.push(main.scrollTop); stack.push(r); hist(false); render("fwd"); main.scrollTop = 0; }
 function back() { if (stack.length > 1) history.back(); }
 function hist(replace) { const st = { s: JSON.parse(JSON.stringify(stack)), sc: scrolls.slice() }; try { if (replace) history.replaceState(st, ""); else history.pushState(st, ""); } catch (e) {} }
+// after the app was closed and opened again the browser has one history entry but the screen has several levels: every level gets its own entry, so one back press goes up one level
+function histSync() {
+  const cs = history.state;
+  if (stack.length < 2 || (cs && Array.isArray(cs.s) && cs.s.length === stack.length)) { hist(true); return; }
+  const full = JSON.parse(JSON.stringify(stack)), sc = scrolls.slice();
+  try {
+    for (let i = 1; i <= full.length; i++) {
+      const st = { s: full.slice(0, i), sc: sc.slice(0, i - 1) };
+      if (i === 1) history.replaceState(st, ""); else history.pushState(st, "");
+    }
+  } catch (e) {}
+}
 let layers = [], ignorePops = 0, afterPop = null;
 function trackLayer(rm, back) {
   const entry = { rm, back: back || rm, done: false };
@@ -7698,7 +7710,7 @@ async function boot() {
     if (u && u.id && mark === u.id && !stack.some(x => x.r === "auth" || x.r === "banned" || x.r === "age")) {
       sbUser = u;
       early = true;
-      hist(true);
+      histSync();
       render();
       earlySig = [S.profile.handle, S.profile.name, S.profile.avatar].join("|");
     }
@@ -7759,7 +7771,7 @@ async function boot() {
   else if (ageHeld) { stack = [{ r: "age" }]; scrolls.length = 0; ageGate = true; }
   else if (stack.some(x => x.r === "auth" || x.r === "banned" || x.r === "age")) { stack = [{ r: "home" }]; scrolls.length = 0; }
   if (sbUser && !ageHeld) { if (early) preloadAvatars(ownAvatar).catch(() => {}); else await preloadAvatars(ownAvatar); }
-  hist(true);
+  histSync();
   // the saved screen is already up: draw again only when the checks changed what it shows
   if (!(early && sbUser && !ageHeld && earlySig === [S.profile.handle, S.profile.name, S.profile.avatar].join("|"))) render();
   if (RECOVERY && sbUser) newPasswordModal();

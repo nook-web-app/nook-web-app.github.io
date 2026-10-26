@@ -14,6 +14,9 @@ how to write updates here
 - the only extra allowed is a ! after the version, like "## 3.0.8 !", for an update that people must install right away (privacy or security fixes). It installs at once and cannot be skipped.
 - an update with the same first two numbers as the one people have (a patch like 3.0.7 to 3.0.8) installs quietly in the background without asking. A new minor or major version asks first.
 -->
+## 3.20.0
+- new: Pictures in your chat with Zenith are saved to your account, locked, and come back on any phone
+
 ## 3.19.12
 - fixed: Chats open at the bottom, even when pictures load late
 - fixed: Sending a message moves less

@@ -177,7 +177,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.19.12";
+const APP_VERSION = "3.20.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1954,10 +1954,33 @@ function zenDocs() {
     if (p.ai) { const rest = Object.assign({}, p); delete rest.imgs; out.set("post:" + p.id, rest); }
     else if (p.zenReplied || p.zenAnswered || p.zenLikeChecked || p.zenLike) out.set("flag:" + (p.remote || p.id), { local: p.id, remote: p.remote || null, zenReplied: !!p.zenReplied, zenAnswered: !!p.zenAnswered, zenLikeChecked: !!p.zenLikeChecked, zenLike: !!p.zenLike });
   });
-  S.chats.forEach(c => { if (c.msgs.some(m => m.ai)) out.set("chat:" + c.id, { id: c.id, name: c.name, t: c.t, msgs: c.msgs.map(m => ({ id: m.id, text: m.text, t: m.t, ai: !!m.ai, photos: (m.imgs || []).length })) }); });
+  S.chats.forEach(c => { if (c.msgs.some(m => m.ai)) out.set("chat:" + c.id, { id: c.id, name: c.name, t: c.t, msgs: c.msgs.map(m => ({ id: m.id, text: m.text, t: m.t, ai: !!m.ai, ph: (m.imgs || []).map(imgH) })) }); });
   return out;
 }
 const zenKey = k => { const i = k.indexOf(":"); return { kind: k.slice(0, i), doc_id: k.slice(i + 1) }; };
+// the pictures of a chat with Zenith go up locked with the owner's key, like the notes, and come back with the text
+async function zenChatMedia(d) {
+  const k = await sharedKey(sbUser.id);
+  const c = S.chats.find(x => x.id === d.id);
+  const msgs = [];
+  for (const m of d.msgs) {
+    const lm = c && c.msgs.find(x => x.id === m.id);
+    const media = [];
+    if (lm && (lm.imgs || []).length) {
+      const have = lm.zm || [];
+      for (const src of lm.imgs) {
+        const hsh = imgH(src);
+        let e = have.find(x => x.h === hsh);
+        if (!e) { if (!/^data:/.test(src)) continue; e = { h: hsh, d: await notePicOut(k, src) }; }
+        media.push(e);
+      }
+      lm.zm = media;
+    }
+    const rest = Object.assign({}, m); delete rest.ph;
+    msgs.push(Object.assign(rest, { media: media.map(e => e.d) }));
+  }
+  return msgs;
+}
 async function zenSync() {
   if (!zenSyncOn || zenBusySync || !sbUser || !S || !isOwner()) return;
   zenBusySync = true;
@@ -1973,7 +1996,7 @@ async function zenSync() {
     for (let i = 0; i < up.length; i += 100) {
       const part = up.slice(i, i + 100).filter(u => seal || !u.key.startsWith("chat:"));
       if (!part.length) continue;
-      for (const u of part) if (u.key.startsWith("chat:")) u.sealed = { id: u.data.id, enc: await seal({ name: u.data.name, t: u.data.t, msgs: u.data.msgs }) };
+      for (const u of part) if (u.key.startsWith("chat:")) u.sealed = { id: u.data.id, enc: await seal({ name: u.data.name, t: u.data.t, msgs: await zenChatMedia(u.data) }) };
       const rows = part.map(u => Object.assign({ owner_id: sbUser.id, data: u.sealed || u.data, updated_at: new Date().toISOString() }, zenKey(u.key)));
       const { error } = await sb.from("zenith_docs").upsert(rows, { onConflict: "owner_id,kind,doc_id" });
       if (error) throw error;
@@ -1996,6 +2019,18 @@ async function zenPull() {
   // sealed chats are opened first; a copy from before sealing is used as it is and sealed again by the next sync
   const chatOpen = new Map();
   for (const r of data || []) if (r.kind === "chat" && r.data && r.data.enc) { try { const k = await sharedKey(sbUser.id); chatOpen.set(r.doc_id, Object.assign({ id: r.data.id }, await noteOpen(k, r.data.enc))); } catch (e) {} }
+  // the pictures that belong to the sealed chats are opened first; one that cannot be fetched is left out and tried again at the next pull
+  const zenPics = new Map();
+  for (const dd of chatOpen.values()) {
+    for (const m of dd.msgs || []) {
+      if (!Array.isArray(m.media) || !m.media.length || typeof m.id !== "string") continue;
+      try {
+        const k = await sharedKey(sbUser.id), imgs = [], zm = [];
+        for (const md of m.media) { const src = await notePicIn(k, md); imgs.push(src); zm.push({ h: imgH(src), d: md }); }
+        zenPics.set(m.id, { imgs, zm });
+      } catch (e) {}
+    }
+  }
   (data || []).forEach(r => {
     const key = r.kind + ":" + r.doc_id; let d = r.data || {};
     if (r.kind === "post") {
@@ -2011,11 +2046,15 @@ async function zenPull() {
       ["zenReplied", "zenAnswered", "zenLikeChecked", "zenLike"].forEach(f => { if (d[f] && !p[f]) { p[f] = true; changed = true; } });
     } else if (r.kind === "chat") {
       const sealedRow = !!(r.data && r.data.enc);
-      if (sealedRow) { const dd = chatOpen.get(r.doc_id); if (!dd) return; zenSeen.set(key, zenJson(dd)); d = dd; }
+      if (sealedRow) { const dd = chatOpen.get(r.doc_id); if (!dd) return; zenSeen.set(key, zenJson({ id: dd.id, name: dd.name, t: dd.t, msgs: (dd.msgs || []).map(m => ({ id: m.id, text: m.text, t: m.t, ai: !!m.ai, ph: ((zenPics.get(m.id) || {}).zm || []).map(e => e.h) })) })); d = dd; }
       const c = S.chats.find(x => x.id === d.id);
-      const msgs = (d.msgs || []).map(m => ({ id: m.id, text: m.text || "", t: m.t, ai: !!m.ai, imgs: [] }));
+      const msgs = (d.msgs || []).map(m => ({ id: m.id, text: m.text || "", t: m.t, ai: !!m.ai, imgs: (zenPics.get(m.id) || {}).imgs || [], zm: (zenPics.get(m.id) || {}).zm }));
       if (!c) { S.chats.push({ id: d.id, name: d.name, t: d.t, msgs }); changed = true; }
-      else { const have = new Set(c.msgs.map(m => m.id)); const add = msgs.filter(m => !have.has(m.id)); if (add.length) { c.msgs = c.msgs.concat(add).sort((a, b) => a.t - b.t); changed = true; } }
+      else {
+        const have = new Set(c.msgs.map(m => m.id)); const add = msgs.filter(m => !have.has(m.id)); if (add.length) { c.msgs = c.msgs.concat(add).sort((a, b) => a.t - b.t); changed = true; }
+        // a message that lost its pictures on this phone gets them back from the saved copy
+        c.msgs.forEach(m => { const z = zenPics.get(m.id); if (z && z.imgs.length && !(m.imgs || []).length) { m.imgs = z.imgs; m.zm = z.zm; changed = true; } });
+      }
     } else if (r.kind === "state" && d.z) {
       zenSeen.set(key, zenJson(d));
       const z = S.zen, sz = d.z;

@@ -94,9 +94,22 @@ Deno.serve(async (req) => {
   await parse;
   // the owner can change how his public account looks, and ask for his answers now instead of at the next minute
   if (body.action === "profile") {
-    const av = typeof body.avatar === "string" && body.avatar.startsWith(Deno.env.get("SUPABASE_URL")! + "/storage/v1/object/public/media/") && body.avatar.length < 400 ? body.avatar : null;
-    const upd = await admin.from("accounts").update({ avatar: av, banner_theme: body.theme === "avatar" && av ? "avatar" : null }).eq("username", "zenith");
-    return json({ ok: !upd.error });
+    const base = Deno.env.get("SUPABASE_URL")! + "/storage/v1/object/public/media/";
+    const src = typeof body.avatar === "string" && body.avatar.startsWith(base) && body.avatar.length < 400 ? body.avatar : null;
+    const { data: za } = await admin.from("accounts").select("id").eq("username", "zenith").maybeSingle();
+    if (!za) return json({ ok: false, why: "no account yet" });
+    let avatar: string | null = null;
+    if (src) {
+      // an account may only show pictures from its own folder, so the owner's file is copied into his
+      const dl = await admin.storage.from("media").download(decodeURIComponent(src.slice(base.length).split("?")[0]));
+      if (dl.error || !dl.data) return json({ ok: false, why: "could not read the picture" });
+      const dest = za.id + "/zenith-" + Date.now() + ".jpg";
+      const up = await admin.storage.from("media").upload(dest, dl.data, { contentType: dl.data.type || "image/jpeg", upsert: true });
+      if (up.error) return json({ ok: false, why: "could not save the picture" });
+      avatar = base + dest;
+    }
+    const upd = await admin.from("accounts").update({ avatar, banner_theme: body.theme === "avatar" && avatar ? "avatar" : null }).eq("id", za.id);
+    return json({ ok: !upd.error, why: upd.error ? upd.error.message : "" });
   }
   if (body.action === "tick") {
     const { data: secret } = await admin.rpc("nook_purge_secret");

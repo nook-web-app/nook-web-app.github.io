@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.12.2";
+const APP_VERSION = "3.12.3";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2738,6 +2738,38 @@ async function toggleRemoteRepostNow(p, big) {
     : await sb.from("reposts").delete().eq("user_id", sbUser.id).eq("post_id", p.remote);
   if (error && !(on && error.code === "23505")) { p.reposted = !on; p.rpc = Math.max(0, (p.rpc || 0) + (on ? -1 : 1)); persist(); refresh(p, big); toast("Could not update repost"); }
 }
+// the feed only holds the newest posts of everybody, so when a profile opens the person's own newest posts are fetched too
+async function loadUserPosts(id) {
+  if (!sbUser) return false;
+  const { data: rows, error } = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url").eq("user_id", id).order("created_at", { ascending: false }).limit(80);
+  if (error || !rows || !rows.length) return false;
+  const have = new Set(S.posts.filter(p => p.remote).map(p => p.remote));
+  const fresh = rows.filter(r => !have.has(r.id));
+  if (!fresh.length) return false;
+  const ids = fresh.map(r => r.id);
+  const [lk, rp, myLk, myRp, kidsQ, who] = await Promise.all([
+    sb.from("likes").select("post_id").in("post_id", ids),
+    sb.from("reposts").select("post_id").in("post_id", ids),
+    sb.from("likes").select("post_id").eq("user_id", sbUser.id).in("post_id", ids),
+    sb.from("reposts").select("post_id").eq("user_id", sbUser.id).in("post_id", ids),
+    sb.from("posts").select("parent_id").in("parent_id", ids),
+    cachedAccounts([id])
+  ]);
+  const a = who.get(id);
+  if (!a) return false;
+  const tally = (q, k) => { const m = new Map(); ((q && q.data) || []).forEach(r => m.set(r[k], (m.get(r[k]) || 0) + 1)); return m; };
+  const lc = tally(lk, "post_id"), rc = tally(rp, "post_id"), kc = tally(kidsQ, "parent_id");
+  const mineL = new Set(((myLk && myLk.data) || []).map(r => r.post_id)), mineR = new Set(((myRp && myRp.data) || []).map(r => r.post_id));
+  const localByRemote = new Map(S.posts.filter(p => p.remote && !p.ra).map(p => [p.remote, p.id]));
+  fresh.forEach(p => S.posts.push({
+    id: "r" + p.id, remote: p.id, parent: p.parent_id ? (localByRemote.get(p.parent_id) || "r" + p.parent_id) : null,
+    text: p.body || "", t: Date.parse(p.created_at), imgs: parseMedia(p.media_url),
+    ra: { id, name: a.display_name == null ? a.username : a.display_name, handle: a.username, avatar: a.avatar || null },
+    liked: mineL.has(p.id), reposted: mineR.has(p.id), saved: false, lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, rp: kc.get(p.id) || 0, pinned: false
+  }));
+  persist();
+  return true;
+}
 function userV(cur) {
   const found = S.posts.find(p => p.ra && p.ra.id === cur.id);
   const who = found ? found.ra : { id: cur.id, name: "user", handle: "user", avatar: null };
@@ -2807,6 +2839,7 @@ function userV(cur) {
   };
   main.append(tabsEl, listEl);
   drawTabs(); drawList();
+  loadUserPosts(cur.id).then(ch => { if (ch && listEl.isConnected) { drawList(); paintStat(); } }, () => {});
   if (sbUser) sb.from("reposts").select("post_id, created_at").eq("user_id", cur.id).order("created_at", { ascending: false }).limit(100).then(({ data, error }) => {
     if (error || !data) return;
     theirReposts = data.map(r => ({ post_id: r.post_id, t: Date.parse(r.created_at) || 0 }));

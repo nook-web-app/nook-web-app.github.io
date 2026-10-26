@@ -14,6 +14,9 @@ how to write updates here
 - the only extra allowed is a ! after the version, like "## 3.0.8 !", for an update that people must install right away (privacy or security fixes). It installs at once and cannot be skipped.
 - an update with the same first two numbers as the one people have (a patch like 3.0.7 to 3.0.8) installs quietly in the background without asking. A new minor or major version asks first.
 -->
+## 3.12.3
+fixed: Profiles show all of a person's newest posts and Zenith has his picture
+
 ## 3.12.2
 fixed: Zenith keeps his public posts and replies PG-13
 

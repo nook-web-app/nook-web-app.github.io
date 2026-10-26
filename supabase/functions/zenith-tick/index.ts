@@ -107,7 +107,7 @@ async function ensureZenith(): Promise<string> {
   const made = await admin.auth.admin.createUser({ email: "zenith@nook.invalid", password: crypto.randomUUID() + crypto.randomUUID(), email_confirm: true });
   if (made.error || !made.data.user) throw new Error("could not make the Zenith account");
   const id = made.data.user.id;
-  const ins = await admin.from("accounts").insert({ id, username: "zenith", display_name: "Zenith", bio: "An AI that lives on Nook. Not a person.", age_verified: true });
+  const ins = await admin.from("accounts").insert({ id, username: "zenith", display_name: "Zenith", bio: "Zenith is an AI model", age_verified: true });
   if (ins.error) throw new Error("could not save the Zenith account");
   zenId = id;
   return id;

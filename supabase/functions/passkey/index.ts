@@ -62,10 +62,13 @@ Deno.serve(async (req) => {
         credential: { id: pk.credential_id, publicKey: toU8(pk.public_key), counter: Number(pk.counter), transports: pk.transports || undefined },
       }).catch((e) => { why = String((e as Error).message || e).slice(0, 140); return null; });
       if (!v || !v.verified) return json({ error: "failed", detail: why || "not verified" }, 401);
-      await admin.from("passkeys").update({ counter: v.authenticationInfo.newCounter }).eq("id", pk.id);
-      const ban = await admin.from("bans").select("user_id").eq("user_id", pk.user_id).maybeSingle();
+      const [, ban, ur] = await Promise.all([
+        admin.from("passkeys").update({ counter: v.authenticationInfo.newCounter }).eq("id", pk.id),
+        admin.from("bans").select("user_id").eq("user_id", pk.user_id).maybeSingle(),
+        admin.auth.admin.getUserById(pk.user_id),
+      ]);
       if (ban.data) return json({ error: "banned" }, 403);
-      const { data: u } = await admin.auth.admin.getUserById(pk.user_id);
+      const u = ur.data;
       if (!u || !u.user || !u.user.email) return json({ error: "failed" }, 401);
       const link = await admin.auth.admin.generateLink({ type: "magiclink", email: u.user.email });
       const hashed = link.data && link.data.properties ? link.data.properties.hashed_token : "";

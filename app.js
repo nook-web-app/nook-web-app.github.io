@@ -176,7 +176,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.19.4";
+const APP_VERSION = "3.19.5";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -4171,22 +4171,20 @@ function newAccountModal() {
 }
 // a different account that signs in here may be hidden from other people (deactivated): its own login reads it and brings it back
 async function infoForSession(sess, uid) {
-  const cols = "id, username, display_name, avatar, deactivated";
-  let { data } = await sb.from("accounts").select(cols).eq("id", uid).maybeSingle();
-  if (data && data.username && !data.deactivated) return data;
+  const cols = "id,username,display_name,avatar,deactivated";
+  const head = { apikey: SB_KEY, authorization: "Bearer " + sess.access_token, "content-type": "application/json" };
   try {
-    const tmp = window.supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
-    const ss = await tmp.auth.setSession({ access_token: sess.access_token, refresh_token: sess.refresh_token });
-    if (ss.error) return data;
-    const own = await tmp.from("accounts").select(cols).eq("id", uid).maybeSingle();
-    if (own.data) {
-      if (own.data.deactivated) { await tmp.rpc("nook_restore_account"); await tmp.rpc("set_my_deactivated", { flag: false }); }
-      data = own.data;
+    const r = await fetch(SB_URL + "/rest/v1/accounts?select=" + cols + "&id=eq." + uid, { headers: head });
+    const rows = r.ok ? await r.json() : [];
+    const row = rows[0] || null;
+    if (row && row.deactivated) {
+      await Promise.all([fetch(SB_URL + "/rest/v1/rpc/nook_restore_account", { method: "POST", headers: head, body: "{}" }), fetch(SB_URL + "/rest/v1/rpc/set_my_deactivated", { method: "POST", headers: head, body: JSON.stringify({ flag: false }) })]);
     }
-  } catch (e) {}
-  return data;
+    return row;
+  } catch (e) { return null; }
 }
 function addAccountModal() {
+  passkeyWarm();
   const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "email", "aria-label": "Email", "data-pm": "1" });
   const pw = pwField("Password", "current-password");
   const pass = pw.input;
@@ -4206,8 +4204,8 @@ function addAccountModal() {
         try {
           const r = await passkeyAsk();
           if (!r.session) { if (r.err) say(r.err); return; }
-          const { data: u } = await sb.auth.getUser(r.session.access_token);
-          if (!u || !u.user) { say("Could not sign in. Try again"); return; }
+          const u = { user: jwtUser(r.session.access_token) };
+          if (!u.user) { say("Could not sign in. Try again"); return; }
           if (u.user.id === sbUser.id) { say("That is the account you are in"); return; }
           const info = await infoForSession(r.session, u.user.id);
           if (!info || !info.username) { say("Could not load that account. Try again"); return; }
@@ -4288,6 +4286,7 @@ async function linkSavedAccounts(newId, newToken) {
 }
 // a linked account that is not on this phone yet: its password opens it here
 function linkedLoginModal(x) {
+  passkeyWarm();
   const pw = pwField("Password");
   const msg = h("p", { class: "note", role: "alert" });
   // the message also shows as a toast, because the keyboard can cover the line under the fields
@@ -4818,6 +4817,8 @@ async function callFn(name, body, token) {
   } catch (e) { return { ok: false, status: 0, body: { error: "network" } }; }
 }
 // ---- Face ID and fingerprint sign in (passkeys): the phone keeps the private key, the server only checks its signature ----
+// the account id is inside the signed login ticket; the server already checked it, so no extra request is made
+const jwtUser = t => { try { const j = JSON.parse(atob(String(t).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))); return j && j.sub ? { id: j.sub } : null; } catch (e) { return null; } };
 const pkOk = () => !!(window.PublicKeyCredential && navigator.credentials && navigator.credentials.create);
 const pkBuf = s => { const b = atob(String(s).replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(String(s).length / 4) * 4, "=")); return Uint8Array.from(b, c => c.charCodeAt(0)).buffer; };
 const pkStr = buf => toB64(new Uint8Array(buf)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");

@@ -81,7 +81,7 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   const jwt = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   if (!jwt) return json({ error: "not signed in" }, 401);
-  let body: { system?: unknown; history?: unknown; stream?: unknown; imageUrls?: unknown } = {};
+  let body: { system?: unknown; history?: unknown; stream?: unknown; imageUrls?: unknown; action?: unknown; avatar?: unknown; theme?: unknown } = {};
   const parse = req.json().then((b) => { body = b; return true; }, () => false);
   if (!((okUntil.get(jwt) || 0) > Date.now())) {
     const { data, error } = await admin.auth.getUser(jwt);
@@ -91,7 +91,20 @@ Deno.serve(async (req) => {
     if (okUntil.size > 50) okUntil.clear();
     okUntil.set(jwt, Date.now() + 5 * 60000);
   }
-  if (!(await parse) || !Array.isArray(body.history)) return json({ error: "bad request" }, 400);
+  await parse;
+  // the owner can change how his public account looks, and ask for his answers now instead of at the next minute
+  if (body.action === "profile") {
+    const av = typeof body.avatar === "string" && body.avatar.startsWith(Deno.env.get("SUPABASE_URL")! + "/storage/v1/object/public/media/") && body.avatar.length < 400 ? body.avatar : null;
+    const upd = await admin.from("accounts").update({ avatar: av, banner_theme: body.theme === "avatar" && av ? "avatar" : null }).eq("username", "zenith");
+    return json({ ok: !upd.error });
+  }
+  if (body.action === "tick") {
+    const { data: secret } = await admin.rpc("nook_purge_secret");
+    if (typeof secret !== "string" || !secret) return json({ error: "no secret" }, 500);
+    const r = await fetch(Deno.env.get("SUPABASE_URL")! + "/functions/v1/zenith-tick", { method: "POST", headers: { "content-type": "application/json", "x-purge-secret": secret }, body: JSON.stringify({ mode: "reply" }), signal: AbortSignal.timeout(50000) }).catch(() => null);
+    return json(r ? await r.json().catch(() => ({ ok: false })) : { ok: false });
+  }
+  if (!Array.isArray(body.history)) return json({ error: "bad request" }, 400);
 
   try {
     const key = await geminiKey();

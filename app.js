@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.11.5";
+const APP_VERSION = "3.12.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1898,61 +1898,24 @@ const zenRefresh = () => {
 };
 let zenBusy = false, zenAgain = false;
 let zenPulled = 0;
+// his answers come from the server now and are real posts everybody can see; the phone only brings in the copies kept for his older posts
 async function zenTick() {
-  if (zenBusy && S && zOn()) zenAgain = true;
   if (zenBusy || !S || !zOn() || !zenSyncOn || document.visibilityState !== "visible") return;
   zenBusy = true;
   try {
-    const z = S.zen;
-    // his own posts are decided on the server every hour; this brings them in
     if (Date.now() - zenPulled > 45000) { zenPulled = Date.now(); if (await zenPull()) zenRefresh(); }
-    const fresh = p => p.t > z.since;
-    // Zenith only gets a request once Aegis has passed the post; until then it waits and is looked at again in a few seconds
-    const waiting = new Set();
-    const cleared = async p => {
-      if (!sbUser || p.aegis) return true;
-      // an answer to one of his own posts never leaves this phone, so there is nothing for Aegis to look at
-      if (!p.remote && zenThread(p)) return true;
-      if (!p.remote) { waiting.add(p.id); return false; }
-      const { data, error } = await sb.from("posts").select("mod_status, text_pending").eq("id", p.remote).maybeSingle();
-      if (error) { waiting.add(p.id); return false; }
-      // taken down or deleted: there is nothing to answer
-      if (!data) { p.zenReplied = p.zenAnswered = p.zenLikeChecked = true; persist(); return false; }
-      if (data.mod_status === "safe" && !data.text_pending) { p.aegis = true; return true; }
-      waiting.add(p.id);
-      return false;
-    };
-    // a failed answer is tried again a few times instead of being lost
-    const answer = async (item, flag, make, parent) => {
-      item[flag] = true;
-      let text = "";
-      try { text = await make(); } catch (e) {}
-      if (text && !S.posts.some(x => x.ai && x.parent === parent.id)) { zenPost(text, parent.id, parent.remote ? "zr" + parent.remote.replace(/-/g, "") : null); }
-      else if (!text) { item.zenTries = (item.zenTries || 0) + 1; if (item.zenTries < 4) item[flag] = false; }
-      persist(); zenRefresh();
-    };
-    for (let todo; (todo = S.posts.find(p => !p.ai && !p.ra && !p.parent && (p.text || p.imgs.length) && !p.zenReplied && fresh(p) && !waiting.has(p.id)));) {
-      if (S.posts.some(x => x.ai && x.parent === todo.id)) { todo.zenReplied = true; continue; }
-      if (!(await cleared(todo))) continue;
-      await answer(todo, "zenReplied", async () => { const lk = await zLink(todo.text); return zGen(ZSYS_REPLY, "Post: " + (todo.text || "(photo only)") + lk.note, todo.imgs, lk.pics); }, todo);
-      if (!todo.zenReplied) break;
-    }
-    for (let rr; (rr = S.posts.find(p => !p.ai && !p.ra && p.parent && !p.zenAnswered && fresh(p) && zenThread(p) && !waiting.has(p.id)));) {
-      const par = byId(rr.parent);
-      if (!(await cleared(rr))) continue;
-      await answer(rr, "zenAnswered", async () => { const lk = await zLink(chainText(rr)); return zGen(ZSYS_REPLY, zThread(rr) + lk.note, [], lk.pics); }, rr);
-      if (!rr.zenAnswered) break;
-    }
-    const cand = S.posts.filter(p => !p.ai && !p.ra && p.text && !p.zenLikeChecked && fresh(p) && !waiting.has(p.id)).slice(0, 2);
-    for (const p of cand) {
-      if (!(await cleared(p))) continue;
-      p.zenLikeChecked = true;
-      const a = await zGen(ZSYS_LIKE, p.text);
-      if (/^yes/i.test(a)) p.zenLike = true;
-    }
-    if (cand.length) { persist(); zenRefresh(); }
-    if (waiting.size) setTimeout(zenTick, 6000);
-  } catch (e) {} finally { zenBusy = false; if (zenAgain) { zenAgain = false; setTimeout(zenTick, 300); } }
+  } catch (e) {} finally { zenBusy = false; }
+}
+// asks the server to look at the owner's new posts right away instead of at its next minute
+let zenNudgeAt = 0;
+async function zenNudge() {
+  if (!sbUser || !S || !zOn() || !isOwner() || Date.now() - zenNudgeAt < 8000) return;
+  zenNudgeAt = Date.now();
+  try {
+    const r = await zFetch({ action: "tick" });
+    const j = await r.json().catch(() => null);
+    if (j && (j.owner || j.liked)) loadFeed().catch(() => {});
+  } catch (e) {}
 }
 // Zenith's posts, replies, likes and chats are mirrored into a table that only the owner can read,
 // so they follow the owner to every device and nobody else can see or touch them.
@@ -2046,10 +2009,23 @@ async function zenStart() {
   await zenPull();
   zenSyncOn = true;
   zenSync();
+  if (!S.zen.id) sb.from("accounts").select("id").eq("username", "zenith").maybeSingle().then(({ data }) => { if (data) { S.zen.id = data.id; persist(); } }, () => {});
+  if (S.zen.pfpPushed !== (S.zen.pfpAt || 0)) zenPushProfile();
   const top = stack[stack.length - 1].r;
   if (!layer.childElementCount && (top === "zen" || (stack.length === 1 && top === "home"))) render();
 }
 // his picture and banner style only: no name and no bio
+// his public account gets the same picture and banner style the owner chose
+async function zenPushProfile() {
+  if (!sbUser || !isOwner()) return;
+  try {
+    const url = S.zen.pfp ? await zenPfpUrl() : null;
+    if (S.zen.pfp && !url) return;
+    const r = await zFetch({ action: "profile", avatar: url, theme: S.zen.bn === "avatar" ? "avatar" : "" });
+    const j = await r.json().catch(() => null);
+    if (j && j.ok) { S.zen.pfpPushed = S.zen.pfpAt || 0; persist(); }
+  } catch (e) {}
+}
 function zenEdit() {
   let pfp = S.zen.pfp || null, bnVal = S.zen.bn === "avatar" ? "avatar" : "default";
   const bn = h("div", { class: "ebanner" });
@@ -2085,31 +2061,20 @@ function zenEdit() {
       if (bnVal === "avatar" && pfp) S.zen.bn = "avatar"; else delete S.zen.bn;
       S.zen.pfpAt = Date.now();
       persist(); close(); render();
-      if (pfp) zenPfpUrl();
+      zenPushProfile();
     }
   });
 }
+// his page is his real profile now, the same one everybody sees
 function zenV() {
+  if (S.zen.id) { userV({ r: "user", id: S.zen.id }); return; }
   topEl.append(bar(menuBtn(), ttl("Zenith")));
-  const av = zenAv(88);
-  av.className = "av xl zenav";
-  av.style.width = "";
-  av.style.height = "";
-  const mine = S.posts.filter(p => p.ai && !p.parent).sort((a, b) => b.t - a.t);
-  const zbn = h("div", { class: "banner" });
-  if (S.zen.pfp && S.zen.bn === "avatar") zbn.append(mkImg(S.zen.pfp, "pic blur"));
-  main.append(zbn, h("div", { class: "pinfo" },
-    h("div", { class: "arow" }, av,
-      h("div", { class: "btns" }, h("button", { class: "ghost", onclick: zenEdit }, "Edit Profile"))),
-    h("h1", { class: "pname" }, "Zenith"),
-    h("p", { class: "phand" }, "@zenith"),
-    h("div", { class: "pstat" }, h("span", {}, h("b", {}, mine.length), mine.length === 1 ? " post" : " posts"))));
-  const zt = S.ui.zenTab || "posts";
-  const tabs = [["posts", "Posts"], ["replies", "Replies"], ["likes", "Likes"]];
-  main.append(h("div", { class: "ptabs", role: "tablist" }, tabs.map(t => h("button", { class: "tab" + (t[0] === zt ? " on" : ""), role: "tab", onclick: () => { S.ui.zenTab = t[0]; persist(); render("root"); } }, h("span", {}, t[1])))));
-  if (zt === "posts") main.append(postList(mine, { empty: emptyState("smile", "No posts yet.") }));
-  else if (zt === "replies") main.append(postList(S.posts.filter(p => p.ai && p.parent).sort((a, b) => b.t - a.t), { replyTo: true, empty: emptyState("reply", "No replies yet.") }));
-  else main.append(postList(S.posts.filter(p => !p.ai && p.zenLike).sort((a, b) => b.t - a.t), { replyTo: true, empty: emptyState("heart", "Zenith has not liked anything yet.") }));
+  main.append(loadingEl());
+  sb.from("accounts").select("id").eq("username", "zenith").maybeSingle().then(({ data }) => {
+    if (!data) return;
+    S.zen.id = data.id; persist();
+    if (stack[stack.length - 1].r === "zen") render();
+  }, () => {});
 }
 const rowSubs = {};
 function settingsV() {
@@ -2774,8 +2739,10 @@ function userV(cur) {
   const msgBtn = h("button", { class: "ghost", style: "display:none", onclick: () => openDm(cur.id) }, "Message");
   const blockBtn = h("button", { class: "ghost", disabled: true }, "Block");
   const pnEl = h("h1", { class: "pname" }, who.name), phEl = h("p", { class: "phand" }, "@" + who.handle);
+  // on his own profile the owner changes how Zenith looks; everybody else can follow or block him like anyone
+  const ownerOfZen = !!(S.zen && cur.id === S.zen.id && isOwner());
   const info = h("div", { class: "pinfo" },
-    h("div", { class: "arow" }, av, h("div", { class: "btns" }, followBtn, msgBtn, blockBtn)),
+    h("div", { class: "arow" }, av, h("div", { class: "btns" }, ownerOfZen ? h("button", { class: "ghost", onclick: zenEdit }, "Edit Profile") : [followBtn, msgBtn, blockBtn])),
     pnEl, phEl, stat, bio);
   main.append(bn, info);
   const tabsEl = h("div", { class: "ptabs", role: "tablist" });
@@ -3023,7 +2990,7 @@ async function pushPostNow(np, par, hasImgs, quiet) {
   if (error && error.code === "23505") { data = { id: np.rid }; error = null; }
   // deleted on this phone while it was still uploading: it goes from the server again
   if (!error && data && !S.posts.includes(np)) { S.pendDel = (S.pendDel || []).concat(data.id); persist(); serverDelete([{ remote: data.id, media: urls || [] }]); return; }
-  if (!error && data) { np.remote = data.id; np.media = urls || []; persist(); }
+  if (!error && data) { np.remote = data.id; np.media = urls || []; persist(); if (isOwner()) { setTimeout(zenNudge, 22000); setTimeout(zenNudge, 50000); } }
   else {
     if (urls && urls.length) sb.storage.from("media").remove(urls.map(u => storagePath(u, "media")).filter(Boolean)).then(() => {}, () => {});
     // posting is paused: this post is dropped instead of being tried again and again

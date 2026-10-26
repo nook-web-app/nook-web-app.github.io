@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.11.1";
+const APP_VERSION = "3.11.2";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1440,7 +1440,6 @@ function convV(c) {
     sync();
   };
   const att = pickBtn("image", "Add photo", false, f => addMedia(f, pend, jobs, 4, draw), false, f => addMedia(f, pend, jobs, 4, draw));
-  onPastePics(ta, f => addMedia(f, pend, jobs, 4, draw));
   ta.addEventListener("input", sync);
   send.addEventListener("click", () => {
     const v = cleanText(ta.value.trim());
@@ -2310,16 +2309,6 @@ async function shrink(file, o) {
   if (out.length < 64) throw new Error("could not encode");
   return out;
 }
-// photos pasted into a box (long press then paste, or a screenshot offered by the keyboard) are attached like picked ones
-function onPastePics(ta, take) {
-  ta.addEventListener("paste", e => {
-    const cd = e.clipboardData;
-    const fs = cd ? [...(cd.files || [])].filter(f => /^image\//i.test(f.type)) : [];
-    if (!fs.length) return;
-    e.preventDefault();
-    take(fs);
-  });
-}
 // the copied photo is read from the clipboard on a double tap of the photo button; the phone asks once whether to allow it
 async function clipboardPics() {
   try {
@@ -3072,7 +3061,6 @@ function openCompose(o) {
   const grid = h("div", { class: "cimgs" });
   const bCam = pickBtn("camera", "Take a photo", true, files => addFiles(files));
   const bImg = pickBtn("image", "Add photos", false, files => addFiles(files), true, files => addFiles(files));
-  onPastePics(ta, files => addFiles(files));
   const keepDraft = () => { if (!ed && !parent && ta.value.trim()) { S.draft = { text: ta.value, t: Date.now() }; persist(); } };
   const kind = ed ? "Save" : parent ? "Reply" : "Post";
   const m = modal({
@@ -5676,7 +5664,6 @@ function dmV(c) {
     sync();
   };
   const att = pickBtn("image", "Add photo", false, f => addMedia(f, pend, jobs, 4, draw), true, f => addMedia(f, pend, jobs, 4, draw));
-  onPastePics(ta, f => addMedia(f, pend, jobs, 4, draw));
   const lockNote = h("div", { class: "lockn", hidden: true });
   const zpop = h("button", { class: "zpop", type: "button" }, zenAv(34), h("span", {}, h("b", {}, "Zenith AI")));
   zpop.addEventListener("pointerdown", e => e.preventDefault());

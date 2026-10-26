@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.15.0";
+const APP_VERSION = "3.15.1";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -510,7 +510,12 @@ function rich(text) {
   text.split(/(https?:\/\/\S+|#[\p{L}\p{N}_]+)/gu).forEach((part, i) => {
     if (i % 2 === 0) {
       // words between two pairs of stars are bold
-      part.split(/\*\*([^*\n]+?)\*\*/).forEach((seg, j) => { if (seg) out.push(j % 2 ? h("b", {}, seg) : seg); });
+      part.split(/\*\*([^*\n]+?)\*\*/).forEach((seg, j) => {
+        if (!seg) return;
+        if (j % 2) { out.push(h("b", {}, seg)); return; }
+        // one star on each side slants the words
+        seg.split(/\*([^*\s](?:[^*\n]*[^*\s])?)\*/).forEach((w, k) => { if (w) out.push(k % 2 ? h("i", {}, w) : w); });
+      });
       return;
     }
     if (part.startsWith("#")) {
@@ -2582,6 +2587,13 @@ function feedFail() {
   const cur = stack[stack.length - 1];
   if (cur && cur.r === "home" && !layer.childElementCount && !S.posts.length) render();
 }
+// counts are asked for in small groups, so a long list of ids never makes the address too long
+async function rowsFor(table, ids) {
+  const parts = [];
+  for (let i = 0; i < ids.length; i += 80) parts.push(ids.slice(i, i + 80));
+  const res = await Promise.all(parts.map(c => sb.from(table).select("post_id, user_id").in("post_id", c)));
+  return { data: res.flatMap(r => (r && r.data) || []) };
+}
 async function loadFeed() {
   if (!sbUser || !S) return;
   let pq = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url").order("created_at", { ascending: false }).limit(300);
@@ -2606,16 +2618,16 @@ async function loadFeed() {
   } catch (e) { rpRows = []; }
   const pend = new Set(S.pendDel || []);
   if (S.pendDel && S.pendDel.length) { try { await deleteRemote(S.pendDel.map(r => ({ remote: r }))); } catch (e) {} }
-  const ids = posts.filter(p => !p.parent_id).map(p => p.id);
+  const ids = posts.map(p => p.id);
   const feedRes = await Promise.all([
     sb.from("likes").select("post_id").eq("user_id", sbUser.id),
     sb.from("reposts").select("post_id, created_at").eq("user_id", sbUser.id),
     sb.from("blocks").select("blocked_id").eq("blocker_id", sbUser.id),
     sb.from("blocks").select("blocker_id").eq("blocked_id", sbUser.id),
-    ids.length ? sb.from("likes").select("post_id").in("post_id", ids) : { data: [] },
-    ids.length ? sb.from("reposts").select("post_id").in("post_id", ids) : { data: [] },
-    ids.length ? sb.from("post_shares").select("post_id, user_id").in("post_id", ids) : { data: [] },
-    ids.length ? sb.from("post_saves").select("post_id, user_id").in("post_id", ids) : { data: [] },
+    rowsFor("likes", ids),
+    rowsFor("reposts", ids),
+    rowsFor("post_shares", ids),
+    rowsFor("post_saves", ids),
     sb.from("accounts").select(ACC_COLS).eq("id", sbUser.id).maybeSingle(),
     sb.from("follows").select("followee_id").eq("follower_id", sbUser.id).limit(1000)
   ]);

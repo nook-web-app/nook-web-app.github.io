@@ -50,6 +50,23 @@ async function finishGoogle(oa, raw) {
   const say = t => setTimeout(() => { try { toast(t); } catch (e) {} }, 1500);
   const fail = oa.mode === "link" ? "Could not link Google. That Google account may already belong to another Nook account" : "Google sign in did not work. Try again";
   if (!p.get("access_token") || !p.get("refresh_token")) { say(fail); return; }
+  if (oa.mode === "add") {
+    // another account joins the list on this phone: the account that is signed in stays as it is
+    const at = p.get("access_token"), rt = p.get("refresh_token");
+    const g = await callFn("google-guard", {}, at).catch(() => ({ ok: false, body: {} }));
+    if (!g.ok || !g.body.ok) { say(g.body && g.body.error === "no_account" ? "No Nook account uses that Google email" : "Could not add that account. Try again"); return; }
+    const { data: u } = await sb.auth.getUser(at);
+    const { data: cur } = await sb.auth.getSession();
+    if (!u || !u.user) { say("Could not add that account. Try again"); return; }
+    if (cur && cur.session && u.user.id === cur.session.user.id) { say("That is the account you are in"); return; }
+    const { data: info } = await sb.from("accounts").select("id, username, display_name, avatar").eq("id", u.user.id).maybeSingle();
+    if (!info || !info.username) { say("Could not load that account. Try again"); return; }
+    const list = await acctList();
+    await acctPut("list", list.filter(a => a.id !== info.id).concat({ id: info.id, rt, username: info.username, name: info.display_name || info.username, avatar: typeof info.avatar === "string" && info.avatar.length < 400000 ? info.avatar : null, main: false }));
+    linkSavedAccounts(info.id, at).catch(() => {});
+    say("Account added");
+    return;
+  }
   const { data, error } = await sb.auth.setSession({ access_token: p.get("access_token"), refresh_token: p.get("refresh_token") });
   if (error || !data || !data.user) { say(fail); return; }
   if (oa.mode === "link") { say("Google linked"); return; }
@@ -69,7 +86,7 @@ async function takeHashLogin() {
   if (/access_token=|error_description=/.test(raw)) {
     let oa = null;
     try { oa = JSON.parse(localStorage.getItem(OAUTH_KEY) || "null"); localStorage.removeItem(OAUTH_KEY); } catch (e) {}
-    if (oa && Date.now() - oa.t < 15 * 60000 && (oa.mode === "in" || oa.mode === "link")) { await finishGoogle(oa, raw); return; }
+    if (oa && Date.now() - oa.t < 15 * 60000 && (oa.mode === "in" || oa.mode === "link" || oa.mode === "add")) { await finishGoogle(oa, raw); return; }
   }
   if (!/access_token=/.test(raw)) return;
   const p = new URLSearchParams(raw.replace(/^#/, ""));
@@ -211,7 +228,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.18.0";
+const APP_VERSION = "3.18.1";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -4219,6 +4236,7 @@ function addAccountModal() {
       h("h1", {}, "Nook"),
       h("p", { class: "sub" }, "Sign in to continue"),
       email, pw.wrap, msg, go1,
+      h("button", { class: "ghost", onclick: () => googleGo("add") }, "Continue with Google"),
       h("button", { class: "tbtn", onclick: () => recoverModal(email.value.trim()) }, "Forgot password?"),
       h("button", { class: "ghost", onclick: () => m.close(newAccountModal) }, "Make an account"))],
     onAction: close => add(close)
@@ -4782,11 +4800,11 @@ function plainErr(e, fallback) {
   if (/message_too_long/i.test(m)) return "That message is too long";
   return fallback || "Something went wrong. Try again";
 }
-async function callFn(name, body) {
+async function callFn(name, body, token) {
   // a lost connection or a timeout is an answer with status 0, never a thrown error
   try {
     const { data } = await sb.auth.getSession();
-    const tok = data && data.session ? data.session.access_token : null;
+    const tok = token || (data && data.session ? data.session.access_token : null);
     const r = await fetch(SB_URL + "/functions/v1/" + name, { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: JSON.stringify(body || {}), signal: AbortSignal.timeout ? AbortSignal.timeout(25000) : undefined });
     let j = null;
     try { j = await r.json(); } catch (e) {}

@@ -176,7 +176,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.19.0";
+const APP_VERSION = "3.19.1";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2178,8 +2178,8 @@ function settingsV() {
     if (!pkOk()) { toast("This phone cannot do that"); return; }
     if (!pkRows) { toast("Checking, try again in a moment"); return; }
     sheet([
-      { icon: "check", label: "Add this phone", fn: async () => { if (await passkeyAdd()) { toast("Saved. You can sign in with it now"); render(); } } },
-      ...pkRows.map(k => ({ icon: "close", label: "Remove " + (k.name || "key"), danger: true, fn: async () => {
+      ...(pkRows.length ? [] : [{ icon: "check", label: "Add this phone", fn: async () => { if (await passkeyAdd()) { toast("Saved. You can sign in with it now"); render(); } } }]),
+      ...pkRows.map(k => ({ icon: "close", label: pkRows.length > 1 ? "Remove " + (k.name || "key") : "Remove", danger: true, fn: async () => {
         const { error } = await sb.from("passkeys").delete().eq("id", k.id);
         toast(error ? "Could not remove it" : "Removed"); if (!error) render();
       } })),

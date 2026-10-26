@@ -176,7 +176,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.17.0";
+const APP_VERSION = "3.17.1";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1321,7 +1321,7 @@ function profileV() {
     h("div", { class: "arow" }, av,
       h("div", { class: "btns" },
         h("button", { class: "ghost", onclick: editProfile }, "Edit Profile"),
-        ibtn("dots", "More", () => sheet([{ icon: "copy", label: "Copy handle", fn: () => copy("@" + pr.handle) }, { icon: "sliders", label: "Settings", fn: () => root("settings") }])))),
+        h("button", { class: "ghost", "aria-label": "More", onclick: () => sheet([{ icon: "copy", label: "Copy handle", fn: () => copy("@" + pr.handle) }, { icon: "sliders", label: "Settings", fn: () => root("settings") }, { label: "Cancel", cancel: true }], "@" + pr.handle) }, ic("dots", 20)))),
     pr.name ? h("h1", { class: "pname" }, pr.name) : null,
     h("p", { class: "phand" }, "@" + pr.handle),
     h("div", { class: "pstat" }, h("span", {}, h("b", {}, nPosts), nPosts === 1 ? " post" : " posts"), h("span", { class: "lk", onclick: () => go({ r: "followers", id: sbUser.id }) }, h("b", { id: "pFol" }, "0"), " followers"), h("span", { class: "lk", onclick: () => go({ r: "following", id: sbUser.id }) }, h("b", { id: "pFng" }, "0"), " following")),

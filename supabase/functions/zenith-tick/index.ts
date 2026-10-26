@@ -271,7 +271,7 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
       let lk = { note: "", pics: [] as unknown[] };
       try { lk = await linkInfo(String(p.body)); } catch { /* fine without */ }
       let text = "";
-      try { text = (await ask(replySystem, "Post: " + String(p.body).slice(0, 2000) + lk.note, lk.pics)).slice(0, 600); } catch { text = ""; }
+      try { text = (await ask(replySystem + " You are replying to a post by someone you do not know, and they can never answer you, so never ask a question.", "Post: " + String(p.body).slice(0, 2000) + lk.note, lk.pics)).slice(0, 600); } catch { text = ""; }
       if (text && (await say(zen, text, p.id))) { out.others++; acted += " reply"; }
     }
     await mark(p.id, acted.trim() || "none");

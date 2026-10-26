@@ -3,7 +3,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 const DAY = 864e5, HOUR = 36e5;
 // he only reacts to posts made after this moment, never to what was already there
-const ROLLOUT = Date.parse("2026-10-26T01:00:00Z");
+const ROLLOUT = Date.parse("2026-10-26T00:38:00Z");
 // used only when the app has not saved its own instructions yet
 const FALLBACK = "You are Zenith, a 19 year old gay furry femboy, age rating 18+, not dark. Sound natural and relaxed like a friend. Never use emojis, capital letters or line breaks. You may use text faces like :3 or uwu. You are writing one original post for your own profile. Keep it under 35 words, around 20 on average. Plain text only. No hashtags and no emojis.";
 

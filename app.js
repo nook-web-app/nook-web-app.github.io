@@ -177,7 +177,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.20.0";
+const APP_VERSION = "3.20.1";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2266,7 +2266,7 @@ function settingsV() {
       const { error } = await sb.rpc("set_my_deactivated", { flag: true });
       if (error) { toast("Could not deactivate"); return; }
       await pushDetach().catch(() => {});
-      await leaveThisAccount();
+      await leaveThisAccount(true);
     }))));
   main.append(sec("Your data"));
   main.append(h("div", { class: "group" },
@@ -4051,10 +4051,10 @@ async function rememberAccount(info) {
   await acctPut("list", list);
 }
 const mainAccountId = list => ((list.find(a => a.main) || list[0]) || {}).id;
-async function forgetAccount(id) {
+async function forgetAccount(id, keepSnap) {
   const list = await acctList();
   await acctPut("list", list.filter(a => a.id !== id));
-  await acctDel("snap:" + id).catch(() => {});
+  if (!keepSnap) await acctDel("snap:" + id).catch(() => {});
 }
 async function saveSnap(id) { await acctPut("snap:" + id, JSON.stringify(S)); }
 async function loadSnap(id, entry) {
@@ -4126,12 +4126,14 @@ async function signOutNow() {
   await Promise.race([pushDetach().catch(() => {}), wait(2000)]);
   await leaveThisAccount();
 }
-async function leaveThisAccount() {
+// keep: nothing of this account is deleted from the phone (deactivating); its saved copy waits for the day it signs back in
+async function leaveThisAccount(keep) {
   leaving = true;
   const me = sbUser.id;
-  await forgetAccount(me);
+  if (keep) await saveSnap(me).catch(() => {});
+  await forgetAccount(me, !!keep);
   // the saved copies of this account's inbox and chats leave the phone with it
-  try { Object.keys(localStorage).filter(k => k.startsWith(CACHE_PFX) && k.includes(me)).forEach(k => localStorage.removeItem(k)); } catch (e) {}
+  if (!keep) { try { Object.keys(localStorage).filter(k => k.startsWith(CACHE_PFX) && k.includes(me)).forEach(k => localStorage.removeItem(k)); } catch (e) {} }
   const rest = await acctList();
   const next = rest.find(a => a.id === mainAccountId(rest)) || rest[0];
   // this phone's login is removed here and now; telling the server happens in the background and can fail without blocking anything
@@ -6840,7 +6842,14 @@ async function boot() {
     }
     ageHeld = !!(acct && acct.age_hold);
     if (!aerr && (!acct || acct.deactivated)) { try { sessionStorage.setItem("nook-notice", acct ? "That account is deactivated. Sign in again to bring it back." : "Your account could not be loaded. Sign in again."); } catch (e) {} await sb.auth.signOut({ scope: "local" }).catch(() => {}); sbUser = null; }
-    else if (sbUser && await foreignLocalData(acct)) { await wipeLocal(true); try { localStorage.setItem(LOCAL_UID, sbUser.id); } catch (e) {} location.reload(); return; }
+    else if (sbUser && await foreignLocalData(acct)) {
+      // an account that was deactivated here comes back with everything it had on this phone
+      let raw = null;
+      try { raw = await acctGet("snap:" + sbUser.id); } catch (e) {}
+      if (raw) await loadSnap(sbUser.id); else await wipeLocal(true);
+      try { localStorage.setItem(LOCAL_UID, sbUser.id); } catch (e) {}
+      location.reload(); return;
+    }
     if (sbUser && acct) {
       // no "Me" while the profile loads: the real name, handle and picture are in place before the first screen
       if (acct.username) S.profile.handle = acct.username;

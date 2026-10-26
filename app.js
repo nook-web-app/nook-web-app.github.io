@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.13.0";
+const APP_VERSION = "3.13.2";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -6590,6 +6590,32 @@ function xApply(id, p, first) {
     else S.lists = incoming;
   }
 }
+// replies that only live on this phone (they sit under a private answer of Zenith and cannot be posted) are kept sealed on the server too
+const privPosts = () => S.posts.filter(p => !p.ra && !p.ai && !p.remote && p.parent && !(byId(p.parent) || {}).remote);
+const privSig = p => srcHash("p|" + (p.text || "") + "|" + (p.t || 0) + "|" + (p.parent || ""));
+async function notePriv(ns, key, r) {
+  const lid = r.id.slice(2), here = S.posts.find(x => x.id === lid);
+  if (r.deleted) {
+    if (here && !here.remote && ns.pushed[r.id] === privSig(here)) { S.posts = S.posts.filter(x => x !== here); ns.pushed[r.id] = "gone"; return true; }
+    if (!here) ns.pushed[r.id] = "gone";
+    return false;
+  }
+  // known on this phone but gone from it: the removal goes up, it is not brought back
+  if (ns.pushed[r.id] && !here) return false;
+  if (here && ns.pushed[r.id] !== privSig(here)) return false;
+  const p = await noteOpen(key, r.body);
+  const text = String(p.x || "").slice(0, 5000), t = Number(p.t) || Date.now(), pa = typeof p.pa === "string" ? p.pa : null;
+  if (here) {
+    if (here.text === text && here.t === t && (here.parent || null) === pa) return false;
+    here.text = text; here.t = t; here.parent = pa;
+    ns.pushed[r.id] = privSig(here);
+    return true;
+  }
+  const np = { id: lid, text, t, imgs: [], parent: pa, liked: false, reposted: false, saved: false, pinned: false };
+  S.posts.push(np);
+  ns.pushed[r.id] = privSig(np);
+  return true;
+}
 async function noteExtra(ns, key, r) {
   if (r.deleted || !xDocs()[r.id]) return false;
   const known = ns.pushed[r.id], cur = xDocs()[r.id];
@@ -6648,6 +6674,7 @@ const notePath = md => { const m = /\/object\/public\/dm-media\/([^?#]+)/.exec(m
 // takes one row from the server into the notes on this phone; true when something changed
 async function noteTake(ns, key, r) {
   if (r.id.startsWith("x:")) return noteExtra(ns, key, r);
+  if (r.id.startsWith("p:")) return notePriv(ns, key, r);
   const isChat = r.id.startsWith("c:"), rid = r.id.slice(2);
   if (r.deleted) {
     if (isChat) {
@@ -6717,6 +6744,10 @@ async function notesPull(ns, key) {
 async function notesPush(ns, key) {
   const exist = new Set();
   S.chats.forEach(c => { exist.add("c:" + c.id); (c.msgs || []).forEach(m => { if (!m.id) m.id = uid(); exist.add("m:" + m.id); }); });
+  // the settings, saved and list copies are kept as they are, never marked as removed
+  Object.keys(xDocs()).forEach(id => exist.add(id));
+  const priv = privPosts();
+  priv.forEach(p => exist.add("p:" + p.id));
   const todo = [];
   S.chats.filter(isNoteChat).forEach(c => {
     if (ns.pushed["c:" + c.id] !== noteCSig(c)) todo.push({ id: "c:" + c.id, sig: noteCSig(c), c });
@@ -6761,6 +6792,10 @@ async function notesPush(ns, key) {
     for (const id of Object.keys(xd)) {
       const sig = xSig(xd[id]);
       if (ns.pushed[id] !== sig) xrows.push({ id, sig, row: { owner_id: sbUser.id, id, body: await noteSeal(key, xd[id]), media: [], deleted: false } });
+    }
+    for (const p of priv) {
+      const id = "p:" + p.id, sig = privSig(p);
+      if (ns.pushed[id] !== sig) xrows.push({ id, sig, row: { owner_id: sbUser.id, id, body: await noteSeal(key, { i: p.id, pa: p.parent, x: p.text || "", t: p.t }), media: [], deleted: false } });
     }
     if (xrows.length) {
       const { error } = await sb.from("notes_self").upsert(xrows.map(x => x.row), { onConflict: "owner_id,id" });

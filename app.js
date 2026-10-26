@@ -249,7 +249,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.7";
+const APP_VERSION = "3.22.8";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -5341,6 +5341,18 @@ function dmSignedUrl(url) {
   e.p.catch(() => { if (dmSigned.get(path) === e) dmSigned.delete(path); });
   return e.p;
 }
+// many photos are signed in one request instead of one each
+function dmSignBatch(mediaList) {
+  const paths = [...new Set(mediaList.map(md => dmPathOf(md && md.url)).filter(p => p && !(dmSigned.get(p) && dmSigned.get(p).t > Date.now())))];
+  if (paths.length < 2) return;
+  const bp = Promise.resolve(sb.storage.from(DM_BUCKET).createSignedUrls(paths, 3600));
+  const t = Date.now() + 3000000;
+  paths.forEach(p => {
+    const e = { t, p: bp.then(r => { const row = r && r.data && r.data.find(x => x.path === p); if (!row || !row.signedUrl) throw new Error("gone"); return row.signedUrl; }) };
+    dmSigned.set(p, e);
+    e.p.catch(() => { if (dmSigned.get(p) === e) dmSigned.delete(p); });
+  });
+}
 const acctCache = new Map();
 let rtChan = null;
 let tpChan = null;
@@ -5877,7 +5889,7 @@ async function loginBackup(pw, opt) {
   } catch (e) { return "fail"; }
 }
 const dropEncUrls = () => { const old = [...e2eEnc.values()]; e2eEnc.clear(); setTimeout(() => old.forEach(p => p.then(u => { if (u) URL.revokeObjectURL(u); }, () => {})), 60000); };
-const resetKeyCaches = () => { e2eOkAt = 0; e2eMine.delete(sbUser.id); e2eShared.clear(); dropEncUrls(); };
+const resetKeyCaches = () => { e2eOkAt = 0; e2eMine.delete(sbUser.id); e2eShared.clear(); e2eReady.clear(); dropEncUrls(); };
 // danger actions ask for the account email and the login password first
 function confirmLogin(title, warn, label, fn) {
   const em = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "off", autocapitalize: "off", "aria-label": "Email" });
@@ -6226,6 +6238,14 @@ function sharedKey(otherId) {
   }
   return e2eShared.get(otherId);
 }
+// reading uses the key this phone already worked out and refreshes it behind the scenes, so no message waits for a round trip to the server
+const e2eReady = new Map();
+function sharedKeyFast(otherId) {
+  const hit = e2eReady.get(otherId);
+  const fresh = sharedKey(otherId).then(k => { e2eReady.set(otherId, k); return k; });
+  if (hit) { fresh.catch(() => {}); return Promise.resolve(hit); }
+  return fresh;
+}
 async function sealText(otherId, text) {
   const key = await sharedKey(otherId);
   keyGate(otherId);
@@ -6385,7 +6405,7 @@ async function openText(otherId, raw, flag) {
   if (raw.slice(0, 5) !== "e2e1:") return flag ? "[not encrypted] " + raw : raw;
   try {
     const parts = raw.slice(5).split(".");
-    const key = await sharedKey(otherId);
+    const key = await sharedKeyFast(otherId);
     const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(parts[0]) }, key, fromB64(parts[1]));
     return new TextDecoder().decode(pt);
   } catch (e) { return e2eLocked ? "Locked. Unlock your messages in Settings" : "Can't open this one (the chat key changed)"; }
@@ -6393,7 +6413,7 @@ async function openText(otherId, raw, flag) {
 function loadEncMedia(md, otherId) {
   if (!e2eEnc.has(md.url)) {
     const p = (async () => {
-      const key = await sharedKey(otherId);
+      const key = await sharedKeyFast(otherId);
       // a peer chooses this link, so only this app's own storage is fetched
       const res = await fetch(await dmSignedUrl(md.url));
       if (!res.ok) throw new Error("gone");
@@ -6408,7 +6428,7 @@ function loadEncMedia(md, otherId) {
   }
   return e2eEnc.get(md.url);
 }
-async function openRows(rows, otherId, waitFor) {
+async function openRows(rows, otherId, waitFor, wait) {
   const out = await Promise.all(rows.map(async m => {
     const t = await openText(otherId, m.body);
     const rp = rPostOf(t);
@@ -6422,11 +6442,13 @@ async function openRows(rows, otherId, waitFor) {
   // a row that never went through the sealed format is marked, so a server or a stranger cannot pass plain text off as a private message
   out.forEach(m => { if (typeof m.body === "string" && m.body && m.body.slice(0, 5) !== "e2e1:" && !m.ai && !m.rpost && !m.zpost) m.plain = true; });
   // photos are opened before their bubbles show, so no grey box sits on the screen while they load (only the newest ones are waited for when there are many)
+  dmSignBatch(rows.flatMap(m => m.media || []));
   const jobs = [];
   rows.slice(-(waitFor || rows.length)).forEach(m => (m.media || []).forEach(md => { if (md.iv && !/^video\//.test(md.type || "")) jobs.push(loadEncMedia(md, otherId).catch(() => {})); }));
   // shared posts are fetched, and their first photo loaded, before the bubbles show
   out.slice(-(waitFor || out.length)).forEach(m => { if (m.rpost) jobs.push(loadRPost(m.rpost.id, m.rpost.u).then(d => (d && d.imgs[0] ? preloadImg(d.imgs[0]) : null)).catch(() => {})); });
-  if (jobs.length) await Promise.race([Promise.all(jobs), new Promise(r => setTimeout(r, 6000))]);
+  // the bubbles show at once with their picture frames; photos and shared posts fill in as they arrive (a caller that wants them first asks with wait)
+  if (jobs.length && wait) await Promise.race([Promise.all(jobs), new Promise(r => setTimeout(r, 6000))]);
   return out;
 }
 async function sendDm(otherId, text, srcs, dims) {
@@ -6805,6 +6827,8 @@ function openDm(id) {
 }
 function dmV(c) {
   if (e2eLocked) promptUnlock();
+  // the key of this chat is worked out while everything else loads
+  sharedKeyFast(c.id).catch(() => {});
   let busy = false, locked = "", tEl = null, tRaf = 0;
   const me = sbUser.id;
   const peer = { other: c.id, name: "user" };
@@ -7070,8 +7094,6 @@ function dmV(c) {
   if (hit && Array.isArray(hit.v) && hit.v.length) syncRows(hit.v, { initial: true });
   else if (hit && Array.isArray(hit.v)) hint("No messages yet. Say hi.");
   else if (!(pre && pre.length)) hint("load");
-  // the key of this chat is worked out while the messages download, so opening them does not wait for it
-  sharedKey(c.id).catch(() => {});
   pull().then(() => { scrollEnd(); }).catch(() => { if (!list.querySelector("[data-mid], .tmpm")) hint("Could not load messages. Trying again..."); });
   sb.from("notifications").update({ read_at: new Date().toISOString() }).eq("user_id", me).eq("actor_id", c.id).eq("kind", "message").is("read_at", null).then(() => refreshBadge());
   sync();

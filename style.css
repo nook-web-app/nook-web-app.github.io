@@ -478,5 +478,5 @@ img.lz{aspect-ratio:var(--ar,4/3);background:var(--bg2)}
 .imgs.n1 img.lz{height:auto;max-height:min(460px,60vh)}
 .zimgs img.lz{max-height:260px}
 
-html.shield-on::after{content:"";position:fixed;inset:0;background:#000;z-index:2147483647}
+html.shield-on::after{content:"";position:fixed;inset:0;background:var(--bg);z-index:2147483647}
 @media print{html.shield-on body{display:none!important}}

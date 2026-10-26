@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.11.2";
+const APP_VERSION = "3.11.3";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -6207,11 +6207,12 @@ function showModNotice(n) {
   if (!n || modShown.has(n.id)) return;
   modShown.add(n.id);
   if (n.kind === "exposed") { showExposedNotice(n); return; }
-  if (n.post_id) dropLocalPosts([n.post_id]);
+  try { if (n.post_id) dropLocalPosts([n.post_id]); } catch (e) {}
   // somebody who said they are under 18 goes straight to the age check, no warning first
   if (n.kind === "minor") {
     sb.from("mod_notices").update({ seen_at: new Date().toISOString() }).eq("id", n.id).then(() => {}, () => {});
-    go({ r: "age" });
+    ageGate = true;
+    hist(false);
     render();
     return;
   }
@@ -6237,6 +6238,14 @@ function showModNotice(n) {
     lockP,
     h("button", { class: "pri", onclick: done }, "I understand"));
   layer.append(scrim, ov);
+}
+// the server decides who is on age hold: an open app asks again now and then, so the question always comes up
+async function checkAgeHold() {
+  if (!sbUser || ageGate) return;
+  try {
+    const { data, error } = await sb.rpc("my_age_hold");
+    if (!error && data === true) { ageGate = true; hist(false); render(); }
+  } catch (e) {}
 }
 async function checkModNotices() {
   if (!sbUser) return;
@@ -6483,7 +6492,8 @@ async function boot() {
   refreshBadge();
   pushSync();
   setInterval(checkBan, 60000);
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { checkBan(); refreshBadge(); checkModNotices().catch(() => {}); } });
+  setInterval(checkAgeHold, 45000);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { checkBan(); checkAgeHold(); refreshBadge(); checkModNotices().catch(() => {}); } });
 }
 // ---- notes to self: sealed on this phone and kept on every phone ----
 // each chat and each message is one row the server cannot read; nothing here ever makes the screen wait

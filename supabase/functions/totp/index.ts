@@ -46,14 +46,6 @@ async function openSecret(stored: string): Promise<string | null> {
   } catch { return null; }
 }
 
-// a short fingerprint of the caller's network address (cf-connecting-ip, else the last proxy hop; never the caller-written first entry)
-async function ipTag(req: Request): Promise<string> {
-  const fwd = (req.headers.get("x-forwarded-for") || "").split(",").map((x) => x.trim()).filter(Boolean);
-  const raw = (req.headers.get("cf-connecting-ip") || "").trim() || fwd[fwd.length - 1] || "none";
-  const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("nook-ip|" + raw)));
-  return Array.from(d.slice(0, 6), (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 }
@@ -200,6 +192,14 @@ Deno.serve(async (req) => {
       const found = await admin.rpc("nook_find_user", { ident });
       const id = typeof found.data === "string" ? found.data : null;
       if (id) {
+        // an account with the authenticator on gets the link only with a right code; otherwise the code is ignored
+        const trow = await getRow(id);
+        if (trow && trow.enabled) {
+          const rc = cleanCode(body.code);
+          if (!validCode(rc) || !(await attempt(trow))) return;
+          const rhit = await check(trow.secret, rc, trow.last_counter);
+          if (rhit == null || !(await claim(trow, rhit))) return;
+        }
         const { data } = await admin.auth.admin.getUserById(id);
         const email = data && data.user ? data.user.email : null;
         if (email) await admin.auth.resetPasswordForEmail(email, { redirectTo }).catch(() => {});
@@ -211,21 +211,8 @@ Deno.serve(async (req) => {
     return json({ ok: true });
   }
 
-  // tells the reset screen whether to offer the authenticator option
-  if (action === "has") {
-    const ident = String(body.ident || "").trim();
-    if (!ident || ident.length > 100) return json({ enabled: false });
-    // each place may ask only so often, so the answer cannot be used to list which people use an authenticator
-    const hk = "h:" + (await ipTag(req));
-    const hl = await admin.rpc("nook_login_gate", { p_key: hk, p_max: 8, p_first: 15, p_cap: 240 });
-    if (hl.data) return json({ enabled: false });
-    await admin.rpc("nook_login_fail", { p_key: hk, p_max: 8, p_first: 15, p_cap: 240 });
-    const found = await admin.rpc("nook_find_user", { ident });
-    const id = typeof found.data === "string" ? found.data : null;
-    // an unknown name does the same lookup work as a real one, so the reply time says nothing
-    const r = id ? await getRow(id) : await getRow("00000000-0000-0000-0000-000000000000");
-    return json({ enabled: !!(id && r && r.enabled) });
-  }
+  // kept so older apps keep working; the answer is always the same, so nobody can tell who uses an authenticator
+  if (action === "has") return json({ enabled: false });
 
   const user = await userFrom(req);
   if (!user) return json({ error: "not signed in" }, 401);

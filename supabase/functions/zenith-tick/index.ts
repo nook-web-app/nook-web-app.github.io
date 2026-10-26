@@ -204,12 +204,18 @@ Deno.serve(async (req) => {
   return json({ ok: true, posted: pid });
 });
 
+const chainCache = new Map<string, unknown>();
 // the owner and Zenith only: what a thread says, from the top, so his answer fits what was said
 async function chainText(postId: string, owner: string, zen: string, last: string): Promise<{ text: string; zenIn: boolean }> {
   const rows: { id: string; user_id: string; body: string | null; parent_id: string | null }[] = [];
   let cur: string | null = postId;
   for (let i = 0; i < 10 && cur; i++) {
-    const { data } = await admin.from("posts").select("id, user_id, body, parent_id").eq("id", cur).maybeSingle();
+    // a thread that was already read in this run is not fetched again
+    let data = chainCache.get(cur) as typeof rows[number] | null | undefined;
+    if (data === undefined) {
+      data = ((await admin.from("posts").select("id, user_id, body, parent_id").eq("id", cur).maybeSingle()).data as typeof rows[number] | null) || null;
+      chainCache.set(cur, data);
+    }
     if (!data) break;
     rows.unshift(data as typeof rows[number]);
     cur = data.parent_id as string | null;
@@ -220,6 +226,7 @@ async function chainText(postId: string, owner: string, zen: string, last: strin
 }
 
 const GAP = 40000;
+let lastImport = 0;
 // the app answers nothing itself any more: this runs every minute (and when the owner nudges it) and handles three things
 // deno-lint-ignore no-explicit-any
 async function replies(owner: string, zen: string, docs: { doc_id: string; data: any }[], odds: number): Promise<Response> {
@@ -229,7 +236,9 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
   const from = new Date(Math.max(since, now - 6 * HOUR, ROLLOUT)).toISOString();
   const old = new Date(now - 8000).toISOString();
   // his older answers inside long threads become public a step at a time, as the owner's replies above them get posted
-  try { await importOld(owner, zen); } catch { /* the next minute tries again */ }
+  // the import is a one time job, so it runs at most every 5 minutes, not every minute
+  if (now - lastImport > 5 * 60000) { lastImport = now; try { await importOld(owner, zen); } catch { lastImport = 0; /* the next minute tries again */ } }
+  chainCache.clear();
   const replySystem = promptFor(docs, "reply");
   const out = { owner: 0, liked: 0, others: 0 };
   let budget = 4;
@@ -237,7 +246,8 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
   const cand = async (q: PromiseLike<{ data: unknown }>) => ((await q).data || []) as { id: string; user_id: string; body: string | null; parent_id: string | null; media_url: string | null; created_at: string }[];
   const seenOf = async (ids: string[]) => new Set(ids.length ? (((await admin.from("zenith_seen").select("post_id").in("post_id", ids)).data || []) as { post_id: string }[]).map((r) => r.post_id) : []);
   // belt and braces: a post he already answered is never answered again, whatever the notes say
-  const answered = async (pid: string) => !!(((await admin.from("posts").select("id").eq("parent_id", pid).eq("user_id", zen).limit(1)).data || []).length);
+  // one query for a whole list of posts
+  const answeredOf = async (ids: string[]) => new Set(ids.length ? (((await admin.from("posts").select("parent_id").in("parent_id", ids).eq("user_id", zen)).data || []) as { parent_id: string }[]).map((r) => r.parent_id) : []);
   // a post is claimed before it is answered: overlapping runs cannot both insert the claim, so only one of them answers
   const claim = async (pid: string) => !(await admin.from("zenith_seen").insert({ post_id: pid, acted: "claim" })).error;
   const release = async (pid: string) => { await admin.from("zenith_seen").delete().eq("post_id", pid).eq("acted", "claim"); };
@@ -247,10 +257,11 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
   // the newest 12 are taken (so old, already seen posts cannot fill the page), then handled oldest first
   const mineNew = (await cand(admin.from("posts").select("id, user_id, body, parent_id, media_url, created_at").eq("user_id", owner).eq("mod_status", "safe").eq("text_pending", false).gt("created_at", from).lt("created_at", old).order("created_at", { ascending: false }).limit(12))).reverse();
   const seenMine = await seenOf(mineNew.map((p) => p.id));
+  const doneMine = await answeredOf(mineNew.map((p) => p.id));
   for (const p of mineNew) {
     if (budget <= 0) break;
     if (seenMine.has(p.id) || !p.body || !String(p.body).trim()) { if (!seenMine.has(p.id)) await mark(p.id, "skip"); continue; }
-    if (await answered(p.id)) { await mark(p.id, "reply"); continue; }
+    if (doneMine.has(p.id)) { await mark(p.id, "reply"); continue; }
     const chain = await chainText(p.id, owner, zen, String(p.body));
     if (p.parent_id && !chain.zenIn) { await mark(p.id, "skip"); continue; }
     if (!(await claim(p.id))) continue;
@@ -286,13 +297,14 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
     const col = t === "blocks" ? "blocker_id" : "muter_id", tgt = t === "blocks" ? "blocked_id" : "muted_id";
     ((await admin.from(t).select(col).eq(tgt, zen)).data || []).forEach((r: Record<string, string>) => shut.add(r[col]));
   }
+  const doneOth = await answeredOf(others.map((p) => p.id));
   for (const p of others) {
     if (seenOth.has(p.id)) continue;
     if (shut.has(p.user_id)) { await mark(p.id, "shut"); continue; }
     // a reply to him is never answered; the post is only noted, so it is not looked at again
     if (p.parent_id && parents.get(p.parent_id) === zen) { await mark(p.id, "to-him"); continue; }
     if (!p.body || !String(p.body).trim() || budget <= 0) { if (!(budget <= 0)) await mark(p.id, "skip"); continue; }
-    if (await answered(p.id)) { await mark(p.id, "done"); continue; }
+    if (doneOth.has(p.id)) { await mark(p.id, "done"); continue; }
     const likeIt = Math.random() < odds, answerIt = Math.random() < odds;
     if (!likeIt && !answerIt) { await mark(p.id, "pass"); continue; }
     if (!(await claim(p.id))) continue;

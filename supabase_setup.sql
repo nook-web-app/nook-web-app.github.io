@@ -298,15 +298,12 @@ create policy "nicknames own" on public.nicknames for all to authenticated using
 create policy "chat clears own" on public.chat_clears for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
 create policy "bans read own" on public.bans for select to authenticated using (user_id = auth.uid());
 create policy "push subs own" on public.push_subs for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
-create policy "messages delete own" on public.messages for delete to authenticated using (auth.uid() = sender_id);
 create policy "notifications delete own" on public.notifications for delete to authenticated using (auth.uid() = user_id);
 -- the old insert policy let anyone skip the mutual follow rule, and clients can no longer create notifications
-alter policy "senders insert messages" on public.messages with check (false);
-alter policy "senders insert messages" on public.messages rename to "legacy insert disabled";
-alter policy "notifications insert as actor" on public.notifications with check (false);
-alter policy "notifications insert as actor" on public.notifications rename to "client inserts disabled";
+-- (these policies only exist in the live project, so a fresh run skips them)
+do $$ begin alter policy "senders insert messages" on public.messages with check (false); alter policy "senders insert messages" on public.messages rename to "legacy insert disabled"; exception when undefined_object then null; end $$;
+do $$ begin alter policy "notifications insert as actor" on public.notifications with check (false); alter policy "notifications insert as actor" on public.notifications rename to "client inserts disabled"; exception when undefined_object then null; end $$;
 -- storage: dm files need a select policy too, otherwise the storage api finds nothing to delete
-create policy "dm media delete own folder" on storage.objects for delete to authenticated using (bucket_id = 'dm-media' and (storage.foldername(name))[1] = auth.uid()::text);
 create policy "dm media read own folder" on storage.objects for select to authenticated using (bucket_id = 'dm-media' and (storage.foldername(name))[1] = auth.uid()::text);
 
 do $$ begin alter publication supabase_realtime add table public.follows; exception when duplicate_object then null; end $$;
@@ -446,6 +443,10 @@ create or replace function public.nook_block_banned() returns trigger language p
 begin
   if auth.uid() is not null and exists (select 1 from public.bans b where b.user_id = auth.uid()) then
     raise exception 'banned' using errcode = '42501';
+  end if;
+  -- the age_hold column is added further down in this file; a fresh run reads it only when the function is called
+  if auth.uid() is not null and exists (select 1 from public.accounts a where a.id = auth.uid() and a.age_hold) then
+    raise exception 'age_hold' using errcode = '42501';
   end if;
   return new;
 end $$;
@@ -706,10 +707,10 @@ alter table public.zenith_docs enable row level security;
 revoke all on public.zenith_docs from anon;
 grant select, insert, update, delete on public.zenith_docs to authenticated;
 grant all on public.zenith_docs to service_role;
-create policy "zenith owner select" on public.zenith_docs for select to authenticated using (owner_id = (select auth.uid()) and public.nook_is_owner());
-create policy "zenith owner insert" on public.zenith_docs for insert to authenticated with check (owner_id = (select auth.uid()) and public.nook_is_owner());
-create policy "zenith owner update" on public.zenith_docs for update to authenticated using (owner_id = (select auth.uid()) and public.nook_is_owner()) with check (owner_id = (select auth.uid()) and public.nook_is_owner());
-create policy "zenith owner delete" on public.zenith_docs for delete to authenticated using (owner_id = (select auth.uid()) and public.nook_is_owner());
+create policy "zenith owner select" on public.zenith_docs for select to authenticated using (owner_id = (select auth.uid()) and (select public.nook_is_owner()));
+create policy "zenith owner insert" on public.zenith_docs for insert to authenticated with check (owner_id = (select auth.uid()) and (select public.nook_is_owner()));
+create policy "zenith owner update" on public.zenith_docs for update to authenticated using (owner_id = (select auth.uid()) and (select public.nook_is_owner())) with check (owner_id = (select auth.uid()) and (select public.nook_is_owner()));
+create policy "zenith owner delete" on public.zenith_docs for delete to authenticated using (owner_id = (select auth.uid()) and (select public.nook_is_owner()));
 -- add yourself as the owner once:  insert into public.app_owner (user_id) values ('<your account id>');
 
 -- hardening from the pentest ------------------------------------------
@@ -1005,6 +1006,12 @@ grant update (username, display_name, bio, avatar, banner, banner_theme, public_
 -- identical duplicate policies
 drop policy if exists "signed in users read likes" on public.likes;
 drop policy if exists "reposts read all" on public.reposts;
+-- the duplicate is dropped above; make sure one read policy is left (the live project already has one)
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'reposts' and cmd = 'SELECT') then
+    create policy "reposts read all" on public.reposts for select to authenticated using (true);
+  end if;
+end $$;
 drop policy if exists "members read messages" on public.messages;
 drop policy if exists "media delete own" on storage.objects;
 

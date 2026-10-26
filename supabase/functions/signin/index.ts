@@ -14,9 +14,11 @@ const MAX_TRIES = 5;
 const MAX_TRIES_ALL = 200;
 // all the failed tries from one place on any email: one stranger cannot spray or use up the email-wide count alone
 const MAX_TRIES_IP = 30;
-// the email-wide lock starts short and is capped at 2 hours, so strangers cannot keep a real person out for days
+// the email-wide lock (only after many different places failed) starts short and is capped at 1 hour
 const ALL_FIRST = 10;
 const ALL_CAP = 60;
+// the email-wide lock only applies once this many different places have failed on the email inside an hour
+const ALL_MIN_IPS = 10;
 
 // a short fingerprint of the caller's network address; the address itself is never stored
 async function ipTag(req: Request): Promise<string> {
@@ -157,13 +159,19 @@ async function proveOld(email: string, password: string, ip: string): Promise<Re
     if (gateIp.error) return json({ error: "server" }, 500);
     if (gateIp.data) return json({ error: "locked", until: iso(gateIp.data) }, 429);
   }
-  const gateAll = await admin.rpc("nook_login_gate", { p_key: all, p_max: MAX_TRIES_ALL, p_first: ALL_FIRST, p_cap: ALL_CAP });
-  if (gateAll.error) return json({ error: "server" }, 500);
-  if (gateAll.data) return json({ error: "locked", until: iso(gateAll.data) }, 429);
+  // the email-wide lock is for an attack from many places; one place (or a few) can never lock the real owner out for everyone
+  const spread = await admin.rpc("nook_login_distinct_ips", { p_key: email, p_window: "1 hour" });
+  const wide = !spread.error && typeof spread.data === "number" && spread.data >= ALL_MIN_IPS;
+  if (wide) {
+    const gateAll = await admin.rpc("nook_login_gate", { p_key: all, p_max: MAX_TRIES_ALL, p_first: ALL_FIRST, p_cap: ALL_CAP });
+    if (gateAll.error) return json({ error: "server" }, 500);
+    if (gateAll.data) return json({ error: "locked", until: iso(gateAll.data) }, 429);
+  }
 
   const miss = async (error: string, status: number) => {
     const f = await admin.rpc("nook_login_fail", { p_key: key, p_max: MAX_TRIES });
-    const g = await admin.rpc("nook_login_fail", { p_key: all, p_max: MAX_TRIES_ALL, p_first: ALL_FIRST, p_cap: ALL_CAP });
+    if (perIp) await admin.rpc("nook_login_note_ip", { p_key: email, p_ip: ip });
+    const g = wide ? await admin.rpc("nook_login_fail", { p_key: all, p_max: MAX_TRIES_ALL, p_first: ALL_FIRST, p_cap: ALL_CAP }) : { data: null };
     // the place count is never reset by a success, so a sprayer cannot clear it by signing in to an account of its own
     const gi = perIp ? await admin.rpc("nook_login_fail", { p_key: perIp, p_max: MAX_TRIES_IP }) : null;
     const rowIp = gi ? (Array.isArray(gi.data) ? gi.data[0] : gi.data) : null;
@@ -208,5 +216,6 @@ async function proveOld(email: string, password: string, ip: string): Promise<Re
   }
   await admin.rpc("nook_login_ok", { p_key: key });
   await admin.rpc("nook_login_ok", { p_key: all });
+  await admin.rpc("nook_login_clear_ips", { p_key: email });
   return { access_token: r.data.session!.access_token, refresh_token: r.data.session!.refresh_token, upgraded };
 }

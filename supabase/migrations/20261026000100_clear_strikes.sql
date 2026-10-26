@@ -1,3 +1,2 @@
--- clears the post pauses and the sign in locks, asked for while testing; the age holds and bans are left alone
-delete from public.post_strikes;
-delete from public.ban_attempts;
+-- this one time reset was already applied to the live project and is now a no-op, so no push can clear strikes or locks again
+select 1;

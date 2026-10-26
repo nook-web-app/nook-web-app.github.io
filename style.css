@@ -309,7 +309,7 @@ textarea{resize:none}
 .out{pointer-events:none}
 .tact{background:none;border:0;color:var(--accent);font-weight:700;font-size:var(--fs-sm);margin:0;padding:0;flex:none}
 #toast.act{pointer-events:auto}
-@keyframes shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+@keyframes shimmer{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
 @media (prefers-reduced-motion: no-preference){
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
 @keyframes fadeOut{from{opacity:1}to{opacity:0}}
@@ -341,7 +341,8 @@ textarea{resize:none}
 .post.fresh{animation:fresh .6s ease-out}
 .mrow.new{animation:fadeIn .18s ease-out}
 .cimgs div{animation:zoomIn .22s ease-out}
-.skel{background:linear-gradient(100deg,var(--bg2) 30%,var(--line) 50%,var(--bg2) 70%);background-size:300% 100%;animation:shimmer 1.2s linear infinite}
+.skel{position:relative;overflow:hidden}
+.skel::after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,transparent 30%,var(--line) 50%,transparent 70%);transform:translateX(-100%);animation:shimmer 1.2s linear infinite;pointer-events:none}
 #toast{transform:translate(-50%,8px);transition:opacity .18s,transform .18s}
 #toast.show{transform:translate(-50%,0)}
 .ib,.tab,.pri,.ghost,.fab,#nav button,.si,.dm,.lrow{transition:color .15s,background-color .15s,transform .12s}
@@ -403,10 +404,11 @@ button:focus-visible,[role=button]:focus-visible,a:focus-visible,input:focus-vis
 .lockn{text-align:center;color:var(--muted);font-size:var(--fs-sm);padding:8px 16px 0}
 .cdock.locked .cin{opacity:.4;pointer-events:none}
 .cdock.locked textarea{background:var(--line)}
-.trow{display:grid;grid-template-rows:0fr;opacity:0;margin-top:-6px;pointer-events:none;transition:grid-template-rows .3s cubic-bezier(.2,.8,.2,1),opacity .25s ease,margin-top .3s cubic-bezier(.2,.8,.2,1)}
-.trow.snap{transition:none}
-.trow.show{grid-template-rows:1fr;opacity:1;margin-top:0}
-.trow>.tin{min-height:0;overflow:hidden}
+.trow{display:grid;grid-template-rows:0fr;opacity:0;pointer-events:none;transition:grid-template-rows .3s cubic-bezier(.2,.8,.2,1),opacity .25s ease}
+.trow.snap,.trow.snap>.tin{transition:none}
+.trow.show{grid-template-rows:1fr;opacity:1}
+.trow>.tin{min-height:0;overflow:hidden;transform:translateY(-6px);transition:transform .3s cubic-bezier(.2,.8,.2,1)}
+.trow.show>.tin{transform:none}
 .lb .d{top:calc(12px + env(safe-area-inset-top,0px));left:12px}
 .lb~.scrim{z-index:84}
 .lb~.sheet{z-index:85}

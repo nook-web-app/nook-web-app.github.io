@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.12.0";
+const APP_VERSION = "3.12.1";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1941,7 +1941,7 @@ async function zenSync() {
     const up = [], del = [];
     now.forEach((data, key) => { const j = zenJson(data); if (zenSeen.get(key) !== j) up.push({ key, data, j }); });
     // a wiped device must never wipe the copy on the server
-    if (S.posts.length || S.chats.length) zenSeen.forEach((_, key) => { if (!now.has(key)) del.push(key); });
+    if (S.posts.length || S.chats.length) zenSeen.forEach((j, key) => { if (!now.has(key) && !/"pub":/.test(j || "")) del.push(key); });
     // his chats are sealed with the owner's own chat key before the copy leaves the phone, so the server cannot read them
     let seal = null;
     if (up.some(u => u.key.startsWith("chat:"))) { try { const k = await sharedKey(sbUser.id); seal = o => noteSeal(k, o); } catch (e) { seal = null; } }
@@ -1977,7 +1977,8 @@ async function zenPull() {
       zenSeen.set(key, zenJson(d));
       if ((S.zen.gone || []).includes(d.id)) { sb.from("zenith_docs").delete().eq("owner_id", sbUser.id).eq("kind", "post").eq("doc_id", r.doc_id).then(() => { zenSeen.delete(key); }, () => {}); return; }
       if (d.parentRemote) { const par = byRemote.get(d.parentRemote); if (!par) return; d.parent = par.id; if (!par.zenReplied) { par.zenReplied = true; changed = true; } }
-      if (!byLocal.has(d.id)) { const p = Object.assign({ imgs: [], liked: false, reposted: false, saved: false, pinned: false }, d, { imgs: [], ai: true }); S.posts.push(p); byLocal.set(p.id, p); changed = true; }
+      if (!byLocal.has(d.id) && !d.pub) { const p = Object.assign({ imgs: [], liked: false, reposted: false, saved: false, pinned: false }, d, { imgs: [], ai: true }); S.posts.push(p); byLocal.set(p.id, p); changed = true; }
+      else if (d.pub && byLocal.get(d.id) && byLocal.get(d.id).pub !== d.pub) { byLocal.get(d.id).pub = d.pub; changed = true; }
     } else if (r.kind === "flag") {
       const p = (d.remote && byRemote.get(d.remote)) || byLocal.get(d.local);
       if (!p) return;
@@ -2001,6 +2002,14 @@ async function zenPull() {
       changed = true;
     }
   });
+  // his old posts that are public now come back as the real ones, so the copies kept on the phone go; replies under them follow
+  const pubd = S.posts.filter(p => p.ai && p.pub);
+  if (pubd.length) {
+    pubd.forEach(lp => S.posts.forEach(k => { if (k.parent === lp.id) k.parent = "r" + lp.pub; }));
+    const gone = new Set(pubd.map(p => p.id));
+    S.posts = S.posts.filter(p => !gone.has(p.id));
+    changed = true;
+  }
   if (changed) persist();
   return changed;
 }

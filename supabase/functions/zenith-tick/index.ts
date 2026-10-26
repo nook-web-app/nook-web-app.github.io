@@ -159,7 +159,7 @@ Deno.serve(async (req) => {
   if (!(await geminiKey())) return json({ error: "no gemini key in the vault" }, 500);
   // a dry run writes a post but saves nothing, to check that everything works
   let dry = false, mode = "", force = false, odds = 0.2;
-  try { const b = await req.json(); dry = b.dry === true; force = b.force === true; mode = b.mode === "reply" ? "reply" : ""; if (typeof b.odds === "number" && b.odds >= 0 && b.odds <= 1) odds = b.odds; } catch { dry = false; }
+  try { const b = await req.json(); dry = b.dry === true; force = b.force === true; mode = b.mode === "reply" ? "reply" : b.mode === "import" ? "import" : ""; if (typeof b.odds === "number" && b.odds >= 0 && b.odds <= 1) odds = b.odds; } catch { dry = false; }
 
   const { data: owner } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
   if (!owner) return json({ skipped: "no owner" });
@@ -168,6 +168,7 @@ Deno.serve(async (req) => {
   try { zen = await ensureZenith(); } catch (e) { return json({ error: String((e as Error).message || e) }, 500); }
   const { data: docs } = await admin.from("zenith_docs").select("doc_id, data").eq("owner_id", id).eq("kind", "state");
   if (mode === "reply") return await replies(id, zen, docs || [], odds);
+  if (mode === "import") return await importOld(id, zen);
   const state = (docs || []).find((d) => d.doc_id === "main");
   const z = ((state && state.data && state.data.z) || {}) as { log?: number[] };
   const now = Date.now();
@@ -281,4 +282,30 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
     await mark(p.id, acted.trim() || "none");
   }
   return json({ ok: true, ...out });
+}
+
+// one time: what Zenith posted before he had a public account becomes public, with its old times.
+// A reply to a post that is still here comes along; a reply to something that only lived on the phone cannot be placed and stays there.
+async function importOld(owner: string, zen: string): Promise<Response> {
+  const { data } = await admin.from("zenith_docs").select("kind, doc_id, data").eq("owner_id", owner).in("kind", ["post", "flag"]).limit(5000);
+  const remoteOf = new Map<string, string>();
+  for (const r of data || []) if (r.kind === "flag" && r.data && r.data.local && r.data.remote) remoteOf.set(String(r.data.local), String(r.data.remote));
+  const rows = (data || []).filter((r) => r.kind === "post" && r.data && r.data.ai && typeof r.data.text === "string" && r.data.text.trim() && !r.data.pub);
+  let done = 0, skipped = 0;
+  for (const r of rows) {
+    const d = r.data;
+    let parent: string | null = null;
+    const wanted = d.parentRemote ? String(d.parentRemote) : d.parent ? remoteOf.get(String(d.parent)) || "" : null;
+    if (wanted === "") { skipped++; continue; }
+    if (wanted) {
+      const { data: pp } = await admin.from("posts").select("id").eq("id", wanted).maybeSingle();
+      if (!pp) { skipped++; continue; }
+      parent = pp.id as string;
+    }
+    const ins = await admin.from("posts").insert({ user_id: zen, body: String(d.text).slice(0, 600), parent_id: parent, created_at: new Date(Number(d.t) || Date.now()).toISOString(), mod_status: "safe", text_pending: false }).select("id").single();
+    if (ins.error || !ins.data) { skipped++; continue; }
+    await admin.from("zenith_docs").update({ data: { ...d, pub: ins.data.id }, updated_at: new Date().toISOString() }).eq("owner_id", owner).eq("kind", "post").eq("doc_id", r.doc_id);
+    done++;
+  }
+  return json({ ok: true, done, skipped, of: rows.length });
 }

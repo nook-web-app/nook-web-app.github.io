@@ -249,7 +249,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.5";
+const APP_VERSION = "3.22.6";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -5688,10 +5688,10 @@ function markRead(ids) {
 async function dmThread(otherId) {
   // the id goes into a filter string, so it must look like an id
   if (!/^[0-9a-f-]{36}$/i.test(String(otherId))) throw new Error("bad id");
-  await loadSocial(true);
-  const { data, error } = await sb.from("messages").select("id, sender_id, recipient_id, body, media, created_at, read_at")
+  // the nicknames and clears load beside the messages, not before them
+  const [, { data, error }] = await Promise.all([loadSocial(true), sb.from("messages").select("id, sender_id, recipient_id, body, media, created_at, read_at")
     .or("and(sender_id.eq." + sbUser.id + ",recipient_id.eq." + otherId + "),and(sender_id.eq." + otherId + ",recipient_id.eq." + sbUser.id + ")")
-    .order("created_at", { ascending: false }).limit(300);
+    .order("created_at", { ascending: false }).limit(300)]);
   if (error) throw error;
   // the newest 300 are kept, oldest first
   return (data || []).reverse().filter(m => visibleMsg(m, otherId));
@@ -7077,6 +7077,8 @@ function dmV(c) {
   if (hit && Array.isArray(hit.v) && hit.v.length) syncRows(hit.v, { initial: true });
   else if (hit && Array.isArray(hit.v)) hint("No messages yet. Say hi.");
   else if (!(pre && pre.length)) hint("load");
+  // the key of this chat is worked out while the messages download, so opening them does not wait for it
+  sharedKey(c.id).catch(() => {});
   pull().then(() => { scrollEnd(); }).catch(() => { if (!list.querySelector("[data-mid], .tmpm")) hint("Could not load messages. Trying again..."); });
   sb.from("notifications").update({ read_at: new Date().toISOString() }).eq("user_id", me).eq("actor_id", c.id).eq("kind", "message").is("read_at", null).then(() => refreshBadge());
   sync();

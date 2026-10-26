@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.14.1";
+const APP_VERSION = "3.14.2";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -5804,16 +5804,16 @@ function dmV(c) {
   };
 
   // only the owner can call Zenith in a chat: the answer is sent as a normal message with a hidden mark inside the sealed text, so both people see it as Zenith
-  const zenInDm = async (sentText, sentP) => {
+  const zenInDm = async (sentText, sentP, srcs) => {
     // what the other person wrote never leaves the sealed chat: Zenith only gets the owner's words and his own, the rest is a blank turn
     const hist = Array.from(list.querySelectorAll("[data-mid]")).map(r => r._m).filter(m => m && m.text).slice(-20)
-      .map(m => m.ai ? "Zenith: " + m.text : m.sender_id === me ? "Person A: " + m.text.replace(/@zenith/gi, "Zenith") : "Person B: (a private message you cannot read)");
-    hist.push("Person A: " + sentText.replace(/@zenith/gi, "Zenith"));
+      .map(m => m.ai ? "Zenith: " + m.text : m.sender_id === me ? "Person A: " + m.text.replace(/@zenith/gi, "Zenith") + ((m.media || []).length ? " (sent a photo)" : "") : "Person B: (a private message you cannot read)");
+    hist.push("Person A: " + (sentText.replace(/@zenith/gi, "Zenith") || "(photo only)") + ((srcs || []).length ? " (the photo is attached)" : ""));
     const ghost = h("div", { class: "mrow zdm tmpm" }, h("div", { class: "bub typing" }, h("i"), h("i"), h("i")));
     pushRow(ghost);
     let reply = "";
     try {
-      reply = await zGen(ZSYS_REPLY + " This is a chat between two people, Person A and Person B, and Zenith is in it. Answer the last message that mentions Zenith. In this chat you may ask a short question back, this overrides the earlier rule about questions.", hist.join("\n"));
+      reply = await zGen(ZSYS_REPLY + " This is a chat between two people, Person A and Person B, and Zenith is in it. Answer the last message that mentions Zenith. In this chat you may ask a short question back, this overrides the earlier rule about questions.", hist.join("\n"), (srcs || []).slice(0, 3));
     } catch (e) {}
     ghost.remove();
     if (!reply) { toast("Zenith is not reachable right now"); return; }
@@ -5862,7 +5862,7 @@ function dmV(c) {
       const lk = firstUrl(text);
       if (lk && !(S.previews[lk] && S.previews[lk].v)) await Promise.race([getPreview(lk), new Promise(r => setTimeout(r, 4500))]);
       const sentP = sendDm(c.id, text, srcs, dims);
-      if (zOn() && /@zenith/i.test(text)) zenInDm(text, sentP);
+      if (zOn() && /@zenith/i.test(text)) zenInDm(text, sentP, srcs);
       const saved = await sentP;
       landed(saved);
     } catch (e) {

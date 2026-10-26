@@ -473,4 +473,7 @@ button:focus-visible,[role=button]:focus-visible,a:focus-visible,input:focus-vis
 #boot i{width:22px;height:22px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--muted);animation:ptrspin .8s linear infinite}
 #main:not(:empty)~#boot,#top:not(:empty)~#boot{display:none}
 /* a picture that is still in the store: the box is held at a size so nothing jumps when it is filled in */
-img.lz{aspect-ratio:4/3;background:var(--bg2)}
+img.lz{aspect-ratio:var(--ar,4/3);background:var(--bg2)}
+/* same limits as the picture that replaces it, so the box does not change size when it arrives */
+.imgs.n1 img.lz{height:auto;max-height:min(460px,60vh)}
+.zimgs img.lz{max-height:260px}

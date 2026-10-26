@@ -65,7 +65,7 @@ async function mock(context) {
     // write the saved data in the same shape the app writes it: state2 + p:<id> records + one record per picture
     await page.goto(base + "CLAUDE_READ_THIS.txt");
     await page.evaluate(async n => {
-      const png = i => { const c = document.createElement("canvas"); c.width = 240; c.height = 180; const x = c.getContext("2d"); x.fillStyle = "hsl(" + (i * 9) + ",70%,50%)"; x.fillRect(0, 0, 240, 180); x.fillStyle = "#fff"; x.font = "40px sans-serif"; x.fillText("#" + i, 20, 100); return c.toDataURL("image/png"); };
+      const png = i => { const c = document.createElement("canvas"); c.width = i === 0 ? 300 : i === 1 ? 600 : 240; c.height = i === 0 ? 600 : i === 1 ? 200 : 180; const x = c.getContext("2d"); x.fillStyle = "hsl(" + (i * 9) + ",70%,50%)"; x.fillRect(0, 0, 240, 180); x.fillStyle = "#fff"; x.font = "40px sans-serif"; x.fillText("#" + i, 20, 100); return c.toDataURL("image/png"); };
       const db = await new Promise((res, rej) => { const r = indexedDB.open("tiny-posts", 2); r.onupgradeneeded = () => { r.result.createObjectStore("kv"); r.result.createObjectStore("img"); }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
       const t = db.transaction(["kv", "img"], "readwrite"), kv = t.objectStore("kv"), im = t.objectStore("img");
       const pids = [], pics = {};
@@ -128,6 +128,40 @@ async function mock(context) {
     // a snapshot (account switch) and the plain-storage copy are whole too
     const full = await page.evaluate(async () => { const f = await fullState(); return f.posts.filter(p => /^data:image\//.test(p.imgs[0])).length; });
     ok(full === N, "fullState() brings back every picture (" + full + ")");
+    // no layout shift: the placeholder box has the same height as the picture that replaces it (portrait = post0, landscape = post1)
+    const key = i => "i" + (1000 + i).toString(36) + "-" + i.toString(36) + "-z" + i.toString(36);
+    // backfill: pictures stored before shapes were kept get them in idle time, read from the file header
+    await page.evaluate(() => { imgAR.clear(); arTried.clear(); arBusy = false; arBackfill(); });
+    await page.waitForFunction(ids => ids.every(k => imgAR.has(k)), [key(0), key(1)], { timeout: 15000 }).catch(() => {});
+    const ars = await page.evaluate(ids => ids.map(k => imgAR.get(k)), [key(0), key(1)]);
+    ok(Math.abs(ars[0] - 0.5) < 0.002 && Math.abs(ars[1] - 3) < 0.002, "backfill reads the shapes of stored pictures (" + ars.join(", ") + ")");
+    await page.evaluate(() => { arSave(); });
+    await page.waitForTimeout(300);
+    const savedAR = await page.evaluate(() => new Promise((res, rej) => { const r = indexedDB.open("tiny-posts"); r.onsuccess = () => { const q = r.result.transaction("kv").objectStore("kv").get("imgar"); q.onsuccess = () => { r.result.close(); res(q.result); }; }; r.onerror = () => rej(r.error); }));
+    ok(savedAR && savedAR.v === 1 && Object.keys(savedAR.r).length >= 2, "shapes are persisted in their own record");
+    const st2 = await page.evaluate(() => new Promise((res, rej) => { const r = indexedDB.open("tiny-posts"); r.onsuccess = () => { const q = r.result.transaction("kv").objectStore("kv").get("state2"); q.onsuccess = () => { r.result.close(); res(JSON.stringify(q.result)); }; }; r.onerror = () => rej(r.error); }));
+    ok(!/imgar|"ar"/.test(st2), "state2 record format is unchanged");
+    for (const [name, k] of [["portrait", key(0)], ["landscape", key(1)]]) {
+      for (const known of [true, false]) {
+        const m = await page.evaluate(async ([id, known]) => {
+          if (!known) imgAR.delete(id);
+          imgCache.delete(id);
+          const g = imgGrid([id]);
+          const mn = document.getElementById("main"); mn.scrollTop = 0; mn.prepend(g);
+          const i = g.querySelector("img");
+          const before = i.getBoundingClientRect().height, w = i.getBoundingClientRect().width;
+          await new Promise(res => { const t = setInterval(() => { if (i.getAttribute("src") && i.complete && i.naturalWidth > 0 && !i.classList.contains("lz")) { clearInterval(t); res(); } }, 30); setTimeout(() => { clearInterval(t); res(); }, 6000); });
+          await new Promise(r => requestAnimationFrame(() => r()));
+          const after = i.getBoundingClientRect().height;
+          const nat = i.naturalWidth + "x" + i.naturalHeight;
+          g.remove();
+          return { before, after, w, nat };
+        }, [k, known]);
+        ok(m.nat !== "0x0", name + " (" + (known ? "known" : "unknown") + " shape) picture really loaded (" + m.nat + ")");
+        if (known) ok(Math.abs(m.before - m.after) <= 1, name + " placeholder height equals final height (" + m.before.toFixed(1) + " vs " + m.after.toFixed(1) + ", " + m.nat + ")");
+        else ok(m.before > 40, name + " without a known shape falls back to a box (" + m.before.toFixed(1) + "), real " + m.after.toFixed(1));
+      }
+    }
     ok(errs.length === 0, "no page errors" + (errs.length ? "\n  " + errs.join("\n  ") : ""));
     await ctx.close();
   } catch (e) { fails++; console.log("FAIL harness: " + (e && e.stack || e)); }

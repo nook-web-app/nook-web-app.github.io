@@ -212,16 +212,29 @@ function lazyWatch(el, fn) {
   lazyJobs.set(el, fn);
   lazyIO.observe(el);
 }
+// the box of a picture that is not filled in yet: its own shape when it has been seen (imgAR, see "picture shapes" below), 4:3 otherwise;
+// the box is kept until the real pixels have arrived and then replaced by the picture itself, which has the same shape
+function arHold(i, id) {
+  const r = imgAR.get(id);
+  if (r) i.style.setProperty("--ar", String(r));
+  i.classList.add("lz");
+  i.addEventListener("load", () => {
+    if (i.naturalWidth && i.naturalHeight) arSet(id, i.naturalWidth, i.naturalHeight);
+    i.classList.remove("lz");
+    i.style.removeProperty("--ar");
+    if (!i.getAttribute("style")) i.removeAttribute("style");
+  }, { once: true });
+}
 function mkImg(src, cls, on) {
   if (isImgId(src)) {
     const hit = imgPeek(src);
-    if (hit !== undefined) return mkImg(hit, cls, on);
+    if (hit !== undefined) { const i = mkImg(hit, cls, on); if (!cls && i.tagName === "IMG") arHold(i, src); return i; }
     // a placeholder of the same box (see .lz in the style sheet) that is filled in once it is near the screen
     const i = h("img", { alt: "", decoding: "async", class: cls || "lz", "data-iid": src });
+    if (!cls) arHold(i, src);
     if (on) i.addEventListener("click", on);
     lazyWatch(i, () => imgReal(src).then(real => {
       if (!real) { if (!cls && i.parentNode) i.replaceWith(h("div", { class: "dmgone" }, "Photo not available")); return; }
-      i.classList.remove("lz");
       i.removeAttribute("data-iid");
       wireImg(i, real, cls);
     }));
@@ -234,7 +247,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.20.16";
+const APP_VERSION = "3.20.17";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -306,6 +319,105 @@ function imgReal(v) {
 }
 const imgList = a => Promise.all((a || []).map(imgReal)).then(l => l.filter(Boolean));
 const getImgs = p => imgList(p && p.imgs);
+// ---- picture shapes ----
+// width/height of every stored picture, kept in one small record ("imgar" in the kv store, beside state2; older builds simply ignore it),
+// so a placeholder can have the right box before the picture is read. It is filled when a picture is first saved (read from the file header),
+// when a picture is shown (its natural size) and, for pictures saved before this existed, in idle time a few at a time.
+const imgAR = new Map();
+let arDirty = false, arTimer = null, arBusy = false;
+function arSet(id, w, hgt) {
+  if (!isImgId(id) || !(w > 0) || !(hgt > 0)) return;
+  const r = Math.round(w / hgt * 1000) / 1000;
+  if (!(r > 0.02 && r < 50) || imgAR.get(id) === r) return;
+  imgAR.set(id, r);
+  arDirty = true;
+  clearTimeout(arTimer);
+  arTimer = setTimeout(arSave, 2000);
+}
+function arSave() {
+  clearTimeout(arTimer);
+  if (!arDirty || !db || noSave) return;
+  arDirty = false;
+  const o = { v: 1, r: Object.fromEntries(imgAR) };
+  try {
+    const t = db.transaction("kv", "readwrite");
+    t.objectStore("kv").put(o, "imgar");
+    t.onerror = t.onabort = () => { arDirty = true; };
+  } catch (e) { arDirty = true; }
+}
+function arLoad(o) {
+  if (!o || typeof o !== "object" || !o.r || typeof o.r !== "object") return;
+  for (const k in o.r) { const v = o.r[k]; if (isImgId(k) && typeof v === "number" && v > 0.02 && v < 50) imgAR.set(k, v); }
+}
+// size from the first bytes of a png, jpeg, webp or gif file (no decoding); null when it cannot be told
+function imgDims(b) {
+  const n = b.length;
+  if (n > 24 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return { w: ((b[16] << 24) | (b[17] << 16) | (b[18] << 8) | b[19]) >>> 0, h: ((b[20] << 24) | (b[21] << 16) | (b[22] << 8) | b[23]) >>> 0 };
+  if (n > 10 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return { w: b[6] | (b[7] << 8), h: b[8] | (b[9] << 8) };
+  if (n > 30 && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) {
+    const k = String.fromCharCode(b[12], b[13], b[14], b[15]);
+    if (k === "VP8 ") return { w: (b[26] | (b[27] << 8)) & 0x3fff, h: (b[28] | (b[29] << 8)) & 0x3fff };
+    if (k === "VP8L") return { w: 1 + (((b[22] & 0x3f) << 8) | b[21]), h: 1 + (((b[24] & 0xf) << 10) | (b[23] << 2) | (b[22] >> 6)) };
+    if (k === "VP8X") return { w: 1 + (b[24] | (b[25] << 8) | (b[26] << 16)), h: 1 + (b[27] | (b[28] << 8) | (b[29] << 16)) };
+    return null;
+  }
+  if (n > 4 && b[0] === 0xff && b[1] === 0xd8) {
+    let p = 2;
+    while (p + 9 < n) {
+      if (b[p] !== 0xff) { p++; continue; }
+      const m = b[p + 1];
+      if (m === 0xff) { p++; continue; }
+      if (m === 0xd8 || m === 0x01 || (m >= 0xd0 && m <= 0xd7)) { p += 2; continue; }
+      if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return { h: (b[p + 5] << 8) | b[p + 6], w: (b[p + 7] << 8) | b[p + 8] };
+      p += 2 + ((b[p + 2] << 8) | b[p + 3]);
+    }
+  }
+  return null;
+}
+// the same from a data address: only the first part of the text is turned into bytes
+function dataDims(src) {
+  const m = /^data:image\/[a-z0-9.+-]+;base64,/i.exec(src || "");
+  if (!m) return null;
+  try {
+    const t = src.slice(m[0].length, m[0].length + 131072);
+    const bin = atob(t.slice(0, t.length - (t.length % 4)));
+    const b = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
+    return imgDims(b);
+  } catch (e) { return null; }
+}
+async function arMeasure(id, src) {
+  const d = dataDims(src);
+  if (d && d.w && d.h) { arSet(id, d.w, d.h); return; }
+  if (window.createImageBitmap && typeof src === "string") {
+    try { const bm = await createImageBitmap(await (await fetch(src)).blob()); arSet(id, bm.width, bm.height); if (bm.close) bm.close(); } catch (e) {}
+  }
+}
+// pictures saved before shapes were kept: a few per idle slot, one record at a time, never all in memory
+const arTried = new Set();
+function arBackfill() {
+  if (arBusy || !db) return;
+  const todo = [];
+  const add = id => { if (isImgId(id) && !imgAR.has(id) && !arTried.has(id) && knownIds.has(id)) todo.push(id); };
+  if (S) { (S.posts || []).forEach(p => (p.imgs || []).forEach(add)); (S.chats || []).forEach(c => (c.msgs || []).forEach(m => (m.imgs || []).forEach(add))); }
+  knownIds.forEach(add);
+  if (!todo.length) return;
+  arBusy = true;
+  const idle = window.requestIdleCallback ? fn => requestIdleCallback(fn, { timeout: 4000 }) : fn => setTimeout(() => fn({ timeRemaining: () => 8 }), 200);
+  const pending = Array.from(new Set(todo));
+  const step = dl => {
+    (async () => {
+      let n = 0;
+      while (pending.length && n < 4 && (n === 0 || dl.timeRemaining() > 6)) {
+        const id = pending.shift();
+        arTried.add(id);
+        n++;
+        try { const v = imgPeek(id) !== undefined ? imgPeek(id) : await idbGetImg(id); if (typeof v === "string") await arMeasure(id, v); } catch (e) {}
+      }
+    })().then(() => { if (pending.length) idle(step); else arBusy = false; }, () => { arBusy = false; });
+  };
+  idle(step);
+}
 // a copy of everything with real pictures in it, for the places that keep a whole copy (account snapshot, plain storage fallback)
 async function fullState() {
   const res = async a => (Array.isArray(a) && a.some(isImgId) ? imgList(a) : a);
@@ -345,7 +457,8 @@ function idbLoad(d) {
     const cr = kv.getAll(IDBKeyRange.bound("c:", "c;", false, true));
     // only the names of the pictures are read here; the pictures themselves are fetched one by one when a screen needs them (imgReal)
     const ik = t.objectStore("img").getAllKeys();
-    t.oncomplete = () => res({ meta: a.result || o.result || null, v2: !!a.result, posts: pr.result, chats: cr.result, keys: ik.result });
+    const ar = kv.get("imgar");
+    t.oncomplete = () => res({ meta: a.result || o.result || null, v2: !!a.result, posts: pr.result, chats: cr.result, keys: ik.result, ar: ar.result });
     t.onerror = () => rej(t.error);
     t.onabort = () => rej(t.error);
   });
@@ -402,7 +515,7 @@ async function doFlush() {
         const id = memo.get(src) || hashMemo.get(src) || srcHash(src);
         memo.set(src, id);
         used.add(id);
-        if (!knownIds.has(id)) fresh.set(id, src);
+        if (!knownIds.has(id)) { fresh.set(id, src); if (!imgAR.has(id)) arMeasure(id, src); }
         return id;
       };
       // only records whose content differs from what was last written are sent to the database
@@ -431,6 +544,10 @@ async function doFlush() {
       idbLegacy = false;
       fresh.forEach((_, id) => knownIds.add(id));
       drop.forEach(id => knownIds.delete(id));
+      // shapes of pictures that are gone are forgotten
+      let gone = false;
+      imgAR.forEach((_, id) => { if (!knownIds.has(id)) { imgAR.delete(id); gone = true; } });
+      if (gone) { arDirty = true; clearTimeout(arTimer); arTimer = setTimeout(arSave, 2000); }
       hashMemo = memo;
       return;
     } catch (e) {
@@ -7502,6 +7619,8 @@ async function boot() {
       (S.chats || []).forEach(c => (c.msgs || []).forEach(m => { m.imgs = (m.imgs || []).map(hy).filter(Boolean); }));
       if (S.profile) { S.profile.avatar = await imgReal(hy(S.profile.avatar)); S.profile.banner = await imgReal(hy(S.profile.banner)); }
       r.keys.forEach(k => knownIds.add(k));
+      arLoad(r.ar);
+      setTimeout(arBackfill, 3000);
       delete S.split;
     }
   } catch (e) { db = null; }

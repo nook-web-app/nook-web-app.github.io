@@ -204,6 +204,20 @@ const flat = arr => Array.from(arr).map(x => typeof x === "string" ? x : x.tag =
     assert.deepStrictEqual(Array.from(f.chats[0].msgs[0].imgs), ["data:image/png;base64,F2"]);
     assert.deepStrictEqual(Array.from(run("S.posts[0].imgs")), ["if1-a-b", "data:image/png;base64,LIVE"], "memory still holds ids");
   });
+  await t("picture shapes: size is read from png / jpeg / webp / gif headers", async () => {
+    vm.runInContext(grab("function imgDims(") + grab("function dataDims("), sb);
+    const png = Buffer.alloc(33); Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]).copy(png); png.writeUInt32BE(300, 16); png.writeUInt32BE(600, 20);
+    const jpg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 4, 0, 0, 0xff, 0xc0, 0, 11, 8, 0x01, 0x2c, 0x02, 0x58, 3, 0, 0, 0, 0, 0, 0]); // 600 high, 300 wide? (h=0x012c=300, w=0x0258=600)
+    const vp8x = Buffer.alloc(40); vp8x.write("RIFF", 0); vp8x.write("WEBP", 8); vp8x.write("VP8X", 12); vp8x.writeUIntLE(499, 24, 3); vp8x.writeUIntLE(199, 27, 3);
+    const gif = Buffer.concat([Buffer.from("GIF89a"), Buffer.from([0x40, 0x01, 0xf0, 0x00]), Buffer.alloc(8)]);
+    { const d = sb.imgDims(new Uint8Array(png)); assert.strictEqual(d.w + "x" + d.h, "300x600"); }
+    { const d = sb.imgDims(new Uint8Array(jpg)); assert.strictEqual(d.w + "x" + d.h, "600x300"); }
+    { const d = sb.imgDims(new Uint8Array(vp8x)); assert.strictEqual(d.w + "x" + d.h, "500x200"); }
+    { const d = sb.imgDims(new Uint8Array(gif)); assert.strictEqual(d.w + "x" + d.h, "320x240"); }
+    assert.strictEqual(sb.imgDims(new Uint8Array(8)), null);
+    { const d = sb.dataDims("data:image/png;base64," + png.toString("base64")); assert.strictEqual(d.w + "x" + d.h, "300x600"); }
+    assert.strictEqual(sb.dataDims("https://x/y.png"), null);
+  });
   console.log(fails ? fails + " unit test(s) failed" : "all unit tests passed");
   process.exit(fails ? 1 : 0);
 })();

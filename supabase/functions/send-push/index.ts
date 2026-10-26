@@ -57,7 +57,7 @@ Deno.serve(async (req) => {
     const { data: mu } = await admin.from("dm_mutes").select("owner_id, until_at, hidden").eq("owner_id", n.user_id).eq("target_id", n.actor_id).maybeSingle();
     if (mu && (mu.hidden || !mu.until_at || Date.parse(mu.until_at) > Date.now())) return json({ sent: 0, muted: true });
   }
-  const { data: actor } = await admin.from("accounts").select("display_name, username").eq("id", n.actor_id).maybeSingle();
+  const { data: actor } = await admin.from("accounts").select("display_name, username, public_key").eq("id", n.actor_id).maybeSingle();
   const { data: subs } = await admin.from("push_subs").select("id, endpoint, p256dh, auth").eq("user_id", n.user_id);
   if (!subs || !subs.length) return json({ sent: 0 });
 
@@ -71,7 +71,7 @@ Deno.serve(async (req) => {
       const hasPhoto = Array.isArray(m.media) && m.media.length > 0;
       if (!text) { if (hasPhoto) msg.photo = true; }
       else if (text.startsWith("e2e1:")) {
-        const { data: a } = await admin.from("accounts").select("public_key").eq("id", n.actor_id).maybeSingle();
+        const a = actor;
         if (text.length <= 2400 && a && a.public_key) { msg.enc = text; msg.key = a.public_key; msg.uid = n.user_id; }
       }
     }

@@ -66,7 +66,7 @@ textarea{resize:none}
 .av:has(> img.pic){background:none}
 .av>img.pic{border-radius:50%}
 /* soft look without filter:blur: the picture is laid out at a quarter size and scaled up on the GPU, so the smoothing comes from the upscale and nothing is re-filtered on repaint */
-.pic.blur,.banner .pic.blur{inset:0;width:25%;height:25%;transform-origin:0 0;transform:translate(-8%,-8%) scale(4.16);will-change:transform;backface-visibility:hidden;image-rendering:auto}
+.pic.blur,.banner .pic.blur{inset:0;width:25%;height:25%;transform-origin:0 0;transform:translate(-8%,-8%) scale(4.16);backface-visibility:hidden;image-rendering:auto}
 .banner:has(> .pic.blur){background:none;contain:paint}
 .imgs.n1 img{height:auto;max-height:min(460px,60vh)}
 .imgs.n2{grid-template-columns:1fr 1fr;aspect-ratio:2/1}
@@ -343,7 +343,7 @@ textarea{resize:none}
 .mrow.new{animation:fadeIn .18s ease-out}
 .cimgs div{animation:zoomIn .22s ease-out}
 .skel{position:relative;overflow:hidden;contain:paint}
-.skel::after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,transparent 30%,var(--line) 50%,transparent 70%);transform:translateX(-100%);animation:shimmer 1.2s linear infinite;pointer-events:none;will-change:transform}
+.skel::after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,transparent 30%,var(--line) 50%,transparent 70%);transform:translateX(-100%);animation:shimmer 1.2s linear infinite;pointer-events:none}
 #toast{transform:translate(-50%,8px);transition:opacity .18s,transform .18s}
 #toast.show{transform:translate(-50%,0)}
 .ib,.tab,.pri,.ghost,.fab,#nav button,.si,.dm,.lrow{transition:color .15s,background-color .15s,transform .12s}

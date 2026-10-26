@@ -26,11 +26,11 @@ Deno.serve(async (req) => {
   const row = await admin.from("accounts").select("id").eq("id", id).maybeSingle();
   if (!row.error && !row.data) {
     const del = await admin.auth.admin.deleteUser(id);
-    if (del.error) return json({ error: "could not delete login: " + del.error.message }, 500);
+    if (del.error) return json({ error: "could not delete login" }, 500);
     return json({ ok: true });
   }
   const hide = await admin.rpc("nook_schedule_delete_user", { p_user: id });
-  if (hide.error) return json({ error: "could not delete the account: " + hide.error.message }, 500);
+  if (hide.error) return json({ error: "could not delete the account" }, 500);
   // every other phone is signed out too
   try { await admin.auth.admin.signOut(jwt, "global"); } catch (_e) { /* the account is already hidden */ }
   return json({ ok: true });

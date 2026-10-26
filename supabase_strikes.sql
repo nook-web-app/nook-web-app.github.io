@@ -2,6 +2,13 @@
 -- A post taken down for the rules or sexual content pauses posting: 6 hours, 24 hours, 72 hours, 7 days, 14 days, then a ban.
 -- The count is kept by email (not by account) so deleting and remaking an account does not reset it.
 
+-- refuse to run after the hmac upgrade (migration 20261026019000): the md5 body below would undo it and break every lookup
+do $$ begin
+  if to_regprocedure('public.nook_email_key_old(text)') is not null then
+    raise exception 'nook_email_key was already upgraded to the hmac chain; do not run this file again';
+  end if;
+end $$;
+
 create table if not exists public.post_strikes (
   email_key text primary key,
   strikes int not null default 0,

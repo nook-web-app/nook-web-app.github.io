@@ -28,7 +28,7 @@ async function getEncKey(): Promise<CryptoKey | null> {
 }
 async function sealSecret(plain: string): Promise<string> {
   const k = await getEncKey();
-  if (!k) { console.warn("totp: TOTP_ENC_KEY is not set, seed stored in plain text"); return plain; }
+  if (!k) throw new Error("TOTP_ENC_KEY is not set");
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, k, new TextEncoder().encode(plain)));
   const all = new Uint8Array(12 + ct.length);
@@ -255,7 +255,8 @@ Deno.serve(async (req) => {
     const hit = await check(row.secret, code, row.last_counter);
     if (hit == null || !(await claim(row, hit, action === "enable"))) return json({ error: "That code is wrong." }, 400);
     if (action === "enable") return json({ ok: true });
-    await admin.from("totp_secrets").delete().eq("user_id", user.id);
+    const del = await admin.from("totp_secrets").delete().eq("user_id", user.id);
+    if (del.error) return json({ error: "Could not turn it off. Try again." }, 500);
     return json({ ok: true });
   }
 

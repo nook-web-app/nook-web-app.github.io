@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { fetchImage } from "../_shared/preview.ts";
 // Zenith is the name of the owner-only AI; the moderation AI is called Aegis
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
@@ -20,30 +21,13 @@ const MODEL = Deno.env.get("ZENITH_MODEL") || "gemini-3.5-flash-lite";
 
 // link preview pictures are fetched here, so the phone never has to download them; https only, no addresses inside a network, small pictures only
 const PIC_TYPES = ["image/jpeg", "image/png", "image/webp"];
-function publicHttps(u: string): URL | null {
-  try {
-    const x = new URL(u);
-    const h = x.hostname.toLowerCase();
-    if (x.protocol !== "https:" || (x.port && x.port !== "443")) return null;
-    if (h === "localhost" || h.endsWith(".local") || h.endsWith(".internal") || h.includes(":") || /^[\d.]+$/.test(h)) return null;
-    return x;
-  } catch { return null; }
-}
 async function fetchPic(u: string): Promise<{ inline_data: { mime_type: string; data: string } } | null> {
-  const x = publicHttps(u);
-  if (!x) return null;
-  try {
-    const r = await fetch(x, { redirect: "manual", signal: AbortSignal.timeout(6000), headers: { accept: "image/*", "user-agent": "Mozilla/5.0 (compatible; NookPreview/1.0)" } });
-    if (!r.ok || !publicHttps(r.url)) return null;
-    const type = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
-    if (!PIC_TYPES.includes(type)) return null;
-    if (Number(r.headers.get("content-length") || 0) > 4 * 1024 * 1024) return null;
-    const buf = new Uint8Array(await r.arrayBuffer());
-    if (!buf.length || buf.length > 4 * 1024 * 1024) return null;
-    let bin = "";
-    for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-    return { inline_data: { mime_type: type, data: btoa(bin) } };
-  } catch { return null; }
+  // the shared fetcher also resolves the name and refuses private addresses
+  const got = await fetchImage(u, PIC_TYPES, 4 * 1024 * 1024);
+  if (!got) return null;
+  let bin = "";
+  for (let i = 0; i < got.bytes.length; i += 0x8000) bin += String.fromCharCode(...got.bytes.subarray(i, i + 0x8000));
+  return { inline_data: { mime_type: got.type, data: btoa(bin) } };
 }
 
 function json(body: unknown, status = 200): Response {
@@ -62,6 +46,7 @@ async function gemini(key: string, system: unknown, history: unknown, stream: bo
     const call = (think: boolean) => fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json", "x-goog-api-key": key },
+      signal: AbortSignal.timeout(50000),
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: String(system || "") }] },
         contents: history,
@@ -104,10 +89,9 @@ Deno.serve(async (req) => {
       // an account may only show pictures from its own folder, so the owner's file is copied into his
       let spath = "";
       try { spath = decodeURIComponent(src.slice(base.length).split("?")[0]); } catch { return json({ ok: false, why: "could not read the picture" }); }
-      const dl = await admin.storage.from("media").download(spath);
-      if (dl.error || !dl.data) return json({ ok: false, why: "could not read the picture" });
       const dest = za.id + "/zenith-" + Date.now() + ".jpg";
-      const up = await admin.storage.from("media").upload(dest, dl.data, { contentType: dl.data.type || "image/jpeg", upsert: true });
+      // a copy inside storage, so the picture never travels through this function
+      const up = await admin.storage.from("media").copy(spath, dest);
       if (up.error) return json({ ok: false, why: "could not save the picture" });
       avatar = base + dest;
     }

@@ -22,9 +22,9 @@ const ALL_MIN_IPS = 10;
 
 // a short fingerprint of the caller's network address; the address itself is never stored
 async function ipTag(req: Request): Promise<string> {
-  // the first x-forwarded-for entry is written by the caller, so the last hop (added by the proxy) is used when there is no cf-connecting-ip
+  // the first x-forwarded-for entry is written by the caller, so the last hop (added by the proxy) is used; cf-connecting-ip is not trusted, a caller can set it
   const fwd = (req.headers.get("x-forwarded-for") || "").split(",").map((x) => x.trim()).filter(Boolean);
-  const raw = (req.headers.get("cf-connecting-ip") || "").trim() || fwd[fwd.length - 1] || "none";
+  const raw = fwd[fwd.length - 1] || "none";
   if (raw === "none") return "none";
   const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("nook-ip|" + raw)));
   return Array.from(d.slice(0, 6), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -55,7 +55,7 @@ Deno.serve(async (req) => {
   const password = typeof body.password === "string" ? body.password : "";
 
   try {
-    if (action === "signup") return await signup(typeof body.email === "string" ? body.email.trim().toLowerCase() : "", password);
+    if (action === "signup") return await signup(typeof body.email === "string" ? body.email.trim().toLowerCase() : "", password, ip);
 
     // everything else needs an email: the one in the request (login) or the one of the signed in person
     let email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
@@ -134,12 +134,23 @@ function recovering(jwt: string, user: { app_metadata?: Record<string, unknown> 
   } catch { return false; }
 }
 
-async function signup(email: string, password: string): Promise<Response> {
+async function signup(email: string, password: string, ip: string): Promise<Response> {
   if (!email) return json({ error: "no_email" }, 400);
   if (!okEmail(email)) return json({ error: "bad_email" }, 400);
   if (password.length < 8 || password.length > 72) return json({ error: "signup_failed", code: "weak_password", message: "Password needs 8 to 72 characters." }, 400);
+  // per place cap, so accounts cannot be made in bulk from one address
+  if (ip !== "none") {
+    const g = await admin.rpc("nook_login_gate", { p_key: "s:" + ip, p_max: 20 });
+    if (g.error) return json({ error: "server" }, 500);
+    if (g.data) return json({ error: "locked", until: iso(g.data) }, 429);
+  }
   const { data, error } = await mk().auth.signUp({ email, password: await pepper(admin, password) });
-  if (error) return json({ error: "signup_failed", code: (error as { code?: string }).code || "", message: error.message, status: (error as { status?: number }).status || 400 }, 400);
+  if (error) {
+    const code = (error as { code?: string }).code || "";
+    // a taken email gets the same answer as any other failure, so signup cannot be used to find out who has an account
+    if (code === "email_exists" || code === "user_already_exists" || /already (been )?registered/i.test(error.message)) return json({ error: "signup_failed", code: "", message: "Could not sign up. Try again later.", status: 400 }, 400);
+    return json({ error: "signup_failed", code, message: error.message, status: (error as { status?: number }).status || 400 }, 400);
+  }
   return json({ user: { id: data.user ? data.user.id : null }, session: data.session ? { access_token: data.session.access_token, refresh_token: data.session.refresh_token } : null });
 }
 

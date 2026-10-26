@@ -52,10 +52,13 @@ async function archiveUser(user: string): Promise<{ copied: number; removed: num
   for (const bucket of BUCKETS) {
     const files = await folderFiles(bucket, user);
     const done: string[] = [];
-    for (const f of files) {
-      const dest = user + "/" + bucket + "/" + f.slice(user.length + 1);
-      const { error } = await admin.storage.from(bucket).copy(f, dest, { destinationBucket: ARCHIVE });
-      if (!error || /already exists|Duplicate/i.test(error.message || "")) { done.push(f); copied++; } else failed++;
+    // a few copies at the same time
+    for (let i = 0; i < files.length; i += 5) {
+      await Promise.all(files.slice(i, i + 5).map(async (f) => {
+        const dest = user + "/" + bucket + "/" + f.slice(user.length + 1);
+        const { error } = await admin.storage.from(bucket).copy(f, dest, { destinationBucket: ARCHIVE });
+        if (!error || /already exists|Duplicate/i.test(error.message || "")) { done.push(f); copied++; } else failed++;
+      }));
     }
     if (done.length && bucket !== "dm-media") {
       const n = await removeAll(bucket, done);

@@ -3,6 +3,8 @@ name: Check release files
 on:
   push:
     branches: [main]
+permissions:
+  contents: read
 jobs:
   versions:
     runs-on: ubuntu-latest

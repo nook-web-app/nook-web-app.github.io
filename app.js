@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.13.3";
+const APP_VERSION = "3.13.4";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -6598,7 +6598,7 @@ function xApply(id, p, first) {
 }
 // replies that only live on this phone (they sit under a private answer of Zenith and cannot be posted) are kept sealed on the server too
 const privPosts = () => S.posts.filter(p => !p.ra && !p.ai && !p.remote && p.parent && !(byId(p.parent) || {}).remote);
-const privSig = p => srcHash("p|" + (p.text || "") + "|" + (p.t || 0) + "|" + (p.parent || ""));
+const privSig = p => srcHash("p|" + (p.text || "") + "|" + (p.t || 0) + "|" + (p.parent || "") + "|" + (p.liked ? 1 : 0) + (p.reposted ? 1 : 0) + (p.saved ? 1 : 0));
 async function notePriv(ns, key, r) {
   const lid = r.id.slice(2), here = S.posts.find(x => x.id === lid);
   if (r.deleted) {
@@ -6612,12 +6612,12 @@ async function notePriv(ns, key, r) {
   const p = await noteOpen(key, r.body);
   const text = String(p.x || "").slice(0, 5000), t = Number(p.t) || Date.now(), pa = typeof p.pa === "string" ? p.pa : null;
   if (here) {
-    if (here.text === text && here.t === t && (here.parent || null) === pa) return false;
-    here.text = text; here.t = t; here.parent = pa;
+    if (here.text === text && here.t === t && (here.parent || null) === pa && !!here.liked === !!p.l && !!here.reposted === !!p.r && !!here.saved === !!p.s) return false;
+    here.text = text; here.t = t; here.parent = pa; here.liked = !!p.l; here.reposted = !!p.r; here.saved = !!p.s;
     ns.pushed[r.id] = privSig(here);
     return true;
   }
-  const np = { id: lid, text, t, imgs: [], parent: pa, liked: false, reposted: false, saved: false, pinned: false };
+  const np = { id: lid, text, t, imgs: [], parent: pa, liked: !!p.l, reposted: !!p.r, saved: !!p.s, pinned: false };
   S.posts.push(np);
   ns.pushed[r.id] = privSig(np);
   return true;
@@ -6801,7 +6801,7 @@ async function notesPush(ns, key) {
     }
     for (const p of priv) {
       const id = "p:" + p.id, sig = privSig(p);
-      if (ns.pushed[id] !== sig) xrows.push({ id, sig, row: { owner_id: sbUser.id, id, body: await noteSeal(key, { i: p.id, pa: p.parent, x: p.text || "", t: p.t }), media: [], deleted: false } });
+      if (ns.pushed[id] !== sig) xrows.push({ id, sig, row: { owner_id: sbUser.id, id, body: await noteSeal(key, { i: p.id, pa: p.parent, x: p.text || "", t: p.t, l: !!p.liked, r: !!p.reposted, s: !!p.saved }), media: [], deleted: false } });
     }
     if (xrows.length) {
       const { error } = await sb.from("notes_self").upsert(xrows.map(x => x.row), { onConflict: "owner_id,id" });

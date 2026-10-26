@@ -176,7 +176,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.19.3";
+const APP_VERSION = "3.19.4";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -4114,7 +4114,7 @@ function newAccountModal() {
   const pw = pwField("Password", "new-password");
   const msg = h("p", { class: "note", role: "alert" });
   // the message also shows as a toast, because the keyboard can cover the line under the fields
-  const say = t => { msg.textContent = t; if (t) toast(t); };
+  const say = t => { msg.textContent = ""; if (t) toast(t); };
   const go1 = h("button", { class: "pri" }, "Create account");
   const m = modal({
     title: "",
@@ -4169,13 +4169,30 @@ function newAccountModal() {
       } catch (x) { say("Something went wrong. Try again"); } finally { go1.disabled = false; }
   };
 }
+// a different account that signs in here may be hidden from other people (deactivated): its own login reads it and brings it back
+async function infoForSession(sess, uid) {
+  const cols = "id, username, display_name, avatar, deactivated";
+  let { data } = await sb.from("accounts").select(cols).eq("id", uid).maybeSingle();
+  if (data && data.username && !data.deactivated) return data;
+  try {
+    const tmp = window.supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+    const ss = await tmp.auth.setSession({ access_token: sess.access_token, refresh_token: sess.refresh_token });
+    if (ss.error) return data;
+    const own = await tmp.from("accounts").select(cols).eq("id", uid).maybeSingle();
+    if (own.data) {
+      if (own.data.deactivated) { await tmp.rpc("nook_restore_account"); await tmp.rpc("set_my_deactivated", { flag: false }); }
+      data = own.data;
+    }
+  } catch (e) {}
+  return data;
+}
 function addAccountModal() {
   const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "email", "aria-label": "Email", "data-pm": "1" });
   const pw = pwField("Password", "current-password");
   const pass = pw.input;
   const msg = h("p", { class: "note", role: "alert" });
   // the message also shows as a toast, because the keyboard can cover the line under the fields
-  const say = t => { msg.textContent = t; if (t) toast(t); };
+  const say = t => { msg.textContent = ""; if (t) toast(t); };
   const go1 = h("button", { class: "pri" }, "Sign in");
   const m = modal({
     title: "",
@@ -4192,7 +4209,7 @@ function addAccountModal() {
           const { data: u } = await sb.auth.getUser(r.session.access_token);
           if (!u || !u.user) { say("Could not sign in. Try again"); return; }
           if (u.user.id === sbUser.id) { say("That is the account you are in"); return; }
-          const { data: info } = await sb.from("accounts").select("id, username, display_name, avatar").eq("id", u.user.id).maybeSingle();
+          const info = await infoForSession(r.session, u.user.id);
           if (!info || !info.username) { say("Could not load that account. Try again"); return; }
           const list = await acctList();
           await acctPut("list", list.filter(a => a.id !== info.id).concat({ id: info.id, rt: r.session.refresh_token, username: info.username, name: info.display_name || info.username, avatar: typeof info.avatar === "string" && info.avatar.length < 400000 ? info.avatar : null, main: false }));
@@ -4223,7 +4240,7 @@ function addAccountModal() {
         if (!u || !u.user) { say("Could not sign in. Try again"); return; }
         if (u.user.id === sbUser.id) { say("That is the account you are in"); return; }
         // the name, handle and picture are public, so they are read before the account is shown anywhere
-        const { data: info } = await sb.from("accounts").select("id, username, display_name, avatar").eq("id", u.user.id).maybeSingle();
+        const info = await infoForSession(r.body.session, u.user.id);
         if (!info || !info.username) { say("Could not load that account. Try again"); return; }
         const list = await acctList();
         await acctPut("list", list.filter(a => a.id !== info.id).concat({ id: info.id, rt: r.body.session.refresh_token, username: info.username, name: info.display_name || info.username, avatar: typeof info.avatar === "string" && info.avatar.length < 400000 ? info.avatar : null, main: false }));
@@ -4274,7 +4291,7 @@ function linkedLoginModal(x) {
   const pw = pwField("Password");
   const msg = h("p", { class: "note", role: "alert" });
   // the message also shows as a toast, because the keyboard can cover the line under the fields
-  const say = t => { msg.textContent = t; if (t) toast(t); };
+  const say = t => { msg.textContent = ""; if (t) toast(t); };
   const m = modal({
     title: "@" + x.username,
     action: "Switch",
@@ -5054,7 +5071,7 @@ function confirmLogin(title, warn, label, fn) {
   const em = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "off", autocapitalize: "off", "aria-label": "Email" });
   const pw = pwField("Password");
   const msg = h("p", { class: "note", role: "alert" });
-  const say = t => { msg.textContent = t; if (t) toast(t); };
+  const say = t => { msg.textContent = ""; if (t) toast(t); };
   const go1 = h("button", { class: "pri", style: "background:var(--danger)" }, label);
   const m = modal({
     title: "",

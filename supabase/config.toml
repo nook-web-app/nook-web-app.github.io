@@ -38,5 +38,5 @@ verify_jwt = false
 [functions.focus]
 verify_jwt = false
 
-[functions.google-guard]
+[functions.passkey]
 verify_jwt = false

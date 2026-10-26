@@ -34,60 +34,8 @@ const HASH_ERR = /error_code=/.test(location.hash);
 let RECOVERY = false;
 // the app reads the sign in link of a reset email itself, so a stranger's link cannot silently sign somebody in
 const sb = window.supabase ? window.supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } }) : null;
-// Google only signs in to accounts that already exist, and it can be linked to one in Settings
-const OAUTH_KEY = "nook-oauth";
-async function googleGo(mode) {
-  try { localStorage.setItem(OAUTH_KEY, JSON.stringify({ mode, t: Date.now() })); } catch (e) {}
-  const opt = { provider: "google", options: { redirectTo: location.origin + location.pathname, skipBrowserRedirect: true } };
-  let r = null;
-  try { r = mode === "link" ? await sb.auth.linkIdentity(opt) : await sb.auth.signInWithOAuth(opt); } catch (e) {}
-  if (!r || r.error || !r.data || !r.data.url) { try { localStorage.removeItem(OAUTH_KEY); } catch (e) {} toast("Google sign in is not available right now"); return; }
-  location.assign(r.data.url);
-}
-async function finishGoogle(oa, raw) {
-  const p = new URLSearchParams(raw.replace(/^#/, ""));
-  history.replaceState(history.state, "", location.pathname + location.search);
-  const say = t => setTimeout(() => { try { toast(t); } catch (e) {} }, 1500);
-  const fail = oa.mode === "link" ? "Could not link Google. That Google account may already belong to another Nook account" : "Google sign in did not work. Try again";
-  if (!p.get("access_token") || !p.get("refresh_token")) { say(fail); return; }
-  if (oa.mode === "add") {
-    // another account joins the list on this phone: the account that is signed in stays as it is
-    const at = p.get("access_token"), rt = p.get("refresh_token");
-    const g = await callFn("google-guard", {}, at).catch(() => ({ ok: false, body: {} }));
-    if (!g.ok || !g.body.ok) { say(g.body && g.body.error === "no_account" ? "No Nook account uses that Google email" : "Could not add that account. Try again"); return; }
-    const { data: u } = await sb.auth.getUser(at);
-    const { data: cur } = await sb.auth.getSession();
-    if (!u || !u.user) { say("Could not add that account. Try again"); return; }
-    if (cur && cur.session && u.user.id === cur.session.user.id) { say("That is the account you are in"); return; }
-    const { data: info } = await sb.from("accounts").select("id, username, display_name, avatar").eq("id", u.user.id).maybeSingle();
-    if (!info || !info.username) { say("Could not load that account. Try again"); return; }
-    const list = await acctList();
-    await acctPut("list", list.filter(a => a.id !== info.id).concat({ id: info.id, rt, username: info.username, name: info.display_name || info.username, avatar: typeof info.avatar === "string" && info.avatar.length < 400000 ? info.avatar : null, main: false }));
-    linkSavedAccounts(info.id, at).catch(() => {});
-    say("Account added");
-    return;
-  }
-  const { data, error } = await sb.auth.setSession({ access_token: p.get("access_token"), refresh_token: p.get("refresh_token") });
-  if (error || !data || !data.user) { say(fail); return; }
-  if (oa.mode === "link") { say("Google linked"); return; }
-  const g = await callFn("google-guard").catch(() => ({ ok: false, body: {} }));
-  if (!g.ok || !g.body.ok) {
-    await sb.auth.signOut().catch(() => {});
-    try { sessionStorage.setItem("nook-notice", g.body && g.body.error === "no_account" ? "No Nook account uses that Google email. Make an account first, then link Google in Settings." : "Google sign in did not work. Try again"); } catch (e) {}
-    return;
-  }
-  // an account that was deactivated or deleted less than 30 days ago comes back, like with a password
-  sbUser = data.user;
-  try { await Promise.race([Promise.resolve(sb.rpc("nook_restore_account")).catch(() => {}).then(() => sb.rpc("set_my_deactivated", { flag: false })).catch(() => {}), new Promise(r => setTimeout(r, 6000))]); } catch (e) {}
-  sbUser = null;
-}
 async function takeHashLogin() {
   const raw = location.hash;
-  if (/access_token=|error_description=/.test(raw)) {
-    let oa = null;
-    try { oa = JSON.parse(localStorage.getItem(OAUTH_KEY) || "null"); localStorage.removeItem(OAUTH_KEY); } catch (e) {}
-    if (oa && Date.now() - oa.t < 15 * 60000 && (oa.mode === "in" || oa.mode === "link" || oa.mode === "add")) { await finishGoogle(oa, raw); return; }
-  }
   if (!/access_token=/.test(raw)) return;
   const p = new URLSearchParams(raw.replace(/^#/, ""));
   history.replaceState(history.state, "", location.pathname + location.search);
@@ -228,7 +176,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.18.1";
+const APP_VERSION = "3.19.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2225,27 +2173,27 @@ function settingsV() {
     } catch (e) { if (sub) sub.textContent = "Could not check right now. Tap to retry."; }
   };
   loadKeyState();
-  let gIds = null;
-  const googleRow = row(ic("mail", 22), "Google", "Checking...", async () => {
-    if (!gIds) { toast("Checking, try again in a moment"); return; }
-    const g = gIds.find(i => i.provider === "google");
-    if (!g) { googleGo("link"); return; }
-    if (gIds.length < 2) { toast("Google is your only way in, so it cannot be removed"); return; }
-    sheet([{ icon: "close", label: "Unlink Google", danger: true, fn: async () => {
-      const { error } = await sb.auth.unlinkIdentity(g);
-      if (error) { toast("Could not unlink Google"); return; }
-      toast("Google unlinked"); render();
-    } }, { label: "Cancel", cancel: true }], "Google is linked");
+  let pkRows = null;
+  const pkRow = row(ic("lock", 22), "Face ID or fingerprint", pkOk() ? "Checking..." : "Not available on this phone.", async () => {
+    if (!pkOk()) { toast("This phone cannot do that"); return; }
+    if (!pkRows) { toast("Checking, try again in a moment"); return; }
+    sheet([
+      { icon: "check", label: "Add this phone", fn: async () => { if (await passkeyAdd()) { toast("Saved. You can sign in with it now"); render(); } } },
+      ...pkRows.map(k => ({ icon: "close", label: "Remove " + (k.name || "key"), danger: true, fn: async () => {
+        const { error } = await sb.from("passkeys").delete().eq("id", k.id);
+        toast(error ? "Could not remove it" : "Removed"); if (!error) render();
+      } })),
+      { label: "Cancel", cancel: true }], "Face ID or fingerprint");
   });
-  Promise.resolve(sb.auth.getUserIdentities()).then(r => {
-    const sub = googleRow.querySelector(".sub");
-    if (r && r.error) { if (sub) sub.textContent = "Could not check right now."; return; }
-    gIds = (r && r.data && r.data.identities) || [];
-    if (sub) sub.textContent = gIds.some(i => i.provider === "google") ? "Linked. You can sign in with Google." : "Link it to sign in with Google.";
-  }, () => { const sub = googleRow.querySelector(".sub"); if (sub) sub.textContent = "Could not check right now."; });
+  if (pkOk()) Promise.resolve(sb.from("passkeys").select("id, name").order("created_at")).then(r => {
+    const sub = pkRow.querySelector(".sub");
+    if (!r || r.error) { if (sub) sub.textContent = "Could not check right now."; return; }
+    pkRows = r.data || [];
+    if (sub) sub.textContent = pkRows.length ? "On for " + pkRows.length + (pkRows.length === 1 ? " phone" : " phones") + ". Tap to change." : "Off. Tap to sign in with your face or finger.";
+  }, () => { const sub = pkRow.querySelector(".sub"); if (sub) sub.textContent = "Could not check right now."; });
   main.append(h("div", { class: "group" },
     row(ic("pass", 22), "Change password", "Needs your current password.", () => changePassV()),
-    googleRow,
+    pkRow,
     row(ic("mail", 22), "Change email", "We send a link to the new address.", () => changeEmailV()),
     totpRow, keyRow));
   main.append(sec("Feed"));
@@ -4236,7 +4184,24 @@ function addAccountModal() {
       h("h1", {}, "Nook"),
       h("p", { class: "sub" }, "Sign in to continue"),
       email, pw.wrap, msg, go1,
-      h("button", { class: "ghost", onclick: () => googleGo("add") }, "Continue with Google"),
+      pkOk() ? h("button", { class: "ghost", onclick: async e => {
+        const b = e.currentTarget; msg.textContent = ""; b.disabled = true;
+        try {
+          const r = await passkeyAsk();
+          if (!r.session) { if (r.err) say(r.err); return; }
+          const { data: u } = await sb.auth.getUser(r.session.access_token);
+          if (!u || !u.user) { say("Could not sign in. Try again"); return; }
+          if (u.user.id === sbUser.id) { say("That is the account you are in"); return; }
+          const { data: info } = await sb.from("accounts").select("id, username, display_name, avatar").eq("id", u.user.id).maybeSingle();
+          if (!info || !info.username) { say("Could not load that account. Try again"); return; }
+          const list = await acctList();
+          await acctPut("list", list.filter(a => a.id !== info.id).concat({ id: info.id, rt: r.session.refresh_token, username: info.username, name: info.display_name || info.username, avatar: typeof info.avatar === "string" && info.avatar.length < 400000 ? info.avatar : null, main: false }));
+          linkSavedAccounts(info.id, r.session.access_token).catch(() => {});
+          m.close();
+          toast("Account added");
+          setTimeout(openAccounts, 350);
+        } finally { b.disabled = false; }
+      } }, "Sign in with Face ID or fingerprint") : null,
       h("button", { class: "tbtn", onclick: () => recoverModal(email.value.trim()) }, "Forgot password?"),
       h("button", { class: "ghost", onclick: () => m.close(newAccountModal) }, "Make an account"))],
     onAction: close => add(close)
@@ -4576,7 +4541,19 @@ function authV() {
   main.append(h("div", { class: "auth" },
     h("h1", {}, "Nook"),
     h("p", { class: "sub" }, up ? "Make your account" : "Sign in to continue"),
-    ...fields, agreeRow, msg, btn, up ? null : h("button", { class: "ghost", onclick: () => googleGo("in") }, "Continue with Google"), forgot, flip, SIGNUP_OPEN ? null : h("p", { class: "note" }, "New accounts are closed for now"),
+    ...fields, agreeRow, msg, btn, up || !pkOk() ? null : h("button", { class: "ghost", onclick: async e => {
+      const b = e.currentTarget; msg.textContent = ""; b.disabled = true;
+      try {
+        const r = await passkeyAsk();
+        if (!r.session) { if (r.banned) { showBanned(); return; } msg.textContent = r.err || ""; return; }
+        const { data: sd, error } = await sb.auth.setSession({ access_token: r.session.access_token, refresh_token: r.session.refresh_token });
+        if (error || !sd || !sd.user) { msg.textContent = "Could not sign in. Try again"; return; }
+        sbUser = sd.user;
+        // an account that was deactivated or deleted less than 30 days ago comes back, like with a password
+        await Promise.race([Promise.resolve(sb.rpc("nook_restore_account")).catch(() => {}).then(() => sb.rpc("set_my_deactivated", { flag: false })).catch(() => {}), new Promise(r2 => setTimeout(r2, 8000))]);
+        location.reload();
+      } finally { b.disabled = false; }
+    } }, "Sign in with Face ID or fingerprint"), forgot, flip, SIGNUP_OPEN ? null : h("p", { class: "note" }, "New accounts are closed for now"),
     h("p", { class: "note" }, legalLink("terms", "Terms"), " · ", legalLink("privacy", "Privacy"))));
 }
 
@@ -4810,6 +4787,48 @@ async function callFn(name, body, token) {
     try { j = await r.json(); } catch (e) {}
     return { ok: r.ok, status: r.status, body: j || {} };
   } catch (e) { return { ok: false, status: 0, body: { error: "network" } }; }
+}
+// ---- Face ID and fingerprint sign in (passkeys): the phone keeps the private key, the server only checks its signature ----
+const pkOk = () => !!(window.PublicKeyCredential && navigator.credentials && navigator.credentials.create);
+const pkBuf = s => { const b = atob(String(s).replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(String(s).length / 4) * 4, "=")); return Uint8Array.from(b, c => c.charCodeAt(0)).buffer; };
+const pkStr = buf => toB64(new Uint8Array(buf)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const pkName = () => { const u = navigator.userAgent || ""; return (/iPhone/.test(u) ? "iPhone" : /iPad/.test(u) ? "iPad" : /Android/.test(u) ? "Android phone" : "This device") + " " + new Date().toLocaleDateString([], { month: "short", day: "numeric" }); };
+const pkMsg = e => e === "banned" ? "That account is banned" : e === "busy" ? "Too many tries. Wait a minute" : e === "unknown_key" ? "This phone's key is not saved on any account. Sign in with your password and set it up again" : "Could not sign in with that. Try again";
+async function passkeyAdd() {
+  if (!pkOk()) { toast("This phone cannot do that"); return false; }
+  const r = await callFn("passkey", { action: "reg-start" });
+  if (!r.ok) { toast(r.body && r.body.error === "too_many" ? "You can save up to 5 keys. Remove one first" : "Could not start. Try again"); return false; }
+  const o = r.body;
+  let cred = null;
+  try {
+    cred = await navigator.credentials.create({ publicKey: {
+      challenge: pkBuf(o.challenge), rp: o.rp, user: { id: pkBuf(o.user.id), name: o.user.name, displayName: o.user.displayName },
+      pubKeyCredParams: o.pubKeyCredParams, timeout: 60000, attestation: "none", authenticatorSelection: o.authenticatorSelection,
+      excludeCredentials: (o.excludeCredentials || []).map(c => ({ type: "public-key", id: pkBuf(c.id), transports: c.transports }))
+    } });
+  } catch (e) { if (!e || e.name !== "NotAllowedError") toast(e && e.name === "InvalidStateError" ? "This phone already has a key saved" : "Could not set it up on this phone"); return false; }
+  if (!cred) return false;
+  const resp = { id: cred.id, rawId: pkStr(cred.rawId), type: "public-key", authenticatorAttachment: cred.authenticatorAttachment || undefined, clientExtensionResults: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {},
+    response: { clientDataJSON: pkStr(cred.response.clientDataJSON), attestationObject: pkStr(cred.response.attestationObject), transports: cred.response.getTransports ? cred.response.getTransports() : [] } };
+  const f = await callFn("passkey", { action: "reg-finish", response: resp, name: pkName() });
+  if (!f.ok) { toast(f.body && f.body.error === "already" ? "That key is already saved" : "Could not save the key. Try again"); return false; }
+  return true;
+}
+// asks the phone for the face or fingerprint; answers with a session, or a short text that says what went wrong ("" when the person just cancelled)
+async function passkeyAsk() {
+  if (!pkOk()) return { err: "This phone cannot do that" };
+  const s = await callFn("passkey", { action: "auth-start" });
+  if (!s.ok) return { err: pkMsg(s.body && s.body.error) };
+  let cred = null;
+  try { cred = await navigator.credentials.get({ publicKey: { challenge: pkBuf(s.body.challenge), rpId: s.body.rpId, timeout: 60000, userVerification: "required", allowCredentials: [] } }); }
+  catch (e) { return { err: e && e.name === "NotAllowedError" ? "" : "Could not use the face or fingerprint here" }; }
+  if (!cred) return { err: "" };
+  const a = cred.response;
+  const resp = { id: cred.id, rawId: pkStr(cred.rawId), type: "public-key", authenticatorAttachment: cred.authenticatorAttachment || undefined, clientExtensionResults: {},
+    response: { authenticatorData: pkStr(a.authenticatorData), clientDataJSON: pkStr(a.clientDataJSON), signature: pkStr(a.signature), userHandle: a.userHandle ? pkStr(a.userHandle) : undefined } };
+  const f = await callFn("passkey", { action: "auth-finish", response: resp });
+  if (!f.ok || !f.body.session) return { err: pkMsg(f.body && f.body.error), banned: !!(f.body && f.body.error === "banned") };
+  return { session: f.body.session };
 }
 function refreshBadge() {
   if (!sbUser) return;

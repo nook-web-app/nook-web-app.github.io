@@ -78,7 +78,7 @@ async function runDevice(browser, name, port) {
 
   // service worker + manifest
   const sw = await page.evaluate(async () => { if (!navigator.serviceWorker) return "unsupported"; const r = await Promise.race([navigator.serviceWorker.ready, new Promise(r => setTimeout(() => r(null), 8000))]); return r ? r.active && r.active.scriptURL : null; });
-  ok(typeof sw === "string" && /sw\.js$/.test(sw), name + ": service worker registered and active (" + sw + ")");
+  ok(typeof sw === "string" && /sw\.js\?v=[0-9.]+$/.test(sw), name + ": service worker registered and active (" + sw + ")");
   const man = await page.evaluate(async () => { const l = document.querySelector('link[rel=manifest]'); const r = await fetch(l.href); return r.json(); });
   ok(man && man.name && man.icons && man.icons.length, name + ": manifest loads and parses");
   await context.close();

@@ -1,5 +1,5 @@
 name: Check release files
-# the service worker must not be empty and the three version numbers must match, or phones stop updating
+# the service worker must not be empty, its version must come from its address, and the app and notes versions must match, or phones stop updating
 on:
   push:
     branches: [main]
@@ -10,8 +10,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: |
           test "$(wc -c < sw.js)" -gt 2000 || { echo "sw.js is empty or tiny"; exit 1; }
-          sw=$(grep -o 'nook-[0-9.]*' sw.js | head -1 | sed 's/nook-//')
+          grep -q 'searchParams.get("v")' sw.js || { echo "sw.js does not take its version from its address"; exit 1; }
+          grep -q 'sw.js?v=' update.js || { echo "update.js does not register sw.js with the version"; exit 1; }
           app=$(grep -o 'APP_VERSION = "[0-9.]*"' app.js | grep -o '[0-9.]*[0-9]')
           notes=$(grep -m1 '^## ' CLAUDE_READ_THIS.txt | sed 's/^## //; s/ *!$//')
-          echo "sw=$sw app=$app notes=$notes"
-          test "$sw" = "$app" && test "$app" = "$notes"
+          echo "app=$app notes=$notes"
+          test "$app" = "$notes"

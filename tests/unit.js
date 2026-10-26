@@ -26,6 +26,13 @@ load("const RT_PFX", "async function rtSeal(", "async function rtOpen(");
 // the stored-login key lives in IndexedDB in the app; here it is a plain in-memory key
 vm.runInContext('let _k; function rtKey() { return _k || (_k = crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"])); }', sb);
 
+// lazy pictures: a fake picture store stands in for IndexedDB
+const store = new Map(), reads = [];
+const dbStub = { transaction: () => ({ objectStore: () => ({ get: id => { reads.push(id); const q = {}; setTimeout(() => { q.result = store.get(id); q.onsuccess && q.onsuccess(); }, 0); return q; } }) }) };
+sb.S = { posts: [], chats: [] };
+vm.runInContext("var db;", sb); sb.db = dbStub;
+load("const IMG_ID", "const isImgId", "const IMG_CACHE_CHARS", "const imgCache", "let imgCacheChars", "function imgPeek(", "function imgPut(", "function idbGetImg(", "function imgReal(", "const imgList", "const getImgs", "async function fullState(");
+
 const assert = require("assert");
 let fails = 0;
 async function t(name, fn) { try { await fn(); console.log("PASS " + name); } catch (e) { fails++; console.log("FAIL " + name + "\n  " + (e && e.stack || e)); } }
@@ -157,6 +164,45 @@ const flat = arr => Array.from(arr).map(x => typeof x === "string" ? x : x.tag =
     assert.strictEqual(await run('rtOpen("plain")'), "plain");
     assert.strictEqual(await run('rtOpen(RT_PFX + "AAAA")'), "", "garbage opens to empty, not a throw");
     assert.strictEqual(await run('rtSeal("")'), "");
+  });
+  await t("lazy pictures: ids are told apart from real pictures", () => {
+    assert.ok(run('isImgId("i1a2b-3c4d-5e6f")'));
+    ["data:image/png;base64,AAA", "https://x.com/a.png", "", null, undefined, "i-a-b", "iabc"].forEach(v => { sb.__v = v; assert.ok(!run("isImgId(__v)"), String(v)); });
+  });
+  await t("lazy pictures: imgReal reads one record, caches it, shares a read in flight", async () => {
+    store.set("i1-a-b", "data:image/png;base64,ONE"); store.set("i2-a-b", "data:image/png;base64,TWO");
+    reads.length = 0;
+    const [x, y] = await Promise.all([run('imgReal("i1-a-b")'), run('imgReal("i1-a-b")')]);
+    assert.strictEqual(x, "data:image/png;base64,ONE"); assert.strictEqual(y, x);
+    assert.strictEqual(reads.length, 1, "one read for two callers");
+    await run('imgReal("i1-a-b")');
+    assert.strictEqual(reads.length, 1, "second call comes from the cache");
+    assert.strictEqual(await run('imgReal("data:image/png;base64,REAL")'), "data:image/png;base64,REAL", "real pictures pass through");
+    assert.strictEqual(await run('imgReal("i9-a-b")'), null, "missing record is null");
+    assert.strictEqual(await run('imgReal(null)'), null);
+    store.set("i3-a-b", "data:video/mp4;base64,V");
+    assert.strictEqual(await run('imgReal("i3-a-b")'), null, "old videos count as gone");
+    assert.deepStrictEqual(Array.from(await run('imgList(["i1-a-b", "i9-a-b", "https://x/y.png", "i2-a-b"])')), ["data:image/png;base64,ONE", "https://x/y.png", "data:image/png;base64,TWO"]);
+  });
+  await t("lazy pictures: the cache is least-recently-used and bounded", async () => {
+    run("imgCache.clear(); imgCacheChars = 0;");
+    for (let i = 0; i < 60; i++) { store.set("ic" + i + "-a-b", "data:image/png;base64," + i); await run('imgReal("ic' + i + '-a-b")'); if (i === 5) await run('imgReal("ic0-a-b")'); }
+    assert.ok(run("imgCache.size") <= 48, "at most 48 entries");
+    assert.ok(run('imgCache.has("ic59-a-b")') && !run('imgCache.has("ic1-a-b")'), "oldest goes first");
+    run("imgCache.clear(); imgCacheChars = 0;");
+    const big = "data:image/png;base64," + "A".repeat(10e6);
+    store.set("ib1-a-b", big); store.set("ib2-a-b", big);
+    await run('imgReal("ib1-a-b")'); await run('imgReal("ib2-a-b")');
+    assert.ok(!run('imgCache.has("ib1-a-b")') && run('imgCache.has("ib2-a-b")'), "the character budget evicts, the newest stays");
+    assert.ok(run("imgCacheChars") <= 16e6);
+  });
+  await t("lazy pictures: fullState brings every picture back without touching S", async () => {
+    store.set("if1-a-b", "data:image/png;base64,F1"); store.set("if2-a-b", "data:image/png;base64,F2");
+    sb.S = { v: 3, profile: {}, posts: [{ id: "p1", imgs: ["if1-a-b", "data:image/png;base64,LIVE"] }], chats: [{ id: "c1", msgs: [{ id: "m1", imgs: ["if2-a-b"] }, { id: "m2" }] }] };
+    const f = await run("fullState()");
+    assert.deepStrictEqual(Array.from(f.posts[0].imgs), ["data:image/png;base64,F1", "data:image/png;base64,LIVE"]);
+    assert.deepStrictEqual(Array.from(f.chats[0].msgs[0].imgs), ["data:image/png;base64,F2"]);
+    assert.deepStrictEqual(Array.from(run("S.posts[0].imgs")), ["if1-a-b", "data:image/png;base64,LIVE"], "memory still holds ids");
   });
   console.log(fails ? fails + " unit test(s) failed" : "all unit tests passed");
   process.exit(fails ? 1 : 0);

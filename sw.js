@@ -1,4 +1,5 @@
-const VERSION = "nook-3.20.15";
+// the cache name comes from the version in the registration address (sw.js?v=APP_VERSION), so it can never be forgotten at a release
+const VERSION = "nook-" + (new URL(self.location.href).searchParams.get("v") || "0");
 const SHARE_CACHE = "nook-share";
 const SHELL = ["./", "index.html", "style.css", "guard.js", "app.js", "update.js", "supabase.js", "fonts/inter-latin.woff2", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => {

@@ -59,7 +59,7 @@
     if (manual && failed && !reg.installing) { toast("Could not check. Check your connection and try again"); return; }
     if (!reg.installing && manual) toast("Up to date");
   };
-  navigator.serviceWorker.register("sw.js").then(r => {
+  navigator.serviceWorker.register("sw.js?v=" + encodeURIComponent(APP_VERSION)).then(r => {
     reg = r;
     window.nookCheckUpdate = () => check(true);
     if (r.waiting) ask(r.waiting);

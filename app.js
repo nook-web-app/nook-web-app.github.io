@@ -190,18 +190,51 @@ function view(src) {
   }
   return u;
 }
-function mkImg(src, cls, on) {
-  const i = h("img", { src: view(src), alt: "", decoding: "async", loading: "lazy", class: cls || null });
+function wireImg(i, src, cls) {
   i.onerror = () => {
     i.onerror = () => { if (!cls && i.parentNode) i.replaceWith(h("div", { class: "dmgone" }, "Photo not available")); };
     i.src = src;
   };
+  i.src = view(src);
+}
+// only the pictures that are close to the screen are fetched from the store
+let lazyIO = null;
+const lazyJobs = new WeakMap();
+function lazyWatch(el, fn) {
+  if (typeof IntersectionObserver === "undefined") { fn(); return; }
+  if (!lazyIO) lazyIO = new IntersectionObserver(es => es.forEach(e => {
+    if (!e.isIntersecting) return;
+    lazyIO.unobserve(e.target);
+    const f = lazyJobs.get(e.target);
+    lazyJobs.delete(e.target);
+    if (f) f();
+  }), { rootMargin: "400px 0px" });
+  lazyJobs.set(el, fn);
+  lazyIO.observe(el);
+}
+function mkImg(src, cls, on) {
+  if (isImgId(src)) {
+    const hit = imgPeek(src);
+    if (hit !== undefined) return mkImg(hit, cls, on);
+    // a placeholder of the same box (see .lz in the style sheet) that is filled in once it is near the screen
+    const i = h("img", { alt: "", decoding: "async", class: cls || "lz", "data-iid": src });
+    if (on) i.addEventListener("click", on);
+    lazyWatch(i, () => imgReal(src).then(real => {
+      if (!real) { if (!cls && i.parentNode) i.replaceWith(h("div", { class: "dmgone" }, "Photo not available")); return; }
+      i.classList.remove("lz");
+      i.removeAttribute("data-iid");
+      wireImg(i, real, cls);
+    }));
+    return i;
+  }
+  const i = h("img", { alt: "", decoding: "async", loading: "lazy", class: cls || null });
+  wireImg(i, src, cls);
   if (on) i.addEventListener("click", on);
   return i;
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.20.15";
+const APP_VERSION = "3.20.16";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -229,7 +262,58 @@ function zenHash(o) {
 }
 let db = null;
 let timer = null;
-const imgIds = new Map();
+// ---- lazy pictures ----
+// in memory a saved picture is just its id (the same id the image store uses as key); the bytes come from the store on demand
+// and stay in a small least-recently-used cache. Anything that needs real bytes (share, backup, upload, sync) awaits imgReal.
+const IMG_ID = /^i[0-9a-z]+-[0-9a-z]+-[0-9a-z]+$/;
+const isImgId = v => typeof v === "string" && v.length < 64 && IMG_ID.test(v);
+const IMG_CACHE_CHARS = 16e6, IMG_CACHE_N = 48;
+const imgCache = new Map(), imgPending = new Map();
+let imgCacheChars = 0;
+function imgPeek(id) {
+  const v = imgCache.get(id);
+  if (v !== undefined) { imgCache.delete(id); imgCache.set(id, v); }
+  return v;
+}
+function imgPut(id, v) {
+  if (imgCache.has(id)) imgCacheChars -= imgCache.get(id).length;
+  imgCache.delete(id);
+  imgCache.set(id, v);
+  imgCacheChars += v.length;
+  // the newest picture always stays, however big it is
+  for (const [k, x] of imgCache) { if (imgCache.size <= 1 || (imgCache.size <= IMG_CACHE_N && imgCacheChars <= IMG_CACHE_CHARS)) break; imgCache.delete(k); imgCacheChars -= x.length; }
+}
+function idbGetImg(id) {
+  return new Promise((res, rej) => {
+    const q = db.transaction("img").objectStore("img").get(id);
+    q.onsuccess = () => res(q.result);
+    q.onerror = () => rej(q.error);
+  });
+}
+// the real picture (a data address or a link) for a stored value; anything that is not an id is already real
+function imgReal(v) {
+  if (!isImgId(v)) return Promise.resolve(v == null ? null : v);
+  const hit = imgPeek(v);
+  if (hit !== undefined) return Promise.resolve(hit);
+  if (!db) return Promise.resolve(null);
+  let p = imgPending.get(v);
+  if (!p) {
+    // videos are not supported any more, so an old one counts as gone
+    p = idbGetImg(v).then(r => { if (typeof r === "string" && !r.startsWith("data:video/")) { imgPut(v, r); return r; } return null; }).catch(() => null).finally(() => imgPending.delete(v));
+    imgPending.set(v, p);
+  }
+  return p;
+}
+const imgList = a => Promise.all((a || []).map(imgReal)).then(l => l.filter(Boolean));
+const getImgs = p => imgList(p && p.imgs);
+// a copy of everything with real pictures in it, for the places that keep a whole copy (account snapshot, plain storage fallback)
+async function fullState() {
+  const res = async a => (Array.isArray(a) && a.some(isImgId) ? imgList(a) : a);
+  const out = { ...S, posts: [], chats: [] };
+  for (const p of S.posts) out.posts.push(p && p.imgs ? { ...p, imgs: await res(p.imgs) } : p);
+  for (const c of S.chats) { const msgs = []; for (const m of c.msgs || []) msgs.push(m && m.imgs ? { ...m, imgs: await res(m.imgs) } : m); out.chats.push({ ...c, msgs }); }
+  return out;
+}
 const knownIds = new Set();
 let chain = Promise.resolve();
 function idbOpen() {
@@ -259,9 +343,9 @@ function idbLoad(d) {
     const o = kv.get("state");
     const pr = kv.getAll(IDBKeyRange.bound("p:", "p;", false, true));
     const cr = kv.getAll(IDBKeyRange.bound("c:", "c;", false, true));
+    // only the names of the pictures are read here; the pictures themselves are fetched one by one when a screen needs them (imgReal)
     const ik = t.objectStore("img").getAllKeys();
-    const iv = t.objectStore("img").getAll();
-    t.oncomplete = () => res({ meta: a.result || o.result || null, v2: !!a.result, posts: pr.result, chats: cr.result, keys: ik.result, vals: iv.result });
+    t.oncomplete = () => res({ meta: a.result || o.result || null, v2: !!a.result, posts: pr.result, chats: cr.result, keys: ik.result });
     t.onerror = () => rej(t.error);
     t.onabort = () => rej(t.error);
   });
@@ -313,6 +397,8 @@ async function doFlush() {
       const used = new Set();
       const idFor = src => {
         if (!src) return null;
+        // a picture that was never loaded is still just its id: it is already in the store
+        if (isImgId(src)) { used.add(src); return src; }
         const id = memo.get(src) || hashMemo.get(src) || srcHash(src);
         memo.set(src, id);
         used.add(id);
@@ -352,7 +438,7 @@ async function doFlush() {
       if (e && e.message === "slow save") { clearTimeout(timer); timer = setTimeout(flush, 4000); return; }
     }
   }
-  try { localStorage.setItem("tiny-posts-v3", JSON.stringify(S)); } catch (e) { toast("storage is full"); }
+  try { localStorage.setItem("tiny-posts-v3", JSON.stringify(S.posts.some(p => p && (p.imgs || []).some(isImgId)) || S.chats.some(c => (c.msgs || []).some(m => (m.imgs || []).some(isImgId))) ? await fullState() : S)); } catch (e) { toast("storage is full"); }
 }
 
 function freshState() {
@@ -873,11 +959,19 @@ function lightbox(imgs, i, cap, opts) {
   const holder = h("div", { class: "lbm" });
   const show = () => {
     holder.textContent = "";
-    const src = imgs[n];
-    let el;
-    { el = h("img", { alt: "" }); el.onerror = () => { el.onerror = () => { holder.textContent = ""; holder.append(h("p", { class: "note", style: "color:#fff;text-align:center" }, "Photo not available")); }; el.src = src; }; el.src = view(src); }
-    el.addEventListener("click", e => e.stopPropagation());
-    holder.append(el);
+    const at = n;
+    const put = src => {
+      if (n !== at) return;
+      holder.textContent = "";
+      if (!src) { holder.append(h("p", { class: "note", style: "color:#fff;text-align:center" }, "Photo not available")); return; }
+      const el = h("img", { alt: "" });
+      el.onerror = () => { el.onerror = () => { holder.textContent = ""; holder.append(h("p", { class: "note", style: "color:#fff;text-align:center" }, "Photo not available")); }; el.src = src; };
+      el.src = view(src);
+      el.addEventListener("click", e => e.stopPropagation());
+      holder.append(el);
+    };
+    const cached = isImgId(imgs[n]) ? imgPeek(imgs[n]) : imgs[n];
+    if (cached !== undefined) put(cached); else imgReal(imgs[n]).then(put);
     l.hidden = n === 0 || imgs.length < 2; r.hidden = n === imgs.length - 1 || imgs.length < 2;
   };
   const lb = h("div", { class: "lb", onclick: () => closeLb() });
@@ -994,7 +1088,7 @@ async function postPic(p) {
   m.font = "400 " + fs + "px system-ui, -apple-system, sans-serif";
   const cw = W - pad * 2;
   const lines = p.text ? wrapLines(m, cleanText(p.text), cw) : [];
-  const src = p.imgs && p.imgs.length ? p.imgs[0] : null;
+  const src = p.imgs && p.imgs.length ? await imgReal(p.imgs[0]) : null;
   const who = p.ai ? { name: "Zenith", handle: "zenith", avatar: (S.zen && S.zen.pfp) || null } : p.ra ? { name: p.ra.name, handle: p.ra.handle, avatar: p.ra.avatar } : { name: S.profile.name, handle: S.profile.handle, avatar: S.profile.avatar };
   // the picture and the avatar load side by side
   const mePromise = who && who.avatar ? loadPicImg(view(who.avatar), /^https?:/.test(view(who.avatar))) : Promise.resolve(null);
@@ -1746,7 +1840,7 @@ async function zipMedia(files, src, folder, name) {
 async function zipMediaAll(files, srcs, folder, base) {
   const list = srcs || [], paths = new Array(list.length).fill(null), got = list.map(() => []);
   let next = 0;
-  const worker = async () => { while (next < list.length) { const i = next++; paths[i] = await zipMedia(got[i], list[i], folder, base + "-" + i); } };
+  const worker = async () => { while (next < list.length) { const i = next++; const real = await imgReal(list[i]); if (real) paths[i] = await zipMedia(got[i], real, folder, base + "-" + i); else backupSkipped++; } };
   await Promise.all(Array.from({ length: Math.min(4, list.length) }, worker));
   got.forEach(g => g.forEach(f => files.push(f)));
   return paths;
@@ -1785,8 +1879,8 @@ async function downloadBackupNow() {
   }
   const pr = S.profile;
   const profile = { name: pr.name, handle: pr.handle, bio: pr.bio || "", bannerTheme: pr.bannerTheme || "default", avatar: null, banner: null };
-  if (pr.avatar) profile.avatar = await zipMedia(files, pr.avatar, "profile", "avatar");
-  if (pr.banner) profile.banner = await zipMedia(files, pr.banner, "profile", "banner");
+  if (pr.avatar) profile.avatar = await zipMedia(files, await imgReal(pr.avatar), "profile", "avatar");
+  if (pr.banner) profile.banner = await zipMedia(files, await imgReal(pr.banner), "profile", "banner");
   files.push({ name: "profile/settings.json", data: enc(JSON.stringify({ app: "nook", version: APP_VERSION, exported: new Date().toISOString(), profile, lists: S.lists, ui: S.ui }, null, 2)) });
   saveSheet(makeZip(files), "nook-backup-" + new Date().toISOString().slice(0, 10) + ".zip", files.length);
   if (backupSkipped) setTimeout(() => toast(backupSkipped + (backupSkipped === 1 ? " picture" : " pictures") + " could not be added to the backup"), 600);
@@ -1942,9 +2036,19 @@ async function zStream(history, onText) {
   }
   return out;
 }
-function zAsk(chat, list, bubble, m) {
+async function zAsk(chat, list, bubble, m) {
   if (!zOn() || !/@zenith/i.test(m.text)) return;
-  const hist = chat.msgs.filter(x => x.text || (x.imgs && x.imgs.some(s => /^data:image\//.test(s)))).slice(-30);
+  const hist0 = chat.msgs.filter(x => x.text || (x.imgs && x.imgs.length)).slice(-30);
+  // only the newest pictures can be sent along, so only those are brought out of the store
+  let found = 0;
+  for (let i = hist0.length - 1; i >= 0 && found < 6; i--) {
+    const x = hist0[i];
+    if (!x.imgs || !x.imgs.length) continue;
+    const real = await Promise.all(x.imgs.map(s => imgReal(s).then(r => r || "")));
+    hist0[i] = { ...x, imgs: real };
+    found += real.filter(s => /^data:image\//.test(s)).length;
+  }
+  const hist = hist0.filter(x => x.text || (x.imgs && x.imgs.some(s => /^data:image\//.test(s))));
   const allowed = new Set();
   let budget = 6;
   for (let i = hist.length - 1; i >= 0 && budget > 0; i--) {
@@ -2129,7 +2233,7 @@ async function zenChatMedia(d) {
       for (const src of lm.imgs) {
         const hsh = imgH(src);
         let e = have.find(x => x.h === hsh);
-        if (!e) { if (!/^data:/.test(src)) continue; e = { h: hsh, d: await notePicOut(k, src) }; }
+        if (!e) { const real = await imgReal(src); if (!/^data:/.test(real || "")) continue; e = { h: hsh, d: await notePicOut(k, real) }; }
         media.push(e);
       }
       lm.zm = media;
@@ -3466,7 +3570,9 @@ async function bannerUrl(src) {
 async function uploadMedia(srcs) {
   const urls = [];
   for (let i = 0; i < srcs.length; i++) {
-    const blob = await (await fetch(srcs[i])).blob();
+    const real = await imgReal(srcs[i]);
+    if (!real) continue;
+    const blob = await (await fetch(real)).blob();
     const ext = (blob.type.split("/")[1] || "bin").replace("jpeg", "jpg");
     const path = sbUser.id + "/" + Date.now() + "-" + i + "." + ext;
     const { error } = await sb.storage.from("media").upload(path, blob, { contentType: blob.type });
@@ -4476,7 +4582,7 @@ async function forgetAccount(id, keepSnap) {
   await acctPut("list", list.filter(a => a.id !== id));
   if (!keepSnap) await acctDel("snap:" + id).catch(() => {});
 }
-async function saveSnap(id) { await acctPut("snap:" + id, JSON.stringify(S)); }
+async function saveSnap(id) { await acctPut("snap:" + id, JSON.stringify(await fullState())); }
 async function loadSnap(id, entry) {
   let next = null;
   try { const raw = await acctGet("snap:" + id); next = raw ? JSON.parse(raw) : null; } catch (e) {}
@@ -7389,12 +7495,13 @@ async function boot() {
         S.chats = (Array.isArray(S.cids) ? S.cids : []).map(i => cm.get("c:" + i)).filter(Boolean);
         delete S.pids; delete S.cids;
       } else idbLegacy = true;
-      const byKey = new Map(r.keys.map((k, i) => [k, r.vals[i]]));
-      const hy = v => (typeof v === "string" && !v.startsWith("data:") ? byKey.get(v) || null : v);
+      // pictures stay as ids (a name that is missing from the store is dropped, as before); only the profile pictures are loaded now
+      const have = new Set(r.keys);
+      const hy = v => (typeof v === "string" && !v.startsWith("data:") ? (have.has(v) ? v : null) : v);
       (S.posts || []).forEach(p => { p.imgs = (p.imgs || []).map(hy).filter(Boolean); });
       (S.chats || []).forEach(c => (c.msgs || []).forEach(m => { m.imgs = (m.imgs || []).map(hy).filter(Boolean); }));
-      if (S.profile) { S.profile.avatar = hy(S.profile.avatar); S.profile.banner = hy(S.profile.banner); }
-      r.keys.forEach((k, i) => { imgIds.set(r.vals[i], k); knownIds.add(k); });
+      if (S.profile) { S.profile.avatar = await imgReal(hy(S.profile.avatar)); S.profile.banner = await imgReal(hy(S.profile.banner)); }
+      r.keys.forEach(k => knownIds.add(k));
       delete S.split;
     }
   } catch (e) { db = null; }
@@ -7516,7 +7623,7 @@ async function boot() {
 // each chat and each message is one row the server cannot read; nothing here ever makes the screen wait
 const isNoteChat = c => !(c.msgs || []).some(m => m.ai);
 const noteHash = new Map();
-const imgH = src => { let v = noteHash.get(src); if (!v) { v = srcHash(src); if (noteHash.size > 200) noteHash.clear(); noteHash.set(src, v); } return v; };
+const imgH = src => { if (isImgId(src)) return src; let v = noteHash.get(src); if (!v) { v = srcHash(src); if (noteHash.size > 200) noteHash.clear(); noteHash.set(src, v); } return v; };
 const noteCSig = c => srcHash("c|" + (c.name || "") + "|" + (c.t || 0));
 const noteImgSig = m => (m.imgs || []).map(imgH).join(",");
 const noteMSig = m => srcHash("m|" + (m.text || "") + "|" + (m.t || 0) + "|" + noteImgSig(m) + "|" + JSON.stringify(m.rpost || null) + JSON.stringify(m.zpost || null));
@@ -7816,7 +7923,7 @@ async function notesPush(ns, key) {
         if (x.m) {
           const h = noteImgSig(x.m), have = ns.pm[x.id];
           let media = have && have.h === h ? have.e : null;
-          if (!media) { media = []; for (const src of x.m.imgs || []) { if (/^data:/.test(src)) media.push(await notePicOut(key, src)); } }
+          if (!media) { media = []; for (const s0 of x.m.imgs || []) { const src = await imgReal(s0); if (/^data:/.test(src || "")) media.push(await notePicOut(key, src)); } }
           rows.push({ owner_id: sbUser.id, id: x.id, body: await noteSeal(key, { c: x.c.id, t: x.m.t, x: x.m.text || "", ...(x.m.rpost ? { rp: x.m.rpost } : {}), ...(x.m.zpost ? { zp: x.m.zpost } : {}) }, x.id), media, deleted: false });
           done.push({ x, pm: { h, e: media } });
         } else {

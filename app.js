@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.13.4";
+const APP_VERSION = "3.14.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1022,6 +1022,14 @@ async function sendPicTo(t, blob, isPost) {
   try { await sendDm(t.id, "", [src], [Object.assign(await srcDims(src), isPost ? { post: true } : {})]); toast("Sent to " + t.name); }
   catch (e) { toast("Could not send"); }
 }
+// a share of a post that lives on the server is counted once per person
+function countShare(p) {
+  if (!p.remote || !sbUser) return;
+  sb.from("post_shares").upsert({ post_id: p.remote, user_id: sbUser.id }, { onConflict: "post_id,user_id", ignoreDuplicates: true }).then(r => {
+    if (r && r.error) return;
+    if (!p.sharedByMe) { p.sharedByMe = true; p.shc = (p.shc || 0) + 1; refreshActs(p); }
+  }, () => {});
+}
 async function sharePost(p) {
   const targets = await messageTargets().catch(() => []);
   const pic = async () => { toast("Making picture..."); try { return await postPic(p); } catch (e) { toast("Could not make picture"); return null; } };
@@ -1029,21 +1037,21 @@ async function sharePost(p) {
     { icon: "edit", label: "Post", fn: async () => { const b = await pic(); if (b) openCompose({ files: [new File([b], "nook-post.png", { type: "image/png" })] }); } },
     ...(targets.length ? [{ icon: "chat", label: "Message", fn: () => chooseTarget(targets, async t => {
       if (p.ai && t.kind === "user") { try { const pu = await zenPfpUrl(); await sendDm(t.id, ZPOST + JSON.stringify({ x: p.text, t: p.t, ...(pu ? { a: pu } : {}) }), [], []); toast("Sent to " + t.name); } catch (e) { toast("Could not send"); } return; }
-      if (p.remote && t.kind === "user") { try { await sendDm(t.id, RPOST + JSON.stringify({ id: p.remote, u: p.ra ? p.ra.id : sbUser.id }), [], []); toast("Sent to " + t.name); } catch (e) { toast("Could not send. " + plainErr(e, "Try again")); } return; }
+      if (p.remote && t.kind === "user") { try { await sendDm(t.id, RPOST + JSON.stringify({ id: p.remote, u: p.ra ? p.ra.id : sbUser.id }), [], []); countShare(p); toast("Sent to " + t.name); } catch (e) { toast("Could not send. " + plainErr(e, "Try again")); } return; }
       if (t.kind === "note") {
         // a post goes into notes as the post itself, the way it goes to a person, not as a picture of it
         const chat = S.chats.find(x => x.id === t.id);
         if (!chat) return;
         const m = { id: uid(), text: "", t: Date.now(), imgs: [] };
         if (p.ai) { const pu = await zenPfpUrl().catch(() => null); m.zpost = { x: String(p.text || "").slice(0, 600), t: p.t, a: pu || null }; }
-        else if (p.remote) m.rpost = { id: p.remote, u: p.ra ? p.ra.id : sbUser.id };
+        else if (p.remote) { m.rpost = { id: p.remote, u: p.ra ? p.ra.id : sbUser.id }; countShare(p); }
         else { m.text = p.text || ""; m.imgs = (p.imgs || []).slice(); }
         chat.msgs.push(m); persist(); toast("Saved in " + t.name);
         return;
       }
       const b = await pic(); if (b) sendPicTo(t, b, true);
     }) }] : []),
-    { icon: "share", label: "Another app", fn: () => sharePic(p) },
+    { icon: "share", label: "Another app", fn: () => { countShare(p); sharePic(p); } },
     { label: "Cancel", cancel: true }], "Share post");
 }
 // nc: inside an opened reply the list is flat and the numbers would only count down the chain, so the comment icon shows alone
@@ -1055,14 +1063,14 @@ function acts(p, big, nc) {
     ab("rp", "repost", p.rpc || 0, p.reposted, () => toggleRemoteRepost(p, big), "Repost"),
     ab("like", "heart", p.lc || 0, p.liked, () => toggleRemoteLike(p, big), "Like", true),
     ab("bm", "bookmark", 0, p.saved, () => { setSaved(p, !p.saved); bump = p.id + "bm"; persist(); refresh(p, big); toast(p.saved ? "Saved" : "Removed from saved"); }, "Save", true),
-    ab("sh", "share", 0, false, () => sharePost(p), "Share post"),
+    ab("sh", "share", p.shc || 0, false, () => sharePost(p), "Share post"),
     ab("mo", "dots", 0, false, () => sheet([...(typeof p.text === "string" && p.text ? [{ icon: "copy", label: "Copy post text", fn: () => copy(p.text || "") }] : []), { icon: "eyeoff", label: "Not interested", danger: true, fn: () => lessLikeThis(p) }, { icon: "flag", label: "Report post", danger: true, fn: () => reportPost(p) }]), "More"));
   return h("div", { class: "acts" + (big ? " big" : ""), "data-pid": p.id, "data-nc": nc ? "1" : null },
     ab("rl", "reply", n, false, () => openCompose({ parent: p.id }), "Reply"),
     ab("rp", "repost", p.ai ? 0 : p.rpc || 0, p.reposted, () => (p.remote ? toggleRemoteRepost(p, big) : (p.reposted = !p.reposted, p.rpAt = p.reposted ? Date.now() : 0, bump = p.id + "rp", persist(), refresh(p, big))), "Repost"),
     ab("like", "heart", p.ai ? (p.zenLike ? 1 : 0) : p.lc || 0, p.liked, () => (p.remote ? toggleRemoteLike(p, big) : (p.liked = !p.liked, bump = p.id + "like", persist(), refresh(p, big))), "Like", true),
     ab("bm", "bookmark", 0, p.saved, () => { setSaved(p, !p.saved); bump = p.id + "bm"; persist(); refresh(p, big); toast(p.saved ? "Saved" : "Removed from saved"); }, "Save", true),
-    ab("sh", "share", 0, false, () => sharePost(p), "Share post"),
+    ab("sh", "share", p.shc || 0, false, () => sharePost(p), "Share post"),
     ab("mo", "dots", 0, false, () => postSheet(p), "More"));
 }
 const refresh = (p, big) => { if (big) render(); else refreshActs(p); };
@@ -2602,13 +2610,14 @@ async function loadFeed() {
     sb.from("blocks").select("blocker_id").eq("blocked_id", sbUser.id),
     ids.length ? sb.from("likes").select("post_id").in("post_id", ids) : { data: [] },
     ids.length ? sb.from("reposts").select("post_id").in("post_id", ids) : { data: [] },
+    ids.length ? sb.from("post_shares").select("post_id, user_id").in("post_id", ids) : { data: [] },
     sb.from("accounts").select(ACC_COLS).eq("id", sbUser.id).maybeSingle(),
     sb.from("follows").select("followee_id").eq("follower_id", sbUser.id).limit(1000)
   ]);
   // a failed answer is not an empty one: nothing is changed (a blocked person must not come back because a call failed)
   if ([0, 1, 2, 3].some(i => !feedRes[i] || feedRes[i].error)) { feedFail(); return; }
   feedStatus = "ok"; feedTries = 0;
-  const [{ data: myLikes }, { data: myReposts }, { data: blocksOut }, { data: blocksIn }, { data: likeRows }, { data: repostRows }, { data: meRow }, { data: myFollows }] = feedRes;
+  const [{ data: myLikes }, { data: myReposts }, { data: blocksOut }, { data: blocksIn }, { data: likeRows }, { data: repostRows }, { data: shareRows }, { data: meRow }, { data: myFollows }] = feedRes;
   if (myFollows) { followSet = new Set(myFollows.map(r => r.followee_id)); cacheWrite("follows:" + sbUser.id, [...followSet]); }
   if (meRow) {
     let changed = false;
@@ -2641,7 +2650,8 @@ async function loadFeed() {
     }
   }
   const tally = rows => { const m = new Map(); (rows || []).forEach(r => m.set(r.post_id, (m.get(r.post_id) || 0) + 1)); return m; };
-  const lc = tally(likeRows), rc = tally(repostRows);
+  const lc = tally(likeRows), rc = tally(repostRows), shc = tally(shareRows);
+  const shMine = new Set((shareRows || []).filter(r => r.user_id === sbUser.id).map(r => r.post_id));
   const liked = new Set((myLikes || []).map(x => x.post_id));
   const reposted = new Set((myReposts || []).map(x => x.post_id));
   const rpTime = new Map((myReposts || []).map(x => [x.post_id, Date.parse(x.created_at) || 0]));
@@ -2663,6 +2673,7 @@ async function loadFeed() {
     if (!p.remote || p.ra) return;
     p.lc = lc.get(p.remote) || 0;
     p.rpc = rc.get(p.remote) || 0;
+    p.shc = shc.get(p.remote) || 0; p.sharedByMe = shMine.has(p.remote);
     p.rp = replyTally.get(p.remote) || 0;
     p.liked = liked.has(p.remote);
     p.reposted = reposted.has(p.remote);
@@ -2675,7 +2686,7 @@ async function loadFeed() {
       text: p.body || "", t: Date.parse(p.created_at), imgs: parseMedia(p.media_url),
       ra: { id: p.user_id, name: a.display_name == null ? a.username : a.display_name, handle: a.username, avatar: a.avatar || null },
       liked: liked.has(p.id), reposted: reposted.has(p.id), rpAt: rpTime.get(p.id) || 0, rpBy: rpBy(p.id), saved: savedMap.get(p.id) || !!(S.sv && S.sv[p.id]),
-      lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, rp: replyTally.get(p.id) || 0, pinned: false
+      lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, shc: shc.get(p.id) || 0, sharedByMe: shMine.has(p.id), rp: replyTally.get(p.id) || 0, pinned: false
     };
   });
   // my posts that only the server has (made on another device, or lost from this one) come back
@@ -2685,7 +2696,7 @@ async function loadFeed() {
   const back = mineBack.map(p => ({
     id: "m" + p.id, remote: p.id, parent: p.parent_id ? (localByRemote.get(p.parent_id) || (backIds.has(p.parent_id) ? "m" + p.parent_id : "r" + p.parent_id)) : null,
     text: p.body || "", t: Date.parse(p.created_at), imgs: parseMedia(p.media_url), media: parseMedia(p.media_url),
-    liked: liked.has(p.id), reposted: reposted.has(p.id), saved: !!(S.sv && S.sv[p.id]), lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, rp: replyTally.get(p.id) || 0,
+    liked: liked.has(p.id), reposted: reposted.has(p.id), saved: !!(S.sv && S.sv[p.id]), lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, shc: shc.get(p.id) || 0, sharedByMe: shMine.has(p.id), rp: replyTally.get(p.id) || 0,
     pinned: !!meRow && meRow.pinned_post_id === p.id
   }));
   // what this person saved or liked stays, even when the post is older than the newest 300
@@ -2764,16 +2775,18 @@ async function mapRemotePosts(rows) {
   const fresh = (rows || []).filter(r => !have.has(r.id));
   if (!fresh.length) return 0;
   const ids = fresh.map(r => r.id), authors = [...new Set(fresh.map(r => r.user_id).filter(u => u !== sbUser.id))];
-  const [lk, rp, myLk, myRp, kidsQ, who] = await Promise.all([
+  const [lk, rp, myLk, myRp, kidsQ, who, shQ] = await Promise.all([
     sb.from("likes").select("post_id").in("post_id", ids),
     sb.from("reposts").select("post_id").in("post_id", ids),
     sb.from("likes").select("post_id").eq("user_id", sbUser.id).in("post_id", ids),
     sb.from("reposts").select("post_id").eq("user_id", sbUser.id).in("post_id", ids),
     sb.from("posts").select("parent_id").in("parent_id", ids),
-    authors.length ? cachedAccounts(authors) : new Map()
+    authors.length ? cachedAccounts(authors) : new Map(),
+    sb.from("post_shares").select("post_id, user_id").in("post_id", ids)
   ]);
   const tally = (q, k) => { const m = new Map(); ((q && q.data) || []).forEach(r => m.set(r[k], (m.get(r[k]) || 0) + 1)); return m; };
-  const lc = tally(lk, "post_id"), rc = tally(rp, "post_id"), kc = tally(kidsQ, "parent_id");
+  const lc = tally(lk, "post_id"), rc = tally(rp, "post_id"), kc = tally(kidsQ, "parent_id"), shc = tally(shQ, "post_id");
+  const shMine = new Set(((shQ && shQ.data) || []).filter(r => r.user_id === sbUser.id).map(r => r.post_id));
   const mineL = new Set(((myLk && myLk.data) || []).map(r => r.post_id)), mineR = new Set(((myRp && myRp.data) || []).map(r => r.post_id));
   const localByRemote = new Map(S.posts.filter(p => p.remote && !p.ra).map(p => [p.remote, p.id]));
   let n = 0;
@@ -2783,7 +2796,7 @@ async function mapRemotePosts(rows) {
     const base = {
       remote: p.id, parent: p.parent_id ? (localByRemote.get(p.parent_id) || (mine ? "m" : "r") + p.parent_id) : null,
       text: p.body || "", t: Date.parse(p.created_at), imgs: parseMedia(p.media_url),
-      liked: mineL.has(p.id), reposted: mineR.has(p.id), saved: !!(S.sv && S.sv[p.id]), lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, rp: kc.get(p.id) || 0, pinned: false
+      liked: mineL.has(p.id), reposted: mineR.has(p.id), saved: !!(S.sv && S.sv[p.id]), lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, shc: shc.get(p.id) || 0, sharedByMe: shMine.has(p.id), rp: kc.get(p.id) || 0, pinned: false
     };
     if (mine) S.posts.push(Object.assign(base, { id: "m" + p.id, media: base.imgs }));
     else S.posts.push(Object.assign(base, { id: "r" + p.id, ra: { id: p.user_id, name: a.display_name == null ? a.username : a.display_name, handle: a.username, avatar: a.avatar || null } }));

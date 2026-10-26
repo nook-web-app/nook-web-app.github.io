@@ -1,5 +1,6 @@
 // never run inside someone else's page: a hidden frame is how people trick you into tapping things
 if (window.top !== window.self) { document.documentElement.style.display = "none"; try { window.top.location = window.self.location; } catch (e) {} }
+setTimeout(() => { const b = document.getElementById("boot"); if (b) b.remove(); }, 6000);
 function startFail(why) {
   const m = document.getElementById("main");
   if (!m || m.childElementCount) return;
@@ -185,7 +186,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.20.11";
+const APP_VERSION = "3.20.12";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -669,22 +670,14 @@ async function fetchPreview(url) {
     try { t = (await (await timed("https://www.youtube.com/oembed?format=json&url=" + encodeURIComponent(url))).json()).title || ""; } catch (e) {}
     return { t, d: "", i: "https://i.ytimg.com/vi/" + yt + "/hqdefault.jpg", s: "YouTube", v: 2 };
   }
+  // our own endpoint reads the page (https only, no private addresses, size and time caps) and needs a signed in user
   try {
-    const j = await (await timed("https://api.microlink.io/?url=" + encodeURIComponent(url))).json();
-    if (j.status !== "success" || !j.data) throw new Error("x");
-    const d = j.data;
-    const pic = (d.image && d.image.url) || (d.logo && d.logo.url) || "";
-    return { t: d.title || "", d: d.description || "", i: /^https:\/\//i.test(pic) ? pic : "", s: d.publisher || host, v: 2 };
-  } catch (e) {}
-  try {
-    const html = await (await timed("https://api.allorigins.win/raw?url=" + encodeURIComponent(url))).text();
-    const doc = new DOMParser().parseFromString(html, "text/html");
-    const meta = k => { const e = doc.querySelector('meta[property="' + k + '"],meta[name="' + k + '"]'); return e ? e.getAttribute("content") || "" : ""; };
-    let img = meta("og:image") || meta("twitter:image");
-    if (img) { try { img = new URL(img, url).href; } catch (e) {} if (!/^https:\/\//i.test(img)) img = ""; }
-    const t = meta("og:title") || meta("twitter:title") || doc.title || "";
-    if (!t && !img) throw new Error("x");
-    return { t, d: meta("og:description") || meta("description"), i: img, s: meta("og:site_name") || host, v: 2 };
+    if (!sbUser) return null;
+    const r = await callFn("preview", { url });
+    const d = r.ok && r.body;
+    if (!d || (!d.title && !d.image)) throw new Error("x");
+    const pic = String(d.image || "");
+    return { t: String(d.title || ""), d: String(d.description || ""), i: /^https:\/\//i.test(pic) ? pic : "", s: String(d.site || host), v: 2 };
   } catch (e) {}
   return null;
 }
@@ -2814,10 +2807,20 @@ async function shareSaveStats(ids) {
 async function loadFeed() {
   if (!sbUser || !S) return;
   const feedT0 = Date.now();
-  let pq = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url").order("created_at", { ascending: false }).limit(300);
+  // the list view leaves out photos stored inline in the row (old posts), so 300 rows never pull hundreds of MB; the newest few are fetched below
+  let pq = await sb.from("posts_feed").select("id, user_id, body, created_at, parent_id, media_url, media_inline").order("created_at", { ascending: false }).limit(300);
+  if (pq.error) pq = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url").order("created_at", { ascending: false }).limit(300);
   if (pq.error) pq = await sb.from("posts").select("id, user_id, body, created_at").order("created_at", { ascending: false }).limit(300);
   const posts = pq.data;
   if (!posts) { feedFail(); return; }
+  try {
+    const inl = posts.filter(p => p.media_inline).slice(0, 12);
+    if (inl.length) {
+      const full = await sb.from("posts").select("id, media_url").in("id", inl.map(p => p.id));
+      const m = new Map((full.data || []).map(r => [r.id, r.media_url]));
+      inl.forEach(p => { if (m.has(p.id)) p.media_url = m.get(p.id); });
+    }
+  } catch (e) {}
   // what the people you follow reposted comes in too, even when the post itself is older than the newest 300
   let rpRows = [];
   try {
@@ -5347,23 +5350,30 @@ function myKeys() {
   if (!e2eMine.has(id)) { const p = loadMyKeys(id); e2eMine.set(id, p); p.catch(() => e2eMine.delete(id)); }
   return e2eMine.get(id);
 }
-const KDF_ITERS = 600000;
+// the backup format is told apart by its iteration count (the only version field the table has):
+// 600000 and below is the old PBKDF2-SHA256 copy, above that is PBKDF2-SHA512 with the account and mode bound in as extra data
+const KDF_ITERS = 1000000, KDF_OLD_MAX = 600000;
+const kbV2 = iters => iters > KDF_OLD_MAX;
 async function recoveryKey(pw, salt, iters) {
   const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw.normalize("NFKC")), "PBKDF2", false, ["deriveKey"]);
-  return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: iters, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: iters, hash: kbV2(iters) ? "SHA-512" : "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
 }
+const kbAad = (uid, mode) => new TextEncoder().encode("nook-key-backup-v2:" + uid + ":" + mode);
 // the key is sealed on this phone with the recovery password: the server only ever holds the sealed copy
 async function sealKeyBackup(priv, pub, pw, mode) {
   const jwk = await crypto.subtle.exportKey("jwk", priv);
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await recoveryKey(pw, salt, KDF_ITERS);
-  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify(jwk)));
-  return { user_id: sbUser.id, mode: mode || "recovery", salt: toB64(salt), iv: toB64(iv), ct: toB64(new Uint8Array(ct)), iters: KDF_ITERS, pub, updated_at: new Date().toISOString() };
+  const m = mode || "recovery";
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: kbAad(sbUser.id, m) }, key, new TextEncoder().encode(JSON.stringify(jwk)));
+  return { user_id: sbUser.id, mode: m, salt: toB64(salt), iv: toB64(iv), ct: toB64(new Uint8Array(ct)), iters: KDF_ITERS, pub, updated_at: new Date().toISOString() };
 }
 async function openKeyBackup(row, pw) {
   const key = await recoveryKey(pw, fromB64(row.salt), row.iters);
-  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(row.iv) }, key, fromB64(row.ct));
+  const alg = { name: "AES-GCM", iv: fromB64(row.iv) };
+  if (kbV2(row.iters)) alg.additionalData = kbAad(sbUser.id, row.mode || "recovery");
+  const plain = await crypto.subtle.decrypt(alg, key, fromB64(row.ct));
   const jwk = JSON.parse(new TextDecoder().decode(plain));
   const priv = await crypto.subtle.importKey("jwk", jwk, E2E_ALG, true, ["deriveKey"]);
   const pubKey = await crypto.subtle.importKey("jwk", { kty: "EC", crv: "P-256", x: jwk.x, y: jwk.y, ext: true }, E2E_ALG, true, []);
@@ -5401,8 +5411,8 @@ async function loginBackup(pw, opt) {
     if (optedOut && !opt.enable) return "off";
     if (!mine.priv.extractable) return "legacy";
     if (login && login.pub === mine.pub && !opt.reseal) {
-      // already saved: only locked again when the saved copy no longer opens with this password
-      try { await openKeyBackup(login, pw); return "saved"; } catch (e) {}
+      // already saved: only locked again when the saved copy no longer opens with this password, or is in the old weaker format
+      try { await openKeyBackup(login, pw); if (kbV2(login.iters)) return "saved"; } catch (e) {}
     }
     const up = await sb.from("key_backups").upsert(await sealKeyBackup(mine.priv, mine.pub, pw, "login"), { onConflict: "user_id,mode" });
     if (!up.error && opt.enable) await sb.from("key_backups").delete().eq("user_id", sbUser.id).eq("mode", "off");
@@ -5639,7 +5649,7 @@ async function restoreKeysModal(mode) {
       if (!pw.input.value) { msg.textContent = "Type the password"; return; }
       m.act.disabled = true;
       try {
-        const { data: row, error } = await sb.from("key_backups").select("salt, iv, ct, iters, pub").eq("user_id", sbUser.id).eq("mode", login ? "login" : "recovery").maybeSingle();
+        const { data: row, error } = await sb.from("key_backups").select("mode, salt, iv, ct, iters, pub").eq("user_id", sbUser.id).eq("mode", login ? "login" : "recovery").maybeSingle();
         if (error || !row) { msg.textContent = "Could not load the saved key. Try again"; return; }
         let rec;
         try { rec = await openKeyBackup(row, pw.input.value); } catch (e) { msg.textContent = "That is not the right password"; return; }

@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { fetchImage, pagePreview } from "../_shared/preview.ts";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 const DAY = 864e5, HOUR = 36e5;
@@ -40,43 +41,23 @@ async function generate(_password: string, system: string, history: unknown): Pr
 
 // link preview pictures are fetched here, so the phone never has to download them; https only, no addresses inside a network, small pictures only
 const PIC_TYPES = ["image/jpeg", "image/png", "image/webp"];
-function publicHttps(u: string): URL | null {
-  try {
-    const x = new URL(u);
-    const h = x.hostname.toLowerCase();
-    if (x.protocol !== "https:" || (x.port && x.port !== "443")) return null;
-    if (h === "localhost" || h.endsWith(".local") || h.endsWith(".internal") || h.includes(":") || /^[\d.]+$/.test(h)) return null;
-    return x;
-  } catch { return null; }
-}
 async function fetchPic(u: string): Promise<{ inline_data: { mime_type: string; data: string } } | null> {
-  const x = publicHttps(u);
-  if (!x) return null;
-  try {
-    const r = await fetch(x, { redirect: "manual", signal: AbortSignal.timeout(6000), headers: { accept: "image/*", "user-agent": "Mozilla/5.0 (compatible; NookPreview/1.0)" } });
-    if (!r.ok || !publicHttps(r.url)) return null;
-    const type = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
-    if (!PIC_TYPES.includes(type)) return null;
-    if (Number(r.headers.get("content-length") || 0) > 4 * 1024 * 1024) return null;
-    const buf = new Uint8Array(await r.arrayBuffer());
-    if (!buf.length || buf.length > 4 * 1024 * 1024) return null;
-    let bin = "";
-    for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-    return { inline_data: { mime_type: type, data: btoa(bin) } };
-  } catch { return null; }
+  const got = await fetchImage(u, PIC_TYPES, 4 * 1024 * 1024);
+  if (!got) return null;
+  let bin = "";
+  for (let i = 0; i < got.bytes.length; i += 0x8000) bin += String.fromCharCode(...got.bytes.subarray(i, i + 0x8000));
+  return { inline_data: { mime_type: got.type, data: btoa(bin) } };
 }
 
-// the page title, description and picture of the first link in a post, the same service the app uses for its link cards
+// the page title, description and picture of the first link in a post, read by the same own fetcher the app's link cards use
 async function linkInfo(body: string): Promise<{ note: string; pics: unknown[] }> {
   const m = /https?:\/\/[^\s<>"]+/i.exec(body);
   if (!m) return { note: "", pics: [] };
   try {
-    const r = await fetch("https://api.microlink.io/?url=" + encodeURIComponent(m[0].replace(/[.,!?)\]]+$/, "")), { signal: AbortSignal.timeout(6000) });
-    const j = await r.json();
-    if (j.status !== "success" || !j.data) return { note: "", pics: [] };
-    const bits = [j.data.title, j.data.description].filter(Boolean).join(" - ").slice(0, 400);
-    const pic = (j.data.image && j.data.image.url) || "";
-    const got = pic ? await fetchPic(pic) : null;
+    const p = await pagePreview(m[0].replace(/[.,!?)\]]+$/, ""));
+    if (!p) return { note: "", pics: [] };
+    const bits = [p.title, p.description].filter(Boolean).join(" - ").slice(0, 400);
+    const got = p.image ? await fetchPic(p.image) : null;
     return { note: bits ? "\n(The link preview says: " + bits + ")" : "", pics: got ? [got] : [] };
   } catch { return { note: "", pics: [] }; }
 }

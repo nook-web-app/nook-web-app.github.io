@@ -40,3 +40,6 @@ verify_jwt = false
 
 [functions.passkey]
 verify_jwt = false
+
+[functions.preview]
+verify_jwt = false

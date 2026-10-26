@@ -221,6 +221,8 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
 
   const cand = async (q: PromiseLike<{ data: unknown }>) => ((await q).data || []) as { id: string; user_id: string; body: string | null; parent_id: string | null; media_url: string | null; created_at: string }[];
   const seenOf = async (ids: string[]) => new Set(ids.length ? (((await admin.from("zenith_seen").select("post_id").in("post_id", ids)).data || []) as { post_id: string }[]).map((r) => r.post_id) : []);
+  // belt and braces: a post he already answered is never answered again, whatever the notes say
+  const answered = async (pid: string) => !!(((await admin.from("posts").select("id").eq("parent_id", pid).eq("user_id", zen).limit(1)).data || []).length);
   const mark = (pid: string, acted: string) => admin.from("zenith_seen").upsert({ post_id: pid, acted }, { onConflict: "post_id" });
 
   // 1 and 2: the owner's own posts, and the owner's replies inside a thread where he has spoken
@@ -229,6 +231,7 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
   for (const p of mineNew) {
     if (budget <= 0) break;
     if (seenMine.has(p.id) || !p.body || !String(p.body).trim()) { if (!seenMine.has(p.id)) await mark(p.id, "skip"); continue; }
+    if (await answered(p.id)) { await mark(p.id, "reply"); continue; }
     const chain = await chainText(p.id, owner, zen, String(p.body));
     if (p.parent_id && !chain.zenIn) { await mark(p.id, "skip"); continue; }
     budget--;
@@ -262,6 +265,7 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
     // a reply to him is never answered; the post is only noted, so it is not looked at again
     if (p.parent_id && parents.get(p.parent_id) === zen) { await mark(p.id, "to-him"); continue; }
     if (!p.body || !String(p.body).trim() || budget <= 0) { if (!(budget <= 0)) await mark(p.id, "skip"); continue; }
+    if (await answered(p.id)) { await mark(p.id, "done"); continue; }
     const likeIt = Math.random() < odds, answerIt = Math.random() < odds;
     if (!likeIt && !answerIt) { await mark(p.id, "pass"); continue; }
     budget--;

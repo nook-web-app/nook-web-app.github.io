@@ -216,6 +216,8 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
   const now = Date.now();
   const from = new Date(Math.max(since, now - 6 * HOUR, ROLLOUT)).toISOString();
   const old = new Date(now - 8000).toISOString();
+  // his older answers inside long threads become public a step at a time, as the owner's replies above them get posted
+  try { await importOld(owner, zen); } catch { /* the next minute tries again */ }
   const replySystem = promptFor(docs, "reply");
   const out = { owner: 0, liked: 0, others: 0 };
   let budget = 4;

@@ -1,6 +1,6 @@
 ---
 name: run-bugs
-description: A bugs-only audit-and-fix pass of the Nook repo with a small subagent group. Use when the user says "run bugs" (or asks only for bugs). For everything at once use run-check.
+description: Audit and fix bugs only with 10 subagents. Use when the user says "run bugs".
 ---
 
 # Run bugs

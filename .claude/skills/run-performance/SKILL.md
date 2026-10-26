@@ -1,6 +1,6 @@
 ---
 name: run-performance
-description: A performance-only audit-and-fix pass of the Nook repo with a small subagent group. Use when the user says "run performance" (or asks only for performance). For everything at once use run-check.
+description: Audit and fix performance issues only with 10 subagents. Use when the user says "run performance".
 ---
 
 # Run performance

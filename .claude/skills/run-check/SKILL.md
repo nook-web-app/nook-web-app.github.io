@@ -1,6 +1,6 @@
 ---
 name: run-check
-description: Full audit-and-fix pass over the Nook repo with a swarm of subagents. Use when the user says "run check" (or asks for a full code check for bugs, security and performance issues).
+description: Audit and fix bugs, security and performance with 28 subagents. Use when the user says "run check".
 ---
 
 # Run check

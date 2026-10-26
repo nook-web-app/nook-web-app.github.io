@@ -1,6 +1,6 @@
 ---
 name: run-security
-description: A security-only audit-and-fix pass of the Nook repo with a small subagent group. Use when the user says "run security" (or asks only for security issues). For everything at once use run-check.
+description: Audit and fix security issues only with 10 subagents. Use when the user says "run security".
 ---
 
 # Run security

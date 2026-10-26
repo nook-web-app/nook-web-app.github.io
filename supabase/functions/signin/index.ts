@@ -11,16 +11,19 @@ const cors = {
 };
 const MAX_TRIES = 5;
 // all the tries on one email, from any place: far looser, so strangers cannot lock a person out with a few guesses
-const MAX_TRIES_ALL = 40;
+const MAX_TRIES_ALL = 200;
+// all the failed tries from one place on any email: one stranger cannot spray or use up the email-wide count alone
+const MAX_TRIES_IP = 30;
 // the email-wide lock starts short and is capped at 2 hours, so strangers cannot keep a real person out for days
 const ALL_FIRST = 10;
-const ALL_CAP = 120;
+const ALL_CAP = 60;
 
 // a short fingerprint of the caller's network address; the address itself is never stored
 async function ipTag(req: Request): Promise<string> {
   // the first x-forwarded-for entry is written by the caller, so the last hop (added by the proxy) is used when there is no cf-connecting-ip
   const fwd = (req.headers.get("x-forwarded-for") || "").split(",").map((x) => x.trim()).filter(Boolean);
   const raw = (req.headers.get("cf-connecting-ip") || "").trim() || fwd[fwd.length - 1] || "none";
+  if (raw === "none") return "none";
   const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("nook-ip|" + raw)));
   return Array.from(d.slice(0, 6), (b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -144,9 +147,16 @@ async function proveOld(email: string, password: string, ip: string): Promise<Re
   // the strict count is per email and place, so somebody far away cannot use up the tries of the real owner
   const key = "e:" + email + "|" + ip;
   const all = "a:" + email;
+  // per-place tier over every email (skipped when no address is known, so unknown callers do not share one bucket)
+  const perIp = ip === "none" ? "" : "i:" + ip;
   const gate = await admin.rpc("nook_login_gate", { p_key: key, p_max: MAX_TRIES });
   if (gate.error) return json({ error: "server" }, 500);
   if (gate.data) return json({ error: "locked", until: iso(gate.data) }, 429);
+  if (perIp) {
+    const gateIp = await admin.rpc("nook_login_gate", { p_key: perIp, p_max: MAX_TRIES_IP });
+    if (gateIp.error) return json({ error: "server" }, 500);
+    if (gateIp.data) return json({ error: "locked", until: iso(gateIp.data) }, 429);
+  }
   const gateAll = await admin.rpc("nook_login_gate", { p_key: all, p_max: MAX_TRIES_ALL, p_first: ALL_FIRST, p_cap: ALL_CAP });
   if (gateAll.error) return json({ error: "server" }, 500);
   if (gateAll.data) return json({ error: "locked", until: iso(gateAll.data) }, 429);
@@ -154,8 +164,12 @@ async function proveOld(email: string, password: string, ip: string): Promise<Re
   const miss = async (error: string, status: number) => {
     const f = await admin.rpc("nook_login_fail", { p_key: key, p_max: MAX_TRIES });
     const g = await admin.rpc("nook_login_fail", { p_key: all, p_max: MAX_TRIES_ALL, p_first: ALL_FIRST, p_cap: ALL_CAP });
+    // the place count is never reset by a success, so a sprayer cannot clear it by signing in to an account of its own
+    const gi = perIp ? await admin.rpc("nook_login_fail", { p_key: perIp, p_max: MAX_TRIES_IP }) : null;
+    const rowIp = gi ? (Array.isArray(gi.data) ? gi.data[0] : gi.data) : null;
     const row = Array.isArray(f.data) ? f.data[0] : f.data;
     const rowAll = Array.isArray(g.data) ? g.data[0] : g.data;
+    if (rowIp && rowIp.locked_until) return json({ error: "locked", until: iso(rowIp.locked_until) }, 429);
     if (rowAll && rowAll.locked_until) return json({ error: "locked", until: iso(rowAll.locked_until) }, 429);
     if (row && row.locked_until) return json({ error: "locked", until: iso(row.locked_until) }, 429);
     return json({ error, left: Math.max(0, MAX_TRIES - (row ? row.used : MAX_TRIES)) }, status);

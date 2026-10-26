@@ -315,7 +315,7 @@ async function profileParts(value: string): Promise<unknown[] | "big" | null> {
   const d = /^data:(image\/(?:png|jpeg|jpg|webp|gif));base64,(.+)$/.exec(value);
   if (!d) return partsFor(value);
   if (d[2].length > 16_000_000) return "big";
-  if (d[1] === "image/gif") return (await gifFrames(Uint8Array.from(atob(d[2]), (c) => c.charCodeAt(0)))).map((f) => ({ inline_data: { mime_type: "image/png", data: b64(f) } }));
+  if (d[1] === "image/gif") return (await gifFrames(new Uint8Array(await (await fetch("data:image/gif;base64," + d[2])).arrayBuffer()))).map((f) => ({ inline_data: { mime_type: "image/png", data: b64(f) } }));
   return [{ inline_data: { mime_type: d[1] === "image/jpg" ? "image/jpeg" : d[1], data: d[2] } }];
 }
 

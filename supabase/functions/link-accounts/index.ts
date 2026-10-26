@@ -24,11 +24,9 @@ Deno.serve(async (req) => {
   if (error || !me || !me.user) return json({ error: "not_signed_in" }, 401);
   const ids = new Set<string>([me.user.id]);
   const tokens = Array.isArray(body.tokens) ? body.tokens.slice(0, 9) : [];
-  for (const t of tokens) {
-    if (typeof t !== "string" || t.length > 4000) continue;
-    const { data } = await admin.auth.getUser(t);
-    if (data && data.user) ids.add(data.user.id);
-  }
+  // the tokens are checked at the same time, not one after the other
+  const checked = await Promise.all(tokens.filter((t): t is string => typeof t === "string" && t.length > 0 && t.length <= 4000).map((t) => admin.auth.getUser(t).catch(() => null)));
+  for (const c of checked) if (c && c.data && c.data.user) ids.add(c.data.user.id);
   const { data: have, error: he } = await admin.from("accounts").select("id").in("id", [...ids]);
   if (he) return json({ error: "server" }, 500);
   const list = (have || []).map((r) => r.id as string);

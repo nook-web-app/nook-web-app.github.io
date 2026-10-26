@@ -217,13 +217,14 @@ Deno.serve(async (req) => {
     if (!ident || ident.length > 100) return json({ enabled: false });
     // each place may ask only so often, so the answer cannot be used to list which people use an authenticator
     const hk = "h:" + (await ipTag(req));
-    const hl = await admin.rpc("nook_login_gate", { p_key: hk, p_max: 20, p_first: 5, p_cap: 60 });
+    const hl = await admin.rpc("nook_login_gate", { p_key: hk, p_max: 8, p_first: 15, p_cap: 240 });
     if (hl.data) return json({ enabled: false });
-    await admin.rpc("nook_login_fail", { p_key: hk, p_max: 20, p_first: 5, p_cap: 60 });
+    await admin.rpc("nook_login_fail", { p_key: hk, p_max: 8, p_first: 15, p_cap: 240 });
     const found = await admin.rpc("nook_find_user", { ident });
     const id = typeof found.data === "string" ? found.data : null;
-    const r = id ? await getRow(id) : null;
-    return json({ enabled: !!(r && r.enabled) });
+    // an unknown name does the same lookup work as a real one, so the reply time says nothing
+    const r = id ? await getRow(id) : await getRow("00000000-0000-0000-0000-000000000000");
+    return json({ enabled: !!(id && r && r.enabled) });
   }
 
   const user = await userFrom(req);

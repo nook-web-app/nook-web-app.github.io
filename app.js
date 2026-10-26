@@ -160,6 +160,7 @@ const urlCache = new Map();
 function view(src) {
   if (!src || !src.startsWith("data:")) return src;
   let u = urlCache.get(src);
+  if (u) { urlCache.delete(src); urlCache.set(src, u); }
   if (!u) {
     try {
       const bin = atob(src.slice(src.indexOf(",") + 1));
@@ -168,6 +169,8 @@ function view(src) {
       u = URL.createObjectURL(new Blob([arr], { type: (/^data:(image\/[^;,]+)/.exec(src) || [0, "image/jpeg"])[1] }));
     } catch (e) { u = src; }
     urlCache.set(src, u);
+    // the least recently used addresses are let go (a little later) once there are a lot of them; a picture shown from one falls back to its own data
+    if (urlCache.size > 400) for (const [k, v] of urlCache) { if (urlCache.size <= 360) break; urlCache.delete(k); if (v !== k) setTimeout(() => { try { URL.revokeObjectURL(v); } catch (e) {} }, 30000); }
   }
   return u;
 }
@@ -182,7 +185,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.20.9";
+const APP_VERSION = "3.20.10";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -330,8 +333,23 @@ if (window.matchMedia) {
   if (mq.addEventListener) mq.addEventListener("change", syncBar);
 }
 
-const byId = id => S.posts.find(p => p.id === id);
-const kids = id => S.posts.filter(p => p.parent === id);
+// id and parent indexes over S.posts, rebuilt when the list changes and dropped at the end of the current task
+let postIdx = null;
+function postIndex() {
+  const L = S.posts;
+  if (postIdx && postIdx.L === L && postIdx.n === L.length && postIdx.last === L[L.length - 1]) return postIdx;
+  const ids = new Map(), par = new Map();
+  for (const p of L) {
+    if (!ids.has(p.id)) ids.set(p.id, p);
+    if (p.parent != null) { const a = par.get(p.parent); if (a) a.push(p); else par.set(p.parent, [p]); }
+  }
+  postIdx = { L, n: L.length, last: L[L.length - 1], ids, par };
+  Promise.resolve().then(() => { postIdx = null; });
+  return postIdx;
+}
+const dropPostIndex = () => { postIdx = null; };
+const byId = id => { const h = postIndex().ids.get(id); return h && h.id === id ? h : S.posts.find(p => p.id === id); };
+const kids = id => { const a = postIndex().par.get(id); return a ? a.filter(p => p.parent === id) : []; };
 // true when one of his own posts is above this one, however far up
 const zenThread = p => { for (let q = p && p.parent ? byId(p.parent) : null, n = 0; q && n < 60; q = q.parent ? byId(q.parent) : null, n++) if (q.ai) return true; return false; };
 // a post that shows a link card does not also print the link; the copy button in the menu still has the whole text
@@ -1463,7 +1481,20 @@ function convV(c) {
     return row;
   };
   if (!chat.msgs.length) list.append(h("div", { class: "empty" }, ic("smile", 48), h("p", {}, "Nothing here yet. Say something to yourself.")));
-  chat.msgs.forEach(m => list.append(bubble(m)));
+  // only the newest 80 messages are drawn at first; older ones are added above on request
+  let shownFrom = Math.max(0, chat.msgs.length - 80);
+  const earlier = h("button", { class: "ghost", type: "button", style: "margin:8px auto;display:block" }, "Show earlier messages");
+  earlier.addEventListener("click", () => {
+    const upto = shownFrom, from = Math.max(0, upto - 80), h0 = main.scrollHeight, t0 = main.scrollTop;
+    const frag = document.createDocumentFragment();
+    chat.msgs.slice(from, upto).forEach(m => frag.append(bubble(m)));
+    earlier.after(frag);
+    shownFrom = from;
+    if (!from) earlier.remove();
+    main.scrollTop = t0 + (main.scrollHeight - h0);
+  });
+  if (shownFrom) list.append(earlier);
+  chat.msgs.slice(shownFrom).forEach(m => list.append(bubble(m)));
   const jobs = [], pend = [];
   const strip = h("div", { class: "cpend", hidden: true });
   const ta = h("textarea", { rows: 1, placeholder: "Message", "aria-label": "Message", enterkeyhint: "send", autocomplete: "off" });
@@ -1629,6 +1660,15 @@ async function zipMedia(files, src, folder, name) {
   } catch (e) { backupSkipped++; return null; }
   return path;
 }
+// the pictures of one record are fetched side by side (at most 4 at once) and added to the zip in their own order
+async function zipMediaAll(files, srcs, folder, base) {
+  const list = srcs || [], paths = new Array(list.length).fill(null), got = list.map(() => []);
+  let next = 0;
+  const worker = async () => { while (next < list.length) { const i = next++; paths[i] = await zipMedia(got[i], list[i], folder, base + "-" + i); } };
+  await Promise.all(Array.from({ length: Math.min(4, list.length) }, worker));
+  got.forEach(g => g.forEach(f => files.push(f)));
+  return paths;
+}
 let backupSkipped = 0, backupBusy = false;
 async function downloadBackup() {
   if (backupBusy) return;
@@ -1645,8 +1685,7 @@ async function downloadBackupNow() {
   // only what this person wrote: other people's posts are not theirs to export
   for (const p of S.posts.filter(x => !x.ra && !x.ai)) {
     const rec = { id: p.id, text: p.text, t: p.t, edited: !!p.edited, liked: !!p.liked, saved: !!p.saved, pinned: !!p.pinned, parent: p.parent || null, media: [] };
-    let i = 0;
-    for (const src of p.imgs || []) rec.media.push(await zipMedia(files, src, "posts/images", p.id + "-" + (i++)));
+    rec.media = await zipMediaAll(files, p.imgs, "posts/images", p.id);
     (p.parent ? replies : posts).push(rec);
   }
   if (posts.length) files.push({ name: "posts/posts.json", data: enc(JSON.stringify(posts, null, 2)) });
@@ -1657,8 +1696,7 @@ async function downloadBackupNow() {
     let mi = 0;
     for (const m of c.msgs) {
       const rec = { id: m.id, text: m.text, t: m.t, media: [] };
-      let i = 0;
-      for (const src of m.imgs || []) rec.media.push(await zipMedia(files, src, folder + "/images", m.id + "-" + (i++)));
+      rec.media = await zipMediaAll(files, m.imgs, folder + "/images", m.id);
       msgs.push(rec); mi++;
     }
     files.push({ name: folder + "/messages.json", data: enc(JSON.stringify({ name: c.name, id: c.id, t: c.t, messages: msgs }, null, 2)) });
@@ -1840,8 +1878,8 @@ function zAsk(chat, list, bubble, m) {
     });
     return { role: x.ai ? "model" : "user", parts };
   }).filter(x => x.parts.length);
+  // the empty answer is only on the screen while it streams; it joins the chat once there is something to keep
   const ai = { id: uid(), text: "", t: Date.now(), imgs: [], ai: true };
-  chat.msgs.push(ai);
   const row = bubble(ai);
   row.classList.add("new");
   const b = h("div", { class: "bub typing" }, h("i"), h("i"), h("i"));
@@ -1864,7 +1902,7 @@ function zAsk(chat, list, bubble, m) {
     if (finished) {
       // an error line stays on the screen but is never saved as something Zenith said
       if (failed) { chat.msgs = chat.msgs.filter(x => x !== ai); persist(); return; }
-      ai.text = full; persist(); return;
+      ai.text = full; if (!chat.msgs.includes(ai)) chat.msgs.push(ai); persist(); return;
     }
     setTimeout(step, 60);
   };
@@ -2045,6 +2083,8 @@ async function zenSync() {
     }
   } catch (e) {} finally { zenBusySync = false; }
 }
+// sealed chat rows that were opened and merged once are not opened again until the server copy changes
+const zenEncDone = new Map();
 async function zenPull() {
   if (!sbUser || !S || !isOwner()) return;
   const { data, error } = await pageAll((a, b) => sb.from("zenith_docs").select("kind, doc_id, data").eq("owner_id", sbUser.id).order("kind").order("doc_id").range(a, b));
@@ -2054,17 +2094,19 @@ async function zenPull() {
   let changed = false;
   // sealed chats are opened first; a copy from before sealing is used as it is and sealed again by the next sync
   const chatOpen = new Map();
-  for (const r of data || []) if (r.kind === "chat" && r.data && r.data.enc) { try { const k = await sharedKey(sbUser.id); chatOpen.set(r.doc_id, Object.assign({ id: r.data.id }, await noteOpen(k, r.data.enc))); } catch (e) {} }
+  const encStale = r => r.kind === "chat" && r.data && r.data.enc && zenEncDone.get(r.doc_id) === r.data.enc;
+  for (const r of data || []) if (r.kind === "chat" && r.data && r.data.enc && !encStale(r)) { try { const k = await sharedKey(sbUser.id); chatOpen.set(r.doc_id, Object.assign({ id: r.data.id }, await noteOpen(k, r.data.enc))); } catch (e) {} }
   // the pictures that belong to the sealed chats are opened first; one that cannot be fetched is left out and tried again at the next pull
   const zenPics = new Map();
-  for (const dd of chatOpen.values()) {
+  const picFail = new Set();
+  for (const [cdoc, dd] of chatOpen) {
     for (const m of dd.msgs || []) {
       if (!Array.isArray(m.media) || !m.media.length || typeof m.id !== "string") continue;
       try {
         const k = await sharedKey(sbUser.id), imgs = [], zm = [];
         for (const md of m.media) { const src = await notePicIn(k, md); imgs.push(src); zm.push({ h: imgH(src), d: md }); }
         zenPics.set(m.id, { imgs, zm });
-      } catch (e) {}
+      } catch (e) { picFail.add(cdoc); }
     }
   }
   (data || []).forEach(r => {
@@ -2072,7 +2114,7 @@ async function zenPull() {
     if (r.kind === "post") {
       zenSeen.set(key, zenJson(d));
       if ((S.zen.gone || []).includes(d.id)) { sb.from("zenith_docs").delete().eq("owner_id", sbUser.id).eq("kind", "post").eq("doc_id", r.doc_id).then(() => { zenSeen.delete(key); }, () => {}); return; }
-      if (d.parentRemote) { const par = byRemote.get(d.parentRemote); if (!par) return; d.parent = par.id; if (!par.zenReplied) { par.zenReplied = true; changed = true; } }
+      if (d.parentRemote) { const par = byRemote.get(d.parentRemote); if (!par) return; d.parent = par.id; dropPostIndex(); if (!par.zenReplied) { par.zenReplied = true; changed = true; } }
       if (!byLocal.has(d.id) && !d.pub) { const p = Object.assign({ imgs: [], liked: false, reposted: false, saved: false, pinned: false }, d, { imgs: [], ai: true }); S.posts.push(p); byLocal.set(p.id, p); changed = true; }
       else if (d.pub && byLocal.get(d.id) && byLocal.get(d.id).pub !== d.pub) { byLocal.get(d.id).pub = d.pub; changed = true; }
     } else if (r.kind === "flag") {
@@ -2082,6 +2124,8 @@ async function zenPull() {
       ["zenReplied", "zenAnswered", "zenLikeChecked", "zenLike"].forEach(f => { if (d[f] && !p[f]) { p[f] = true; changed = true; } });
     } else if (r.kind === "chat") {
       const sealedRow = !!(r.data && r.data.enc);
+      if (sealedRow && encStale(r)) return;
+      if (sealedRow && chatOpen.get(r.doc_id) && !picFail.has(r.doc_id)) zenEncDone.set(r.doc_id, r.data.enc);
       if (sealedRow) { const dd = chatOpen.get(r.doc_id); if (!dd) return; zenSeen.set(key, zenJson({ id: dd.id, name: dd.name, t: dd.t, msgs: (dd.msgs || []).map(m => ({ id: m.id, text: m.text, t: m.t, ai: !!m.ai, ph: ((zenPics.get(m.id) || {}).zm || []).map(e => e.h) })) })); d = dd; }
       const c = S.chats.find(x => x.id === d.id);
       const msgs = (d.msgs || []).map(m => ({ id: m.id, text: m.text || "", t: m.t, ai: !!m.ai, imgs: (zenPics.get(m.id) || {}).imgs || [], zm: (zenPics.get(m.id) || {}).zm }));
@@ -2106,6 +2150,7 @@ async function zenPull() {
   const pubd = S.posts.filter(p => p.ai && p.pub);
   if (pubd.length) {
     pubd.forEach(lp => S.posts.forEach(k => { if (k.parent === lp.id) k.parent = "r" + lp.pub; }));
+    dropPostIndex();
     // a like, repost or save you gave the private copy moves to the public one
     pubd.forEach(lp => {
       if (lp.liked) sb.from("likes").insert({ user_id: sbUser.id, post_id: lp.pub }).then(() => {}, () => {});
@@ -2724,8 +2769,22 @@ async function rowsFor(table, ids) {
   const res = await Promise.all(parts.map(c => sb.from(table).select("post_id, user_id").in("post_id", c)));
   return { data: res.flatMap(r => (r && r.data) || []) };
 }
+// counts of shares and saves (plus this person's own flags) come from one server call, because the rows of other people are not readable
+async function shareSaveStats(ids) {
+  const out = { sh: new Map(), sv: new Map(), myShared: new Set(), mySaved: new Set() };
+  const parts = [];
+  for (let i = 0; i < ids.length; i += 400) parts.push(ids.slice(i, i + 400));
+  const res = await Promise.all(parts.map(c => Promise.resolve(sb.rpc("post_share_save_stats", { p_ids: c })).catch(() => null)));
+  res.forEach(r => ((r && r.data) || []).forEach(x => {
+    out.sh.set(x.post_id, x.shares || 0); out.sv.set(x.post_id, x.saves || 0);
+    if (x.i_shared) out.myShared.add(x.post_id);
+    if (x.i_saved) out.mySaved.add(x.post_id);
+  }));
+  return out;
+}
 async function loadFeed() {
   if (!sbUser || !S) return;
+  const feedT0 = Date.now();
   let pq = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url").order("created_at", { ascending: false }).limit(300);
   if (pq.error) pq = await sb.from("posts").select("id, user_id, body, created_at").order("created_at", { ascending: false }).limit(300);
   const posts = pq.data;
@@ -2760,15 +2819,14 @@ async function loadFeed() {
     pageAll((a, b) => sb.from("blocks").select("blocker_id").eq("blocked_id", sbUser.id).order("blocker_id").range(a, b)),
     rowsFor("likes", ids),
     rowsFor("reposts", ids),
-    rowsFor("post_shares", ids),
-    rowsFor("post_saves", ids),
+    shareSaveStats(ids),
     sb.from("accounts").select(ACC_COLS).eq("id", sbUser.id).maybeSingle(),
     sb.from("follows").select("followee_id").eq("follower_id", sbUser.id).limit(1000)
   ]);
   // a failed answer is not an empty one: nothing is changed (a blocked person must not come back because a call failed)
   if ([0, 1, 2, 3].some(i => !feedRes[i] || feedRes[i].error)) { feedFail(); return; }
   feedStatus = "ok"; feedTries = 0;
-  const [{ data: myLikes }, { data: myReposts }, { data: blocksOut }, { data: blocksIn }, { data: likeRows }, { data: repostRows }, { data: shareRows }, { data: saveRows }, { data: meRow }, { data: myFollows }] = feedRes;
+  const [{ data: myLikes }, { data: myReposts }, { data: blocksOut }, { data: blocksIn }, { data: likeRows }, { data: repostRows }, shareStats, { data: meRow }, { data: myFollows }] = feedRes;
   if (myFollows) { followSet = new Set(myFollows.map(r => r.followee_id)); cacheWrite("follows:" + sbUser.id, [...followSet]); }
   if (meRow) {
     let changed = false;
@@ -2801,9 +2859,9 @@ async function loadFeed() {
     }
   }
   const tally = rows => { const m = new Map(); (rows || []).forEach(r => m.set(r.post_id, (m.get(r.post_id) || 0) + 1)); return m; };
-  const lc = tally(likeRows), rc = tally(repostRows), shc = tally(shareRows), svc = tally(saveRows);
-  backfillSaves(saveRows, ids);
-  const shMine = new Set((shareRows || []).filter(r => r.user_id === sbUser.id).map(r => r.post_id));
+  const lc = tally(likeRows), rc = tally(repostRows), shc = shareStats.sh, svc = shareStats.sv;
+  backfillSaves(shareStats.mySaved, ids);
+  const shMine = shareStats.myShared;
   const liked = new Set((myLikes || []).map(x => x.post_id));
   const reposted = new Set((myReposts || []).map(x => x.post_id));
   const rpTime = new Map((myReposts || []).map(x => [x.post_id, Date.parse(x.created_at) || 0]));
@@ -2861,6 +2919,8 @@ async function loadFeed() {
     const { data: still, error: se } = await sb.from("posts").select("id").in("id", kept.map(p => p.remote));
     kept = se ? [] : kept.filter(p => (still || []).some(r => r.id === p.remote));
   }
+  // a like or repost tapped while this load was running is newer than the rows read before it
+  for (const arr of [back, remote]) arr.forEach(x => { const tp = x.remote && tapAt.get(x.remote); if (tp && tp.t >= feedT0) { if (tp.l) { x.liked = tp.l.v; x.lc = tp.l.c; } if (tp.r) { x.reposted = tp.r.v; x.rpc = tp.r.c; } } });
   S.posts = S.posts.filter(p => !p.ra).concat(back, remote, kept);
   // where the real Zenith has answered a post, his older private answer under the same post goes, so there is one answer and not two
   if (S.zen && S.zen.id) {
@@ -2891,6 +2951,8 @@ function rAv(ra, size) {
   return a;
 }
 const busyTaps = new Set();
+const tapAt = new Map();
+function noteTap(p, k) { if (!p.remote) return; const e = tapAt.get(p.remote) || {}; e.t = Date.now(); e[k] = k === "l" ? { v: p.liked, c: p.lc || 0 } : { v: p.reposted, c: p.rpc || 0 }; tapAt.set(p.remote, e); if (tapAt.size > 200) tapAt.delete(tapAt.keys().next().value); }
 async function toggleRemoteLike(p, big) {
   if (!sbUser || busyTaps.has("l" + p.id)) return;
   busyTaps.add("l" + p.id);
@@ -2899,7 +2961,7 @@ async function toggleRemoteLike(p, big) {
 async function toggleRemoteLikeNow(p, big) {
   const on = !p.liked;
   p.liked = on; p.lc = Math.max(0, (p.lc || 0) + (on ? 1 : -1));
-  bump = p.id + "like"; persist(); refresh(p, big);
+  bump = p.id + "like"; noteTap(p, "l"); persist(); refresh(p, big);
   const { error } = on
     ? await sb.from("likes").insert({ user_id: sbUser.id, post_id: p.remote })
     : await sb.from("likes").delete().eq("user_id", sbUser.id).eq("post_id", p.remote);
@@ -2908,7 +2970,7 @@ async function toggleRemoteLikeNow(p, big) {
     // a lost answer can hide that the server did take the tap: the real state is read back
     const { data: truth, error: te } = await sb.from("likes").select("post_id").eq("user_id", sbUser.id).eq("post_id", p.remote).maybeSingle();
     if (!te && !!truth !== p.liked) { p.liked = !!truth; p.lc = Math.max(0, (p.lc || 0) + (p.liked ? 1 : -1)); }
-    persist(); refresh(p, big); toast("Could not update like");
+    noteTap(p, "l"); persist(); refresh(p, big); toast("Could not update like");
   }
 }
 async function toggleRemoteRepost(p, big) {
@@ -2919,11 +2981,11 @@ async function toggleRemoteRepost(p, big) {
 async function toggleRemoteRepostNow(p, big) {
   const on = !p.reposted;
   p.reposted = on; p.rpAt = on ? Date.now() : 0; p.rpc = Math.max(0, (p.rpc || 0) + (on ? 1 : -1));
-  bump = p.id + "rp"; persist(); refresh(p, big);
+  bump = p.id + "rp"; noteTap(p, "r"); persist(); refresh(p, big);
   const { error } = on
     ? await sb.from("reposts").insert({ user_id: sbUser.id, post_id: p.remote })
     : await sb.from("reposts").delete().eq("user_id", sbUser.id).eq("post_id", p.remote);
-  if (error && !(on && error.code === "23505")) { p.reposted = !on; p.rpc = Math.max(0, (p.rpc || 0) + (on ? -1 : 1)); persist(); refresh(p, big); toast("Could not update repost"); }
+  if (error && !(on && error.code === "23505")) { p.reposted = !on; p.rpc = Math.max(0, (p.rpc || 0) + (on ? -1 : 1)); noteTap(p, "r"); persist(); refresh(p, big); toast("Could not update repost"); }
 }
 // posts fetched by id or by author become part of the phone's posts the same way the feed makes them
 async function mapRemotePosts(rows) {
@@ -2931,20 +2993,19 @@ async function mapRemotePosts(rows) {
   const fresh = (rows || []).filter(r => !have.has(r.id));
   if (!fresh.length) return 0;
   const ids = fresh.map(r => r.id), authors = [...new Set(fresh.map(r => r.user_id).filter(u => u !== sbUser.id))];
-  const [lk, rp, myLk, myRp, kidsQ, who, shQ, svQ] = await Promise.all([
+  const [lk, rp, myLk, myRp, kidsQ, who, sst] = await Promise.all([
     sb.from("likes").select("post_id").in("post_id", ids),
     sb.from("reposts").select("post_id").in("post_id", ids),
     sb.from("likes").select("post_id").eq("user_id", sbUser.id).in("post_id", ids),
     sb.from("reposts").select("post_id").eq("user_id", sbUser.id).in("post_id", ids),
     sb.from("posts").select("parent_id").in("parent_id", ids),
     authors.length ? cachedAccounts(authors) : new Map(),
-    sb.from("post_shares").select("post_id, user_id").in("post_id", ids),
-    sb.from("post_saves").select("post_id, user_id").in("post_id", ids)
+    shareSaveStats(ids)
   ]);
   const tally = (q, k) => { const m = new Map(); ((q && q.data) || []).forEach(r => m.set(r[k], (m.get(r[k]) || 0) + 1)); return m; };
-  const lc = tally(lk, "post_id"), rc = tally(rp, "post_id"), kc = tally(kidsQ, "parent_id"), shc = tally(shQ, "post_id"), svc = tally(svQ, "post_id");
-  backfillSaves((svQ && svQ.data) || [], ids);
-  const shMine = new Set(((shQ && shQ.data) || []).filter(r => r.user_id === sbUser.id).map(r => r.post_id));
+  const lc = tally(lk, "post_id"), rc = tally(rp, "post_id"), kc = tally(kidsQ, "parent_id"), shc = sst.sh, svc = sst.sv;
+  backfillSaves(sst.mySaved, ids);
+  const shMine = sst.myShared;
   const mineL = new Set(((myLk && myLk.data) || []).map(r => r.post_id)), mineR = new Set(((myRp && myRp.data) || []).map(r => r.post_id));
   const localByRemote = new Map(S.posts.filter(p => p.remote && !p.ra).map(p => [p.remote, p.id]));
   let n = 0;
@@ -3914,16 +3975,28 @@ function authenticatorSetup() {
       }
     });
     m.act.disabled = true;
-    const begin = () => callFn("totp", { action: "begin" }).then(r => {
+    const askPw = note => {
+      const pw = h("input", { class: "in", type: "password", autocomplete: "current-password", placeholder: "Your password", "aria-label": "Your password", maxlength: "200" });
+      const go = () => { if (!pw.value) return; begin(pw.value); };
+      pw.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); go(); } });
       box.textContent = "";
-      if (!r.ok) { box.append(h("p", { class: "note" }, failText(r, "Could not start the setup.")), h("button", { class: "ghost", type: "button", onclick: () => { box.textContent = ""; begin(); } }, "Try again")); return; }
-      box.append(
-        h("a", { class: "pri sbtn big", href: r.body.uri }, "Add Nook to the app"),
-        h("p", { class: "note" }, "If that does not open the app, add it by hand with this key. Tap the key to copy it."),
-        h("button", { class: "keybox", type: "button", onclick: () => copy(r.body.secret) }, r.body.secret));
-      m.act.disabled = false;
-    });
-    begin();
+      box.append(h("p", { class: "note" }, note || "Type your password to start."), pw, h("button", { class: "ghost", type: "button", onclick: go }, "Continue"));
+      setTimeout(() => { try { pw.focus(); } catch (e) {} }, 50);
+    };
+    const begin = pw => {
+      box.textContent = "";
+      box.append(h("p", { class: "note" }, "Getting your key..."));
+      return callFn("totp", { action: "begin", password: pw }).then(r => {
+        box.textContent = "";
+        if (!r.ok) { askPw(failText(r, "Could not start the setup.")); return; }
+        box.append(
+          h("a", { class: "pri sbtn big", href: r.body.uri }, "Add Nook to the app"),
+          h("p", { class: "note" }, "If that does not open the app, add it by hand with this key. Tap the key to copy it."),
+          h("button", { class: "keybox", type: "button", onclick: () => copy(r.body.secret) }, r.body.secret));
+        m.act.disabled = false;
+      });
+    };
+    askPw();
   });
 }
 function authenticatorOff() {
@@ -4787,6 +4860,26 @@ function authV() {
 }
 
 const DM_BUCKET = "dm-media";
+// the bucket is private: stored links (old public style or new) are turned into the object path and a short signed link
+function dmPathOf(url) {
+  if (typeof url !== "string") return null;
+  for (const k of ["public", "sign", "authenticated"]) {
+    const pre = SB_URL + "/storage/v1/object/" + k + "/" + DM_BUCKET + "/";
+    if (url.startsWith(pre)) { try { return decodeURIComponent(url.slice(pre.length).split(/[?#]/)[0]); } catch (e) { return null; } }
+  }
+  return null;
+}
+const dmSigned = new Map();
+function dmSignedUrl(url) {
+  const path = dmPathOf(url);
+  if (!path) return Promise.reject(new Error("gone"));
+  const hit = dmSigned.get(path);
+  if (hit && hit.t > Date.now()) return hit.p;
+  const e = { t: Date.now() + 3000000, p: Promise.resolve(sb.storage.from(DM_BUCKET).createSignedUrl(path, 3600)).then(r => { if (!r || r.error || !r.data) throw new Error("gone"); return r.data.signedUrl; }) };
+  dmSigned.set(path, e);
+  e.p.catch(() => { if (dmSigned.get(path) === e) dmSigned.delete(path); });
+  return e.p;
+}
 const acctCache = new Map();
 let rtChan = null;
 let tpChan = null;
@@ -5130,16 +5223,15 @@ async function warmInbox() {
 }
 async function dmInbox() {
   await loadSocial(true);
-  const { data, error } = await sb.from("messages").select("id, sender_id, recipient_id, body, media, created_at, read_at")
-    .or("sender_id.eq." + sbUser.id + ",recipient_id.eq." + sbUser.id).order("created_at", { ascending: false }).limit(500);
+  // the server answers with the last message and the unread count of every chat, however long the history is
+  const { data, error } = await sb.rpc("dm_inbox");
   // a failed load keeps what is on the screen and in the cache
   if (error) throw error;
   const convos = new Map();
   (data || []).forEach(m => {
-    const other = m.sender_id === sbUser.id ? m.recipient_id : m.sender_id;
+    const other = m.other_id;
     if (!visibleMsg(m, other)) return;
-    if (!convos.has(other)) convos.set(other, { other, last: m, unread: 0 });
-    if (m.recipient_id === sbUser.id && !m.read_at) convos.get(other).unread++;
+    convos.set(other, { other, last: m, unread: m.unread || 0 });
   });
   const empties = keptList().filter(id => !convos.has(id));
   await acctsFor([...convos.keys(), ...empties]);
@@ -5412,20 +5504,23 @@ async function waitForApprovalModal() {
     if (!stop) msg.textContent = "Nobody answered. Close this and try again";
   } catch (e) { msg.textContent = "Something went wrong. Close this and try again"; }
 }
-let linkTimer = 0;
+let linkTimer = 0, linkIdle = 0;
 const linkShown = new Set();
 async function checkLinks() {
   if (document.visibilityState !== "visible" || !sbUser || e2eLocked) return;
   try {
     const since = new Date(Date.now() - LINK_MIN * 60000).toISOString();
     const { data } = await sb.from("key_links").select("id, req_pub").eq("status", "pending").gt("created_at", since).order("created_at", { ascending: false }).limit(1);
+    if (data && data[0]) linkIdle = 0; else linkIdle++;
     if (data && data[0] && !linkShown.has(data[0].id)) { linkShown.add(data[0].id); approveLinkModal(data[0]).catch(() => {}); }
   } catch (e) {}
 }
 function watchLinks() {
   if (linkTimer) return;
-  linkTimer = setInterval(checkLinks, 8000);
-  document.addEventListener("visibilitychange", checkLinks);
+  // asks every 8 s at first, then every 24 s once nobody has asked for a while; coming back to the tab asks at once
+  const tick = () => { linkTimer = setTimeout(() => { checkLinks().finally(tick); }, linkIdle > 40 ? 24000 : 8000); };
+  tick();
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { linkIdle = 0; checkLinks(); } });
   checkLinks();
 }
 async function approveLinkModal(req) {
@@ -5787,8 +5882,7 @@ function loadEncMedia(md, otherId) {
     const p = (async () => {
       const key = await sharedKey(otherId);
       // a peer chooses this link, so only this app's own storage is fetched
-      if (typeof md.url !== "string" || !md.url.startsWith(SB_URL + "/storage/v1/object/public/" + DM_BUCKET + "/")) throw new Error("gone");
-      const res = await fetch(md.url);
+      const res = await fetch(await dmSignedUrl(md.url));
       if (!res.ok) throw new Error("gone");
       const buf = await res.arrayBuffer();
       const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(md.iv) }, key, buf);
@@ -5868,7 +5962,7 @@ function dmMedia(md, otherId, onOpen) {
   el.addEventListener("error", () => { if (el.getAttribute("src") && !/^(blob|data):/.test(el.getAttribute("src"))) gone(); });
   if (onOpen) el.addEventListener("click", () => onOpen(el));
   if (md.iv) loadEncMedia(md, otherId).then(u => { if (u) el.src = u; }).catch(gone);
-  else el.src = md.url;
+  else dmSignedUrl(md.url).then(u => { el.src = u; }).catch(gone);
   wrap.append(el);
   return wrap;
 }
@@ -5948,7 +6042,7 @@ async function openDmViewer(row, idx) {
   for (let i = 0; i < (m.media || []).length; i++) {
     const md = m.media[i];
     if (/^video\//.test(md.type || "")) continue;
-    jobs.push({ i, p: Promise.resolve().then(() => md.iv ? loadEncMedia(md, row._other) : md.url) });
+    jobs.push({ i, p: Promise.resolve().then(() => md.iv ? loadEncMedia(md, row._other) : dmSignedUrl(md.url)) });
   }
   const got = await Promise.allSettled(jobs.map(j => j.p));
   got.forEach((r, n) => { if (r.status === "fulfilled") { urls.push(r.value); map.push(jobs[n].i); } });
@@ -6009,10 +6103,13 @@ function sendTyping(otherId, on) {
   if (!sbUser || !otherId) return;
   let o = typeOut.get(otherId);
   if (!o) {
-    o = { ch: sb.channel("tp-" + otherId), ready: false, last: 0, sentOn: false };
+    o = { ch: sb.channel("tp-" + otherId, { config: { private: true } }), ready: false, last: 0, sentOn: false };
     typeOut.set(otherId, o);
     o.ch.subscribe(st => { if (st === "SUBSCRIBED") o.ready = true; });
   }
+  // a channel nobody typed on for a while is closed, so partners do not pile up as open channels
+  clearTimeout(o.idle);
+  o.idle = setTimeout(() => { if (typeOut.get(otherId) === o) typeOut.delete(otherId); try { sb.removeChannel(o.ch); } catch (e) {} }, 90000);
   if (!o.ready) return;
   const now = Date.now();
   if (on) {
@@ -6569,7 +6666,7 @@ function searchV() {
     info.textContent = "Suggested people, refreshed often";
     const { data, error } = await sb.rpc("discover_accounts", { p_seed: d.seed, p_n: 12 });
     if (mine !== token) return;
-    if (error) { list.textContent = ""; list.append(emptyState("user", "Could not load people.")); return; }
+    if (error) { list.textContent = ""; list.append(emptyState("user", "Could not load people.")); timer = setTimeout(() => { if (document.body.contains(list) && !box.value.trim()) suggest(); }, 15000); return; }
     show(data || [], "No one to suggest yet.");
     // while nobody can be suggested it looks again every 15 seconds
     const next = (data || []).length ? Math.max(1000, d.until - Date.now()) + 500 : 15000;
@@ -6773,9 +6870,11 @@ function onDeletedMsg(payload) {
   const id = payload && payload.old ? payload.old.id : null;
   if (id == null) return;
   if (liveDm) liveDm.drop(id);
-  refreshBadge();
-  if (refreshChat) refreshChat();
+  // deletes of everybody's messages arrive here, so a burst is answered with one refresh
+  clearTimeout(delMsgT);
+  delMsgT = setTimeout(() => { refreshBadge(); if (refreshChat) refreshChat(); }, 300);
 }
+let delMsgT = 0;
 // a post of yours was taken down by the AI check: flash the screen and say why
 const modShown = new Set();
 function dropLocalPosts(remoteIds) {
@@ -6901,7 +7000,7 @@ function startRealtime() {
     });
   rtChan = ch;
   if (tpChan) { try { sb.removeChannel(tpChan); } catch (e) {} }
-  tpChan = sb.channel("tp-" + sbUser.id)
+  tpChan = sb.channel("tp-" + sbUser.id, { config: { private: true } })
     .on("broadcast", { event: "typing" }, ({ payload }) => onTyping(payload && payload.from, payload ? payload.on : undefined))
     .subscribe();
 }
@@ -7148,9 +7247,9 @@ function setSaved(p, on) {
 }
 const saveQ = new Map();
 // saves made before the counter existed are added once, for the posts that are on screen
-function backfillSaves(rows, ids) {
+function backfillSaves(mySaved, ids) {
   if (!sbUser || !S.sv) return;
-  const have = new Set((rows || []).filter(r => r.user_id === sbUser.id).map(r => r.post_id));
+  const have = mySaved instanceof Set ? mySaved : new Set();
   const add = ids.filter(id => S.sv[id] && !have.has(id)).map(id => ({ post_id: id, user_id: sbUser.id }));
   if (add.length) sb.from("post_saves").upsert(add, { onConflict: "post_id,user_id", ignoreDuplicates: true }).then(() => {}, () => {});
 }
@@ -7207,7 +7306,7 @@ async function notePriv(ns, key, r) {
   const text = String(p.x || "").slice(0, 5000), t = Number(p.t) || Date.now(), pa = typeof p.pa === "string" ? p.pa : null;
   if (here) {
     if (here.text === text && here.t === t && (here.parent || null) === pa && !!here.liked === !!p.l && !!here.reposted === !!p.r && !!here.saved === !!p.s) return false;
-    here.text = text; here.t = t; here.parent = pa; here.liked = !!p.l; here.reposted = !!p.r; here.saved = !!p.s;
+    here.text = text; here.t = t; here.parent = pa; dropPostIndex(); here.liked = !!p.l; here.reposted = !!p.r; here.saved = !!p.s;
     ns.pushed[r.id] = privSig(here);
     return true;
   }
@@ -7267,7 +7366,7 @@ async function noteSeal(key, obj, rid) {
   return "e2e1:" + toB64(iv) + "." + toB64(new Uint8Array(ct));
 }
 async function notePicIn(key, md) {
-  const res = await fetch(md.url);
+  const res = await fetch(await dmSignedUrl(md.url));
   if (!res.ok) throw new Error("gone");
   const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(md.iv) }, key, await res.arrayBuffer());
   return blobToData(new Blob([pt], { type: md.type || "image/jpeg" }));
@@ -7283,6 +7382,10 @@ async function notePicOut(key, src) {
 }
 const notePath = md => { const m = /\/object\/public\/dm-media\/([^?#]+)/.exec(md && md.url || ""); return m ? decodeURIComponent(m[1]) : null; };
 // takes one row from the server into the notes on this phone; true when something changed
+// ids of the chats and messages on this phone while a pull runs, so each row is not looked up by scanning every chat
+let noteKnown = null;
+const noteFails = new Map();
+const noteHere = (isChat, rid) => noteKnown ? noteKnown.has((isChat ? "c:" : "m:") + rid) : (isChat ? S.chats.some(x => x.id === rid) : S.chats.some(c => (c.msgs || []).some(x => x.id === rid)));
 async function noteTake(ns, key, r) {
   if (r.id.startsWith("x:")) return noteExtra(ns, key, r);
   if (r.id.startsWith("p:")) return notePriv(ns, key, r);
@@ -7290,25 +7393,25 @@ async function noteTake(ns, key, r) {
   if (r.deleted) {
     if (isChat) {
       const c = S.chats.find(x => x.id === rid);
-      if (c && isNoteChat(c) && (ns.pushed[r.id] === noteCSig(c))) { S.chats = S.chats.filter(x => x !== c); ns.pushed[r.id] = "gone"; return true; }
+      if (c && isNoteChat(c) && (ns.pushed[r.id] === noteCSig(c))) { S.chats = S.chats.filter(x => x !== c); ns.pushed[r.id] = "gone"; if (noteKnown) noteKnown.delete("c:" + rid); return true; }
     } else {
       for (const c of S.chats) {
         const m = (c.msgs || []).find(x => x.id === rid);
-        if (m && isNoteChat(c) && ns.pushed[r.id] === noteMSig(m)) { c.msgs = c.msgs.filter(x => x !== m); ns.pushed[r.id] = "gone"; delete ns.pm[r.id]; return true; }
+        if (m && isNoteChat(c) && ns.pushed[r.id] === noteMSig(m)) { c.msgs = c.msgs.filter(x => x !== m); ns.pushed[r.id] = "gone"; delete ns.pm[r.id]; if (noteKnown) noteKnown.delete("m:" + rid); return true; }
       }
     }
-    if (ns.pushed[r.id] !== "gone" && !S.chats.some(c => c.id === rid || (c.msgs || []).some(x => x.id === rid))) ns.pushed[r.id] = "gone";
+    if (ns.pushed[r.id] !== "gone" && !noteHere(true, rid) && !noteHere(false, rid)) ns.pushed[r.id] = "gone";
     return false;
   }
   // a note this phone already knew but no longer has was removed here: the removal goes up, it is not brought back
-  if (ns.pushed[r.id] && !(isChat ? S.chats.some(x => x.id === rid) : S.chats.some(c => (c.msgs || []).some(x => x.id === rid)))) return false;
+  if (ns.pushed[r.id] && !noteHere(isChat, rid)) return false;
   const p = await noteOpen(key, r.body, r.id);
   if (isChat) {
     let c = S.chats.find(x => x.id === rid);
     if (c && (!isNoteChat(c) || ns.pushed[r.id] !== noteCSig(c))) return false;
     const name = String(p.n || "Notes to self").slice(0, 200), t = Number(p.t) || Date.now();
     if (c && c.name === name && c.t === t) return false;
-    if (!c) { c = { id: rid, name, msgs: [], t }; S.chats.push(c); } else { c.name = name; c.t = t; }
+    if (!c) { c = { id: rid, name, msgs: [], t }; S.chats.push(c); if (noteKnown) noteKnown.add("c:" + rid); } else { c.name = name; c.t = t; }
     ns.pushed[r.id] = noteCSig(c);
     return true;
   }
@@ -7326,9 +7429,11 @@ async function noteTake(ns, key, r) {
   if (m && m.text === text && m.t === t && have && JSON.stringify(have.e) === JSON.stringify(media) && JSON.stringify(m.rpost || null) === JSON.stringify(rp) && JSON.stringify(m.zpost || null) === JSON.stringify(zp)) return false;
   // a photo that cannot be fetched stops the pull here, and it is tried again on the next round
   const imgs = [];
-  for (const md of media) imgs.push(await notePicIn(key, md));
-  if (!c) { c = { id: cid, name: "Notes to self", msgs: [], t }; S.chats.push(c); ns.pushed["c:" + cid] = noteCSig(c); }
-  if (!m) { m = { id: rid, text, t, imgs }; c.msgs.push(m); c.msgs.sort((a, b) => a.t - b.t); } else { m.text = text; m.t = t; m.imgs = imgs; }
+  // unless it has been missing for three rounds in a row, then the note comes in without that photo
+  for (const md of media) { try { imgs.push(await notePicIn(key, md)); } catch (e) { if (!(e && e.message === "gone" && (noteFails.get(r.id) || 0) >= 3)) throw e; } }
+  if (!c) { c = { id: cid, name: "Notes to self", msgs: [], t }; S.chats.push(c); if (noteKnown) noteKnown.add("c:" + cid); ns.pushed["c:" + cid] = noteCSig(c); }
+  noteFails.delete(r.id);
+  if (!m) { m = { id: rid, text, t, imgs }; c.msgs.push(m); c.msgs.sort((a, b) => a.t - b.t); if (noteKnown) noteKnown.add("m:" + rid); } else { m.text = text; m.t = t; m.imgs = imgs; }
   if (rp) m.rpost = rp; else delete m.rpost;
   if (zp) m.zpost = zp; else delete m.zpost;
   ns.pushed[r.id] = noteMSig(m);
@@ -7338,13 +7443,16 @@ async function noteTake(ns, key, r) {
 async function notesPull(ns, key) {
   let changed = false;
   ns.pullOk = false;
+  noteKnown = new Set();
+  S.chats.forEach(c => { noteKnown.add("c:" + c.id); (c.msgs || []).forEach(m => noteKnown.add("m:" + m.id)); });
+  try {
   // a little overlap, so a row saved a moment before the last pull is never missed; what is already here is skipped
   const from = ns.cursor ? new Date(Date.parse(ns.cursor) - 300000).toISOString() : "1970-01-01T00:00:00Z";
   for (let off = 0; off < 40000; off += 500) {
     const { data, error } = await sb.from("notes_self").select("id, body, media, deleted, updated_at").gte("updated_at", from).order("updated_at", { ascending: true }).order("id", { ascending: true }).range(off, off + 499);
     if (error) throw error;
     for (const r of data || []) {
-      try { if (await noteTake(ns, key, r)) changed = true; } catch (e) { return changed; }
+      try { if (await noteTake(ns, key, r)) changed = true; } catch (e) { if (e && e.message === "gone") noteFails.set(r.id, (noteFails.get(r.id) || 0) + 1); return changed; }
       // a row that was sealed without its id is marked as not yet pushed, so the next push seals it again
       if (legacySeen.delete(r.id) && ns.pushed[r.id] && ns.pushed[r.id] !== "gone") ns.pushed[r.id] = "reseal";
       if (!ns.cursor || r.updated_at > ns.cursor) ns.cursor = r.updated_at;
@@ -7353,6 +7461,7 @@ async function notesPull(ns, key) {
   }
   ns.pullOk = true;
   return changed;
+  } finally { noteKnown = null; }
 }
 async function notesPush(ns, key) {
   const exist = new Set();

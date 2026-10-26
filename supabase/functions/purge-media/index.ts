@@ -47,7 +47,7 @@ async function folderFiles(bucket: string, folder: string): Promise<string[]> {
 }
 
 // copy everything a banned account owns into the private archive bucket; the originals go too, except chat photos (the chats stay, so their photos stay)
-async function archiveUser(user: string): Promise<{ copied: number; removed: number; failed: number }> {
+async function archiveUser(user: string): Promise<{ copied: number; removed: number; failed: number; partial: boolean }> {
   let copied = 0, removed = 0, failed = 0;
   for (const bucket of BUCKETS) {
     const files = await folderFiles(bucket, user);
@@ -57,9 +57,14 @@ async function archiveUser(user: string): Promise<{ copied: number; removed: num
       const { error } = await admin.storage.from(bucket).copy(f, dest, { destinationBucket: ARCHIVE });
       if (!error || /already exists|Duplicate/i.test(error.message || "")) { done.push(f); copied++; } else failed++;
     }
-    if (done.length && bucket !== "dm-media") removed += await removeAll(bucket, done);
+    if (done.length && bucket !== "dm-media") {
+      const n = await removeAll(bucket, done);
+      removed += n;
+      // originals that could not be removed after the copy also make the archive run partial
+      failed += Math.max(0, done.length - n);
+    }
   }
-  return { copied, removed, failed };
+  return { copied, removed, failed, partial: failed > 0 };
 }
 
 // the 30 days are over: remove the archived copies

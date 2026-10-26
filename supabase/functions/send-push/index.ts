@@ -50,7 +50,7 @@ Deno.serve(async (req) => {
   const id = String(body.notification_id || "");
   if (!/^[0-9a-f-]{36}$/i.test(id)) return json({ error: "bad id" }, 400);
 
-  const { data: n } = await admin.from("notifications").select("id, user_id, actor_id, kind").eq("id", id).maybeSingle();
+  const { data: n } = await admin.from("notifications").select("id, user_id, actor_id, kind, created_at").eq("id", id).maybeSingle();
   if (!n) return json({ sent: 0 });
   // a muted chat gets no alert
   if (n.kind === "message") {
@@ -65,7 +65,7 @@ Deno.serve(async (req) => {
   const msg: Record<string, unknown> = {};
   if (n.kind === "message") {
     // the words of a chat message stay end to end encrypted: only the sealed text goes along, and the phone opens it with its own key
-    const { data: m } = await admin.from("messages").select("body, media").eq("sender_id", n.actor_id).eq("recipient_id", n.user_id).order("created_at", { ascending: false }).limit(1).maybeSingle();
+    const { data: m } = await admin.from("messages").select("body, media").eq("sender_id", n.actor_id).eq("recipient_id", n.user_id).lte("created_at", n.created_at).order("created_at", { ascending: false }).limit(1).maybeSingle();
     if (m) {
       const text = typeof m.body === "string" ? m.body : "";
       const hasPhoto = Array.isArray(m.media) && m.media.length > 0;

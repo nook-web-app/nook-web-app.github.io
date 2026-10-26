@@ -97,7 +97,7 @@ Deno.serve(async (req) => {
   if (body.action === "profile") {
     const base = Deno.env.get("SUPABASE_URL")! + "/storage/v1/object/public/media/";
     const src = typeof body.avatar === "string" && body.avatar.startsWith(base) && body.avatar.length < 400 ? body.avatar : null;
-    const { data: za } = await admin.from("accounts").select("id").eq("username", "zenith").maybeSingle();
+    const { data: za } = await admin.from("accounts").select("id, avatar").eq("username", "zenith").maybeSingle();
     if (!za) return json({ ok: false, why: "no account yet" });
     let avatar: string | null = null;
     if (src) {
@@ -112,6 +112,10 @@ Deno.serve(async (req) => {
       avatar = base + dest;
     }
     const upd = await admin.from("accounts").update({ avatar, banner_theme: body.theme === "avatar" && avatar ? "avatar" : null }).eq("id", za.id);
+    // the previous copy of the picture is removed once the new one is saved, so the bucket does not grow with every save
+    if (!upd.error && za.avatar && za.avatar !== avatar && typeof za.avatar === "string" && za.avatar.startsWith(base + za.id + "/zenith-")) {
+      try { await admin.storage.from("media").remove([decodeURIComponent(za.avatar.slice(base.length).split("?")[0])]); } catch { /* an old file left behind is harmless */ }
+    }
     return json({ ok: !upd.error, why: upd.error ? upd.error.message : "" });
   }
   if (body.action === "tick") {

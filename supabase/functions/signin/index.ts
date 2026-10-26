@@ -12,11 +12,21 @@ const cors = {
 const MAX_TRIES = 5;
 // all the tries on one email, from any place: far looser, so strangers cannot lock a person out with a few guesses
 const MAX_TRIES_ALL = 40;
+// the email-wide lock starts short and is capped at 2 hours, so strangers cannot keep a real person out for days
+const ALL_FIRST = 10;
+const ALL_CAP = 120;
 
 // a short fingerprint of the caller's network address; the address itself is never stored
 async function ipTag(req: Request): Promise<string> {
-  const raw = (req.headers.get("cf-connecting-ip") || req.headers.get("x-forwarded-for") || "").split(",")[0].trim() || "none";
+  // the first x-forwarded-for entry is written by the caller, so the last hop (added by the proxy) is used when there is no cf-connecting-ip
+  const fwd = (req.headers.get("x-forwarded-for") || "").split(",").map((x) => x.trim()).filter(Boolean);
+  const raw = (req.headers.get("cf-connecting-ip") || "").trim() || fwd[fwd.length - 1] || "none";
   const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("nook-ip|" + raw)));
+  return Array.from(d.slice(0, 6), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function ipTag2(s: string): Promise<string> {
+  const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("nook-dummy|" + s)));
   return Array.from(d.slice(0, 6), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
@@ -72,7 +82,7 @@ Deno.serve(async (req) => {
       const next = password;
       if (next.length < 8 || next.length > 72) return json({ error: "setpw_failed", message: "Password needs 8 to 72 characters." , code: "weak_password" }, 400);
       // somebody who just opened the link of a reset email may set a new password without the old one; everybody else must prove the old one
-      if (!recovering(jwt)) {
+      if (!recovering(jwt, user)) {
         const current = typeof body.current === "string" ? body.current : "";
         if (!current) return json({ error: "no_password" }, 400);
         if (current === next) return json({ error: "setpw_failed", code: "same_password", message: "New password should be different from the old password." }, 400);
@@ -103,12 +113,19 @@ Deno.serve(async (req) => {
 const wrong = (e: { code?: string; status?: number }) => String(e.code || "") === "invalid_credentials" || (!e.code && e.status === 400);
 
 // true for a session that came from the link in a reset email, which GoTrue marks in the token (as "otp"; the app has no other sign in by link)
-function recovering(jwt: string): boolean {
+function recovering(jwt: string, user: { app_metadata?: Record<string, unknown> } | null): boolean {
   try {
     const part = jwt.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
     const claims = JSON.parse(atob(part + "=".repeat((4 - (part.length % 4)) % 4)));
     const now = Date.now() / 1000;
-    return Array.isArray(claims.amr) && claims.amr.some((a: { method?: string; timestamp?: number }) => a && (a.method === "recovery" || a.method === "otp") && now - Number(a.timestamp || 0) < 3600);
+    const pk = Number(user && user.app_metadata ? user.app_metadata.pk_at : 0) || 0;
+    return Array.isArray(claims.amr) && claims.amr.some((a: { method?: string; timestamp?: number }) => {
+      if (!a || (a.method !== "recovery" && a.method !== "otp")) return false;
+      const t = Number(a.timestamp || 0);
+      // a session that a passkey sign in just made carries the same "otp" mark, but it is not a reset
+      if (pk && t >= pk - 5 && t <= pk + 60) return false;
+      return now - t < 3600;
+    });
   } catch { return false; }
 }
 
@@ -130,13 +147,13 @@ async function proveOld(email: string, password: string, ip: string): Promise<Re
   const gate = await admin.rpc("nook_login_gate", { p_key: key, p_max: MAX_TRIES });
   if (gate.error) return json({ error: "server" }, 500);
   if (gate.data) return json({ error: "locked", until: iso(gate.data) }, 429);
-  const gateAll = await admin.rpc("nook_login_gate", { p_key: all, p_max: MAX_TRIES_ALL });
+  const gateAll = await admin.rpc("nook_login_gate", { p_key: all, p_max: MAX_TRIES_ALL, p_first: ALL_FIRST, p_cap: ALL_CAP });
   if (gateAll.error) return json({ error: "server" }, 500);
   if (gateAll.data) return json({ error: "locked", until: iso(gateAll.data) }, 429);
 
   const miss = async (error: string, status: number) => {
     const f = await admin.rpc("nook_login_fail", { p_key: key, p_max: MAX_TRIES });
-    const g = await admin.rpc("nook_login_fail", { p_key: all, p_max: MAX_TRIES_ALL });
+    const g = await admin.rpc("nook_login_fail", { p_key: all, p_max: MAX_TRIES_ALL, p_first: ALL_FIRST, p_cap: ALL_CAP });
     const row = Array.isArray(f.data) ? f.data[0] : f.data;
     const rowAll = Array.isArray(g.data) ? g.data[0] : g.data;
     if (rowAll && rowAll.locked_until) return json({ error: "locked", until: iso(rowAll.locked_until) }, 429);
@@ -146,7 +163,13 @@ async function proveOld(email: string, password: string, ip: string): Promise<Re
 
   const found = await admin.rpc("nook_find_user", { ident: email });
   if (found.error) return json({ error: "server" }, 500);
-  if (!found.data) return await miss("no_account", 404);
+  if (!found.data) {
+    // same answer and similar work as a wrong password, so the reply does not tell whether the email has an account
+    await pepper(admin, password);
+    await mk().auth.signInWithPassword({ email: "nobody-" + (await ipTag2(email)) + "@invalid.example", password: "x".repeat(64) }).catch(() => {});
+    await mk().auth.signInWithPassword({ email: "nobody-" + (await ipTag2(email)) + "@invalid.example", password: "x".repeat(64) }).catch(() => {});
+    return await miss("wrong_password", 401);
+  }
 
   const mixed = await pepper(admin, password);
   let upgraded = false;

@@ -71,6 +71,8 @@ Deno.serve(async (req) => {
       if (ban.data) return json({ error: "banned" }, 403);
       const u = ur.data;
       if (!u || !u.user || !u.user.email) return json({ error: "failed" }, 401);
+      // marks this sign in as made by a passkey, so signin never mistakes the session for a password reset link
+      await admin.auth.admin.updateUserById(pk.user_id, { app_metadata: { ...(u.user.app_metadata || {}), pk_at: Math.floor(Date.now() / 1000) } }).catch(() => {});
       const link = await admin.auth.admin.generateLink({ type: "magiclink", email: u.user.email });
       const hashed = link.data && link.data.properties ? link.data.properties.hashed_token : "";
       if (link.error || !hashed) { console.error("link", link.error ? link.error.message : "no token"); return json({ error: "server" }, 500); }

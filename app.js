@@ -48,6 +48,10 @@ async function takeHashLogin() {
   // somebody who is already signed in only accepts the link when they asked for the reset on this phone
   if (p.get("type") !== "recovery" || !p.get("access_token") || !p.get("refresh_token") || (signedIn && !recent)) { if (signedIn) setTimeout(() => toast("That link is for a reset requested on another device. Ask again here"), 800); return; }
   if (!sb) { setTimeout(() => { try { toast("Could not check the reset link. Check your connection, or ask for a new link"); } catch (e) {} }, 1500); return; }
+  // the token must at least be a live one issued by this project for a signed in user; the server checks the rest
+  let claims = null;
+  try { claims = JSON.parse(decodeURIComponent(escape(atob(p.get("access_token").split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))))); } catch (e) {}
+  if (!claims || claims.iss !== SB_URL + "/auth/v1" || claims.role !== "authenticated" || !claims.sub || !(claims.exp * 1000 > Date.now() - 300000)) { setTimeout(() => { try { toast("That reset link is not valid. Ask for a new one"); } catch (e) {} }, 1500); return; }
   const { error } = await sb.auth.setSession({ access_token: p.get("access_token"), refresh_token: p.get("refresh_token") });
   if (!error) { RECOVERY = true; try { localStorage.removeItem("nook-reset-asked"); } catch (e) {} }
   else setTimeout(() => { try { toast("Could not check the reset link. Check your connection, or ask for a new link"); } catch (e) {} }, 1500);
@@ -178,7 +182,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.20.8";
+const APP_VERSION = "3.20.9";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -360,8 +364,16 @@ const WORDSET = Object.fromEntries(Object.keys(WORDS).map(k => [k, new Set(WORDS
 const MARKS = { spanish: /[ñ¿¡]/g, german: /[ßäöü]/g, portuguese: /[ãõ]/g, turkish: /[şğı]/g, polish: /[łąęśźż]/g, french: /[œêèùûîôâ]/g };
 const count = (t, re) => (t.match(re) || []).length;
 // which language a text is in; null when there is too little to tell (a photo with a short caption is for everybody)
+const LANG_MEMO = new Map();
 function langOf(text) {
   if (typeof text !== "string" || text.length < 3) return null;
+  if (LANG_MEMO.has(text)) return LANG_MEMO.get(text);
+  const r = langOfRaw(text);
+  if (LANG_MEMO.size > 2000) LANG_MEMO.clear();
+  LANG_MEMO.set(text, r);
+  return r;
+}
+function langOfRaw(text) {
   const n = k => count(text, k);
   const kana = n(/[\u3040-\u30FF]/g), han = n(/[\u3400-\u4DBF\u4E00-\u9FFF]/g), hangul = n(/[\uAC00-\uD7AF\u1100-\u11FF]/g);
   const arab = n(/[\u0600-\u06FF\u0750-\u077F]/g), cyr = n(/[\u0400-\u04FF]/g), deva = n(/[\u0900-\u097F]/g), thai = n(/[\u0E00-\u0E7F]/g), heb = n(/[\u0590-\u05FF]/g), greek = n(/[\u0370-\u03FF]/g);
@@ -627,7 +639,8 @@ const pvMem = new Map();
 async function timed(u) {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), 9000);
-  try { const r = await fetch(u, { signal: ac.signal }); if (!r.ok) throw new Error("bad"); return r; } finally { clearTimeout(t); }
+  // the body is read before the timer stops, so an answer that stalls half way is cut off too
+  try { const r = await fetch(u, { signal: ac.signal }); if (!r.ok) throw new Error("bad"); const txt = await r.text(); return { json: () => JSON.parse(txt), text: () => txt }; } finally { clearTimeout(t); }
 }
 const ytId = u => { const m = /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/|live\/)|youtu\.be\/)([\w-]{6,})/i.exec(u || ""); return m ? m[1] : null; };
 async function fetchPreview(url) {
@@ -888,6 +901,9 @@ async function postPic(p) {
   const cw = W - pad * 2;
   const lines = p.text ? wrapLines(m, cleanText(p.text), cw) : [];
   const src = p.imgs && p.imgs.length ? p.imgs[0] : null;
+  const who = p.ai ? { name: "Zenith", handle: "zenith", avatar: (S.zen && S.zen.pfp) || null } : p.ra ? { name: p.ra.name, handle: p.ra.handle, avatar: p.ra.avatar } : { name: S.profile.name, handle: S.profile.handle, avatar: S.profile.avatar };
+  // the picture and the avatar load side by side
+  const mePromise = who && who.avatar ? loadPicImg(view(who.avatar), /^https?:/.test(view(who.avatar))) : Promise.resolve(null);
   const pic = src ? await loadPicImg(view(src), /^https?:/.test(view(src))) : null;
   const lurl = !pic ? firstUrl(p.text) : null;
   let card = null;
@@ -900,8 +916,7 @@ async function postPic(p) {
     const thH = th ? Math.round(cw * 0.5) : 0;
     card = { th, thH, tl, dl, host: hostOf(lurl), h: thH + 24 + tl.length * 44 + dl.length * 40 + 64 };
   }
-  const who = p.ai ? { name: "Zenith", handle: "zenith", avatar: (S.zen && S.zen.pfp) || null } : p.ra ? { name: p.ra.name, handle: p.ra.handle, avatar: p.ra.avatar } : { name: S.profile.name, handle: S.profile.handle, avatar: S.profile.avatar };
-  const me = who && who.avatar ? await loadPicImg(view(who.avatar), /^https?:/.test(view(who.avatar))) : null;
+  const me = await mePromise;
   const picH = pic ? Math.min(Math.round(cw * pic.height / pic.width), 900) : 0;
   const H = pad + av + 32 + lines.length * lh + (pic ? picH + 32 : 0) + (card ? card.h + 32 : 0) + 60 + pad;
   const s = Math.sqrt(2000000 / (W * H));
@@ -989,8 +1004,8 @@ async function messageTargets() {
   S.chats.filter(c => !(c.msgs || []).some(m => m.ai)).forEach(c => out.push({ kind: "note", id: c.id, name: c.name }));
   if (sbUser) {
     const [a, b, k1, k2] = await Promise.all([
-      sb.from("follows").select("followee_id").eq("follower_id", sbUser.id).limit(500),
-      sb.from("follows").select("follower_id").eq("followee_id", sbUser.id).limit(500),
+      pageAll((f, t) => sb.from("follows").select("followee_id").eq("follower_id", sbUser.id).order("followee_id").range(f, t)),
+      pageAll((f, t) => sb.from("follows").select("follower_id").eq("followee_id", sbUser.id).order("follower_id").range(f, t)),
       sb.from("blocks").select("blocked_id").eq("blocker_id", sbUser.id),
       sb.from("blocks").select("blocker_id").eq("blocked_id", sbUser.id)
     ]);
@@ -1671,9 +1686,22 @@ function saveSheet(blob, name, count) {
   layer.append(scrim, sh);
 }
 const MIMES = { jpg: "image/jpeg", png: "image/png", gif: "image/gif", webp: "image/webp" };
-async function inflateRaw(raw) {
-  const ds = new DecompressionStream("deflate-raw");
-  return new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(ds)).arrayBuffer());
+// the output is counted while it streams out and the stream is cut off at the cap, so a tiny file cannot grow into the phone's memory
+async function inflateRaw(raw, cap) {
+  const rd = new Blob([raw]).stream().pipeThrough(new DecompressionStream("deflate-raw")).getReader();
+  const parts = [];
+  let n = 0;
+  for (;;) {
+    const { done, value } = await rd.read();
+    if (done) break;
+    n += value.length;
+    if (n > cap) { rd.cancel().catch(() => {}); throw new Error("too big"); }
+    parts.push(value);
+  }
+  const out = new Uint8Array(n);
+  let o = 0;
+  for (const c of parts) { out.set(c, o); o += c.length; }
+  return out;
 }
 async function readZip(buf) {
   const u8 = new Uint8Array(buf), dv = new DataView(buf), dec = new TextDecoder();
@@ -1693,7 +1721,7 @@ async function readZip(buf) {
     // the size a file says it will have is checked before it is opened, so a tiny file cannot fill the phone's memory
     const usize = dv.getUint32(p + 24, true);
     if (usize > 200 * 1024 * 1024 || total + usize > 400 * 1024 * 1024) throw new Error("too big");
-    out[name] = method === 0 ? raw : method === 8 ? await inflateRaw(raw) : null;
+    out[name] = method === 0 ? raw : method === 8 ? await inflateRaw(raw, Math.min(200 * 1024 * 1024, 400 * 1024 * 1024 - total, usize + 65536)) : null;
     total += out[name] ? out[name].length : 0;
     if (total > 400 * 1024 * 1024) throw new Error("too big");
     p += 46 + nlen + xlen + clen;
@@ -2528,16 +2556,17 @@ async function gifEncode(fr, w, h2, fps, onp) {
 }
 // gifs: shrink big ones by re-encoding at a smaller size, keep whichever file is smaller
 async function compressGif(f, onp) {
-  const orig = (await readDataURL(f)).replace(/^data:[^,]*/, "data:image/gif;base64");
+  // the file is turned into text only when it is the one that is returned
+  const orig = async () => (await readDataURL(f)).replace(/^data:[^,]*/, "data:image/gif;base64");
   if (f.size <= 1.5 * 1048576 || !window.ImageDecoder) {
     if (f.size > 12582912) throw new Error("gif over 12 MB");
-    return orig;
+    return orig();
   }
   try {
     const dec = new ImageDecoder({ data: await f.arrayBuffer(), type: "image/gif" });
     await dec.tracks.ready;
     const count = dec.tracks.selectedTrack.frameCount;
-    if (!(count > 1)) return orig;
+    if (!(count > 1)) return orig();
     const first = await dec.decode({ frameIndex: 0 });
     const vw = first.image.displayWidth, vh = first.image.displayHeight;
     first.image.close();
@@ -2564,12 +2593,12 @@ async function compressGif(f, onp) {
       if (onp) onp((i / count) * 0.5);
     }
     dec.close();
-    if (!fr.length) return orig;
+    if (!fr.length) return orig();
     const blob = await gifEncode(fr, w, h2, 12, p => onp && onp(0.5 + p * 0.5));
     if (blob.size < f.size) return await readDataURL(blob);
   } catch (e) {}
   if (f.size > 12582912) throw new Error("gif over 12 MB");
-  return orig;
+  return orig();
 }
 async function intake(f, onp, o) {
   if (isVideo(f)) throw new Error("videos are not supported");
@@ -2593,10 +2622,18 @@ async function cropGif(f, o) {
     const dec = new ImageDecoder({ data: await f.arrayBuffer(), type: "image/gif" });
     await dec.tracks.ready;
     const count = dec.tracks.selectedTrack.frameCount;
-    if (!(count > 1)) { dec.close(); return await shrink(f, { max: 1280, q: 0.8 }); }
     const c = document.createElement("canvas");
     c.width = W; c.height = H;
     const x = c.getContext("2d", { willReadFrequently: true });
+    // a gif with one frame is still cropped to the chosen area
+    if (!(count > 1)) {
+      const one = await dec.decode({ frameIndex: 0 });
+      dec.close();
+      x.fillStyle = "#fff"; x.fillRect(0, 0, W, H);
+      x.drawImage(one.image, r.x, r.y, r.w, r.h, 0, 0, W, H);
+      one.image.close();
+      return await readDataURL(await gifEncode([x.getImageData(0, 0, W, H).data], W, H, 12));
+    }
     const fr = [];
     let tAt = 0, nextAt = 0;
     const step = 1e6 / 12, maxFrames = 12 * 8;
@@ -3058,8 +3095,11 @@ function userV(cur) {
     sb.from("follows").select("followee_id").eq("follower_id", sbUser.id).eq("followee_id", cur.id),
     sb.from("follows").select("follower_id").eq("follower_id", cur.id).eq("followee_id", sbUser.id),
     sb.from("blocks").select("blocked_id").eq("blocker_id", sbUser.id).eq("blocked_id", cur.id),
-    sb.from("blocks").select("blocker_id").eq("blocker_id", cur.id).eq("blocked_id", sbUser.id)
-  ]).then(results => {
+    sb.from("blocks").select("blocker_id").eq("blocker_id", cur.id).eq("blocked_id", sbUser.id),
+    // the mute answer travels with the rest, and when it fails only the mute state is left as it was
+    Promise.resolve(sb.from("mutes").select("muted_id").eq("muter_id", sbUser.id).eq("muted_id", cur.id).maybeSingle()).catch(() => ({ data: null, error: true }))
+  ]).then(all => {
+    const results = all.slice(0, 5), mr = all[5];
     const [{ data: acc }, { data: fol }, { data: folMe }, { data: blk }, { data: theyBlock }] = results;
     // a page the person has already left is not touched, and a failed call is not shown as a block
     if (stack[stack.length - 1] !== cur) return;
@@ -3075,8 +3115,8 @@ function userV(cur) {
       return;
     }
     applyState(Object.assign({ acc, following: !!(fol && fol.length), followsMe: !!(folMe && folMe.length), blocked: !!(blk && blk.length) }, st && st.muted ? { muted: true } : {}));
+    if (mr && !mr.error) st.muted = !!mr.data;
     saveState();
-    Promise.resolve(sb.from("mutes").select("muted_id").eq("muter_id", sbUser.id).eq("muted_id", cur.id).maybeSingle()).then(r => { if (st && r && !r.error) { st.muted = !!r.data; saveState(); } }, () => {});
   }, () => { if (!st) profileFail(); });
   let followBusy = false, followQueued = false;
   followBtn.onclick = async () => {
@@ -3639,6 +3679,8 @@ function openDrawer() {
 }
 
 const BAN_EMAIL = "nook-banned-email";
+// the address is only kept for this visit; the copy older versions left in permanent storage is removed
+try { localStorage.removeItem(BAN_EMAIL); } catch (e) {}
 // what is saved on this phone (posts, chats, profile picture) belongs to the account that used it last
 const LOCAL_UID = "nook-local-uid";
 async function foreignLocalData(acct) {
@@ -3674,7 +3716,7 @@ function showBanned(email) {
   banShown = true;
   try {
     const mail = email || (sbUser && sbUser.email) || "";
-    if (mail) localStorage.setItem(BAN_EMAIL, mail);
+    if (mail) sessionStorage.setItem(BAN_EMAIL, mail);
   } catch (e) {}
   if (rtChan) { try { sb.removeChannel(rtChan); } catch (e) {} rtChan = null; }
   leaving = true;
@@ -3689,7 +3731,7 @@ function showBanned(email) {
 }
 function bannedV() {
   navEl.hidden = true;
-  const leave = () => { wipeLocal(false); try { localStorage.removeItem(BAN_EMAIL); } catch (e) {} banShown = false; stack = [{ r: "auth" }]; scrolls.length = 0; render(); };
+  const leave = () => { wipeLocal(false); try { sessionStorage.removeItem(BAN_EMAIL); } catch (e) {} banShown = false; stack = [{ r: "auth" }]; scrolls.length = 0; render(); };
   main.append(h("div", { class: "empty", style: "padding-top:18vh" },
     ic("lock", 56),
     h("h1", { class: "pname", style: "margin:0;color:var(--fg)" }, "You're banned"),
@@ -3810,7 +3852,7 @@ function bannedDownload() {
   const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "email", "aria-label": "Email" });
   const pw = h("input", { class: "in", type: "password", placeholder: "Password", autocomplete: "current-password", "aria-label": "Password" });
   let saved = "";
-  try { saved = localStorage.getItem(BAN_EMAIL) || ""; } catch (e) {}
+  try { saved = sessionStorage.getItem(BAN_EMAIL) || ""; } catch (e) {}
   email.value = saved;
   const msg = h("p", { class: "note", role: "alert" });
   const m = modal({
@@ -4075,6 +4117,7 @@ async function acctGet(k) {
   return new Promise((res, rej) => { const q = db.transaction("a").objectStore("a").get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
 }
 async function acctPut(k, v) {
+  if (k === "list" && Array.isArray(v)) v = await Promise.all(v.map(async a => (a && typeof a.rt === "string") ? Object.assign({}, a, { rt: await rtSeal(a.rt) }) : a));
   const db = await acctDb();
   return new Promise((res, rej) => { const t = db.transaction("a", "readwrite"); t.objectStore("a").put(v, k); t.oncomplete = () => res(); t.onerror = () => rej(t.error); });
 }
@@ -4082,8 +4125,63 @@ async function acctDel(k) {
   const db = await acctDb();
   return new Promise((res, rej) => { const t = db.transaction("a", "readwrite"); t.objectStore("a").delete(k); t.oncomplete = () => res(); t.onerror = () => rej(t.error); });
 }
+// refresh tokens are sealed with AES-GCM under a non-extractable key kept in the same database; plain values from older versions are still read and sealed on the next write
+const RT_PFX = "s1:";
+let rtKeyP = null;
+function rtKey() {
+  if (rtKeyP) return rtKeyP;
+  rtKeyP = (async () => {
+    if (!(window.crypto && crypto.subtle)) return null;
+    const have = await acctGet("rtkey").catch(() => null);
+    if (have && typeof have === "object") return have;
+    const k = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+    const db = await acctDb();
+    // add never overwrites, so two tabs racing end up with one key
+    await new Promise(res => { const t = db.transaction("a", "readwrite"); t.objectStore("a").add(k, "rtkey").onerror = e => { e.preventDefault(); }; t.oncomplete = () => res(); t.onerror = () => res(); t.onabort = () => res(); });
+    return (await acctGet("rtkey").catch(() => null)) || k;
+  })().catch(() => { rtKeyP = null; return null; });
+  return rtKeyP;
+}
+async function rtSeal(v) {
+  if (typeof v !== "string" || !v || v.startsWith(RT_PFX)) return v;
+  try {
+    const k = await rtKey();
+    if (!k) return v;
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, k, new TextEncoder().encode(v)));
+    const all = new Uint8Array(12 + ct.length); all.set(iv); all.set(ct, 12);
+    let bin = ""; for (let i = 0; i < all.length; i++) bin += String.fromCharCode(all[i]);
+    return RT_PFX + btoa(bin);
+  } catch (e) { return v; }
+}
+async function rtOpen(v) {
+  if (typeof v !== "string" || !v.startsWith(RT_PFX)) return v;
+  try {
+    const k = await rtKey();
+    if (!k) return "";
+    const bin = atob(v.slice(RT_PFX.length)), all = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) all[i] = bin.charCodeAt(i);
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: all.slice(0, 12) }, k, all.slice(12)));
+  } catch (e) { return ""; }
+}
+let rtMigrated = false;
 async function acctList() {
-  try { const l = await acctGet("list"); return Array.isArray(l) ? l : []; } catch (e) { return []; }
+  try {
+    const l = await acctGet("list");
+    if (!Array.isArray(l)) return [];
+    const out = await Promise.all(l.map(async a => (a && typeof a.rt === "string") ? Object.assign({}, a, { rt: await rtOpen(a.rt) }) : a));
+    // old plain tokens are sealed once, and only if the stored list did not change in the meantime
+    if (!rtMigrated && l.some(a => a && typeof a.rt === "string" && a.rt && !a.rt.startsWith(RT_PFX))) {
+      rtMigrated = true;
+      (async () => {
+        const sealed = await Promise.all(out.map(async a => (a && typeof a.rt === "string") ? Object.assign({}, a, { rt: await rtSeal(a.rt) }) : a));
+        if (sealed.every((a, i) => !a || a.rt === l[i].rt)) return;
+        const db = await acctDb(), before = JSON.stringify(l);
+        await new Promise(res => { const t = db.transaction("a", "readwrite"), st = t.objectStore("a"); const q = st.get("list"); q.onsuccess = () => { if (JSON.stringify(q.result) === before) st.put(sealed, "list"); }; t.oncomplete = t.onerror = t.onabort = () => res(); });
+      })().catch(() => {});
+    }
+    return out;
+  } catch (e) { return []; }
 }
 async function rememberAccount(info) {
   if (!sbUser) return;
@@ -4187,7 +4285,8 @@ async function leaveThisAccount(keep) {
   if (keep) await saveSnap(me).catch(() => {});
   await forgetAccount(me, !!keep);
   // the saved copies of this account's inbox and chats leave the phone with it
-  if (!keep) { try { Object.keys(localStorage).filter(k => k.startsWith(CACHE_PFX) && k.includes(me)).forEach(k => localStorage.removeItem(k)); } catch (e) {} }
+  // the saved follows, nicknames, inbox and follower counts never stay behind on the phone after a sign out, even when the rest is kept
+  try { Object.keys(localStorage).filter(k => k.startsWith(CACHE_PFX) && (!keep && k.includes(me) || /^nook-cache:(follows|nicks|clears|inbox|fc|rpt|ui):/.test(k))).forEach(k => localStorage.removeItem(k)); } catch (e) {}
   const rest = await acctList();
   const next = rest.find(a => a.id === mainAccountId(rest)) || rest[0];
   // this phone's login is removed here and now; telling the server happens in the background and can fail without blocking anything
@@ -4246,19 +4345,22 @@ function newAccountModal() {
         const ins = await tmp.from("accounts").insert({ id, username: u, display_name: n });
         if (ins.error) { say(ins.error.code === "23505" ? "That username is taken" : "Could not save the account. " + plainErr(ins.error, "Try again")); return; }
         // its message key is made now and saved locked with the password, like for any new account
+        let keyFail = false;
         try {
           const rec = await makeKeyPair();
           await saveLocalKeys(await keyDb(), id, rec);
           const row = await sealKeyBackup(rec.priv, rec.pub, p, "login");
           row.user_id = id;
-          await tmp.from("key_backups").upsert(row, { onConflict: "user_id,mode" });
-          await tmp.from("accounts").update({ public_key: rec.pub }).eq("id", id);
-        } catch (x) {}
+          const kb = await tmp.from("key_backups").upsert(row, { onConflict: "user_id,mode" });
+          const ku = await tmp.from("accounts").update({ public_key: rec.pub }).eq("id", id);
+          if (kb.error || ku.error) keyFail = true;
+        } catch (x) { keyFail = true; }
         const list = await acctList();
         await acctPut("list", list.filter(x => x.id !== id).concat({ id, rt: sr.body.session.refresh_token, username: u, name: n, avatar: null, main: false }));
         linkSavedAccounts(id, sr.body.session.access_token).catch(() => {});
         close();
-        toast("Account created");
+        // the key is made again the first time this account is opened, so this is only a heads up
+        toast(keyFail ? "Account created. Its message key is set up when you open it" : "Account created");
         setTimeout(openAccounts, 350);
       } catch (x) { say("Something went wrong. Try again"); } finally { go1.disabled = false; }
   };
@@ -4652,7 +4754,7 @@ function authV() {
         if (!r.body || !r.body.session) { msg.textContent = "Could not sign in. Try again"; return; }
         const { data: sd, error } = await sb.auth.setSession({ access_token: r.body.session.access_token, refresh_token: r.body.session.refresh_token });
         if (error) { msg.textContent = "Could not sign in. Try again"; return; }
-        try { localStorage.removeItem(BAN_EMAIL); } catch (x) {}
+        try { sessionStorage.removeItem(BAN_EMAIL); } catch (x) {}
         // the typed password opens the saved chat key on a new phone, and locks it for this account when none is saved yet; both run at once and never hold the sign in for long
         if (sd && sd.user) sbUser = sd.user;
         // an account that was deleted less than 30 days ago comes back here; the plain wake up runs after it for older setups
@@ -5085,8 +5187,10 @@ async function makeKeyPair() {
 let e2eLocked = false, restoreAsked = false;
 const LOCKED_MSG = "Open your messages first (Settings, Message key backup)";
 // the choices only come up while the person is in the chats, never on the home screen
+let e2eOkAt = 0;
 function lockKeys() {
   e2eLocked = true;
+  e2eOkAt = 0;
   if (["chat", "dm"].includes(stack[stack.length - 1].r)) promptUnlock();
 }
 function promptUnlock() {
@@ -5176,7 +5280,7 @@ async function loginBackup(pw, opt) {
     return up.error ? "fail" : "saved";
   } catch (e) { return "fail"; }
 }
-const resetKeyCaches = () => { e2eMine.delete(sbUser.id); e2eShared.clear(); e2eEnc.clear(); };
+const resetKeyCaches = () => { e2eOkAt = 0; e2eMine.delete(sbUser.id); e2eShared.clear(); e2eEnc.clear(); };
 // danger actions ask for the account email and the login password first
 function confirmLogin(title, warn, label, fn) {
   const em = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "off", autocapitalize: "off", "aria-label": "Email" });
@@ -5483,10 +5587,17 @@ async function ensureE2E() {
   // asks the browser not to drop the key by itself when the phone runs low on space (it cannot stop a person clearing the data)
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); } catch (e) {}
 }
+// a changed key of a person is never trusted by itself: reading still works, sending waits until it is confirmed here
+const keyUntrusted = new Map();
 function keyChangedNotice(otherId) {
   const a = acctCache.get(otherId) || {};
   const who = nickOf(otherId) || a.name || "This person";
-  sheet([{ label: "OK", cancel: true }], who + " has a new security key. That happens with a new phone or a reset. If you did not expect it, be careful what you send.");
+  sheet([
+    { label: "Trust the new key", fn: () => { const nk = keyUntrusted.get(otherId); if (nk) { try { localStorage.setItem("nook-pin:" + sbUser.id + ":" + otherId, nk); } catch (e) {} keyUntrusted.delete(otherId); toast("New key trusted"); } } },
+    { label: "Not now", cancel: true }], who + " has a new security key. That happens with a new phone or a reset. If you did not expect it, do not trust it. Nothing is sent to them until you do.");
+}
+function keyGate(otherId) {
+  if (keyUntrusted.has(otherId)) { setTimeout(() => keyChangedNotice(otherId), 100); throw new Error("Their security key changed. Confirm it first"); }
 }
 function sharedKey(otherId) {
   if (!e2eShared.has(otherId)) {
@@ -5498,8 +5609,9 @@ function sharedKey(otherId) {
       const pinName = "nook-pin:" + sbUser.id + ":" + otherId;
       let pinned = null;
       try { pinned = localStorage.getItem(pinName); } catch (e) {}
-      try { localStorage.setItem(pinName, data.public_key); } catch (e) {}
-      if (pinned && pinned !== data.public_key) setTimeout(() => keyChangedNotice(otherId), 600);
+      if (!pinned) { try { localStorage.setItem(pinName, data.public_key); } catch (e) {} }
+      if (pinned && pinned !== data.public_key && otherId !== sbUser.id) { keyUntrusted.set(otherId, data.public_key); setTimeout(() => keyChangedNotice(otherId), 600); }
+      else keyUntrusted.delete(otherId);
       const peer = await crypto.subtle.importKey("raw", fromB64(data.public_key), E2E_ALG, false, []);
       return crypto.subtle.deriveKey({ name: "ECDH", public: peer }, mine.priv, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
     })();
@@ -5510,6 +5622,7 @@ function sharedKey(otherId) {
 }
 async function sealText(otherId, text) {
   const key = await sharedKey(otherId);
+  keyGate(otherId);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(text));
   return "e2e1:" + toB64(iv) + "." + toB64(new Uint8Array(ct));
@@ -5697,6 +5810,8 @@ async function openRows(rows, otherId, waitFor) {
     const zp = zPostOf(t);
     return Object.assign({}, m, { text: zp || card ? "" : zUn(t) }, marked ? { ai: true } : {}, zp ? { zpost: zp } : {});
   }));
+  // a row that never went through the sealed format is marked, so a server or a stranger cannot pass plain text off as a private message
+  out.forEach(m => { if (typeof m.body === "string" && m.body && m.body.slice(0, 5) !== "e2e1:" && !m.ai && !m.rpost && !m.zpost) m.plain = true; });
   // photos are opened before their bubbles show, so no grey box sits on the screen while they load (only the newest ones are waited for when there are many)
   const jobs = [];
   rows.slice(-(waitFor || rows.length)).forEach(m => (m.media || []).forEach(md => { if (md.iv && !/^video\//.test(md.type || "")) jobs.push(loadEncMedia(md, otherId).catch(() => {})); }));
@@ -5707,10 +5822,12 @@ async function openRows(rows, otherId, waitFor) {
 }
 async function sendDm(otherId, text, srcs, dims) {
   // the key of this phone must be known to the other person before a message is sealed with it
-  await ensureE2E().catch(() => {});
+  // checked at most once a minute, not for every message
+  if (Date.now() - e2eOkAt > 60000) { let ok = true; await ensureE2E().catch(() => { ok = false; }); if (ok) e2eOkAt = Date.now(); }
   const media = [];
   const paths = [];
   const key = srcs.length ? await sharedKey(otherId) : null;
+  if (srcs.length) keyGate(otherId);
   try {
     for (let i = 0; i < srcs.length; i++) {
       const blob = await (await fetch(srcs[i])).blob();
@@ -5826,11 +5943,15 @@ async function openDmViewer(row, idx) {
   const m = row._m;
   if (!m) return;
   const urls = [], map = [];
+  // all photos are fetched side by side, then kept in their original order
+  const jobs = [];
   for (let i = 0; i < (m.media || []).length; i++) {
     const md = m.media[i];
     if (/^video\//.test(md.type || "")) continue;
-    try { urls.push(md.iv ? await loadEncMedia(md, row._other) : md.url); map.push(i); } catch (e) {}
+    jobs.push({ i, p: Promise.resolve().then(() => md.iv ? loadEncMedia(md, row._other) : md.url) });
   }
+  const got = await Promise.allSettled(jobs.map(j => j.p));
+  got.forEach((r, n) => { if (r.status === "fulfilled") { urls.push(r.value); map.push(jobs[n].i); } });
   const start = map.indexOf(idx);
   if (start < 0 || !urls.length) return;
   const mine = m.sender_id === sbUser.id || row._mine;
@@ -5868,7 +5989,7 @@ function dmBubble(m, mine, otherId) {
     if (link) row.append(linkCard(link, true));
     if (body) row.append(h("div", { class: "bub" }, msg.ai ? h("span", { class: "zin" }, "zenith ") : null, rich(body)));
     row.classList.toggle("zdm", !!msg.ai);
-    row.append(h("div", { class: "mmeta" }, h("div", { class: "mmi" }, h("span", {}, new Date(msg.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })))));
+    row.append(h("div", { class: "mmeta" }, h("div", { class: "mmi" }, h("span", {}, new Date(msg.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })), msg.plain ? h("span", { class: "unenc", style: "margin-left:6px;color:#c0392b" }, "Not encrypted") : null)));
     row.classList.toggle("open", wasOpen);
   };
   fill(m);
@@ -5910,8 +6031,14 @@ function peerKnown(id) {
   const hit = cacheRead("inbox:" + sbUser.id);
   return !!(hit && Array.isArray(hit.v) && hit.v.some(cv => cv && cv.other === id));
 }
+const typeSeen = new Map();
 function onTyping(from, on) {
-  if (!sbUser || !from || from === sbUser.id || typeof from !== "string" || !peerKnown(from)) return;
+  if (!sbUser || !from || from === sbUser.id || typeof from !== "string" || !/^[0-9a-f-]{36}$/i.test(from) || !peerKnown(from)) return;
+  // a sender that floods the channel, or a chat that is muted or hidden, is not shown
+  const nowT = Date.now();
+  if (nowT - (typeSeen.get(from) || 0) < 400) return;
+  typeSeen.set(from, nowT);
+  if (dmMuteSet.has(from) || dmHideSet.has(from)) return;
   clearTimeout(typeIn.get(from));
   if (on === false) {
     // let the dots hang around for a moment, like instagram, instead of cutting off
@@ -5958,7 +6085,8 @@ function loadDmMutes(force) {
 const dmPinned = id => (S.ui.dmPins || []).includes(id);
 async function dmMenu(cv, inChat) {
   let blocked = false;
-  const muted = dmMuted(cv.other);
+  const hidden = dmHideSet.has(cv.other);
+  const muted = !hidden && dmMuted(cv.other);
   try { const r = await withTimeout(Promise.resolve(sb.from("blocks").select("blocked_id").eq("blocker_id", sbUser.id).eq("blocked_id", cv.other).maybeSingle()), 3000); blocked = !!(r && r.data); } catch (e) {}
   const pinned = dmPinned(cv.other);
   sheet([
@@ -5970,7 +6098,12 @@ async function dmMenu(cv, inChat) {
       toast(pinned ? "Unpinned" : "Pinned to the top");
     } },
     { icon: "edit", label: "Nickname", fn: () => nicknameModal(cv) },
-    { icon: "bellOff", label: muted ? "Unmute messages" : "Mute messages", fn: () => {
+    hidden ? { icon: "eyeoff", label: "Unhide chat", fn: () => {
+      sb.from("dm_mutes").delete().eq("owner_id", sbUser.id).eq("target_id", cv.other).then(({ error }) => {
+        if (error) { toast("Could not unhide chat"); return; }
+        dmHideSet.delete(cv.other); refreshBadge(); if (!inChat) render(); toast("Chat unhidden");
+      });
+    } } : { icon: "bellOff", label: muted ? "Unmute messages" : "Mute messages", fn: () => {
       const done = () => { refreshBadge(); if (!inChat) render(); };
       const setMute = async (ms, label) => {
         const until = ms ? new Date(Date.now() + ms).toISOString() : null;
@@ -5995,7 +6128,7 @@ async function dmMenu(cv, inChat) {
         { icon: "bellOff", label: "Until I turn it back on", fn: () => setMute(0, "until you turn it back on") },
         { label: "Cancel", cancel: true }], "Mute messages");
     } },
-    { icon: "eyeoff", label: "Hide chat", fn: async () => {
+    hidden ? null : { icon: "eyeoff", label: "Hide chat", fn: async () => {
       const { error } = await sb.from("dm_mutes").upsert({ owner_id: sbUser.id, target_id: cv.other, until_at: null, hidden: true }, { onConflict: "owner_id,target_id" });
       if (error) { toast("Could not hide chat"); return; }
       dmHideSet.add(cv.other); dmMuteSet.delete(cv.other);
@@ -6005,7 +6138,7 @@ async function dmMenu(cv, inChat) {
     } },
     { icon: "trash", label: "Delete chat", danger: true, fn: () => confirmSheet("Delete this chat for you? The other person keeps theirs.", "Delete chat", () => deleteChat(cv, inChat)) },
     { icon: "close", label: blocked ? "Unblock" : "Block", danger: !blocked, fn: async () => { toast((await setBlocked(cv.other, !blocked)) ? (blocked ? "Unblocked" : "Blocked") : "Could not update block"); } }
-  ], nickOf(cv.other) || cv.name);
+  ].filter(Boolean), nickOf(cv.other) || cv.name);
 }
 function nicknameModal(cv) {
   const inp = h("input", { class: "in", id: "nk", maxlength: "30", placeholder: cv.name || "Nickname", autocomplete: "off" });
@@ -6482,7 +6615,7 @@ function followListV(c, mode) {
   const hit = cacheRead(ukey);
   const load = () => {
     withTimeout(Promise.all([
-      sb.from("follows").select(col).eq(keyCol, c.id).limit(500),
+      pageAll((f, t) => sb.from("follows").select(col).eq(keyCol, c.id).order(col).range(f, t)),
       sb.from("blocks").select("blocker_id, blocked_id").or("blocker_id.eq." + sbUser.id + ",blocked_id.eq." + sbUser.id)
     ])).then(([a1, a2]) => {
       if (a1.error || a2.error) throw new Error("load");
@@ -6678,7 +6811,7 @@ function showExposedNotice(n) {
 function showModNotice(n) {
   if (!n || modShown.has(n.id)) return;
   modShown.add(n.id);
-  if (n.kind === "exposed") { showExposedNotice(n); return; }
+  if (n.kind === "exposed") { try { if (n.post_id) dropLocalPosts([n.post_id]); } catch (e) {} showExposedNotice(n); return; }
   try { if (n.post_id) dropLocalPosts([n.post_id]); } catch (e) {}
   // somebody who said they are under 18 goes straight to the age check, no warning first
   if (n.kind === "minor") {
@@ -6902,7 +7035,8 @@ async function boot() {
   } catch (e) { early = false; sbUser = null; }
   const earlyUser = early ? sbUser : null;
   let slowLogin = false;
-  const { data: sess } = await Promise.race([sb.auth.getSession().catch(() => ({ data: { session: null } })), new Promise(r => setTimeout(() => { slowLogin = true; r({ data: { session: null } }); }, 6000))]);
+  // only a real refusal (400, 401, 403) means signed out; a failed call or a network error keeps the saved login like a slow answer does
+  const { data: sess } = await Promise.race([sb.auth.getSession().then(r => { if (r && r.error && ![400, 401, 403].includes(r.error.status)) slowLogin = true; return r; }).catch(() => { slowLogin = true; return { data: { session: null } }; }), new Promise(r => setTimeout(() => { slowLogin = true; r({ data: { session: null } }); }, 6000))]);
   // a slow connection is not a sign out: the saved login stays until the server says no
   sbUser = sess && sess.session ? sess.session.user : slowLogin ? earlyUser : null;
   let ageHeld = false, ownAvatar = null;
@@ -6924,7 +7058,10 @@ async function boot() {
       if (verified) acct.age_hold = false;
       else { const { data: held, error: he } = await sb.rpc("my_age_hold"); acct.age_hold = he ? true : held === true; }
     }
-    ageHeld = !!(acct && acct.age_hold);
+    // when the account could not be read at all, the age check cannot be made either: only a phone that already passed it is let through
+    let ageKnown = false;
+    if (aerr) { try { ageKnown = localStorage.getItem("nook-age-ok:" + sbUser.id) === "1"; } catch (e) {} }
+    ageHeld = !!(acct && acct.age_hold) || (!!aerr && !acct && !ageKnown);
     if (!aerr && (!acct || acct.deactivated)) { try { sessionStorage.setItem("nook-notice", acct ? "That account is deactivated. Sign in again to bring it back." : "Your account could not be loaded. Sign in again."); } catch (e) {} await sb.auth.signOut({ scope: "local" }).catch(() => {}); sbUser = null; }
     else if (sbUser && await foreignLocalData(acct)) {
       // an account that was deactivated here comes back with everything it had on this phone
@@ -6985,6 +7122,7 @@ const imgH = src => { let v = noteHash.get(src); if (!v) { v = srcHash(src); if 
 const noteCSig = c => srcHash("c|" + (c.name || "") + "|" + (c.t || 0));
 const noteImgSig = m => (m.imgs || []).map(imgH).join(",");
 const noteMSig = m => srcHash("m|" + (m.text || "") + "|" + (m.t || 0) + "|" + noteImgSig(m) + "|" + JSON.stringify(m.rpost || null) + JSON.stringify(m.zpost || null));
+let notesPushed = false;
 let notesOn = false, notesBusy = false, notesAgain = false, notesTimer = 0, notesQuiet = false;
 function noteState() {
   const n = S.notesSync;
@@ -7001,9 +7139,14 @@ function setSaved(p, on) {
   // the number under the bookmark counts people, so it follows this person's choice
   if (sbUser) {
     p.svc = Math.max(0, (p.svc || 0) + (on ? 1 : -1));
-    (on ? sb.from("post_saves").upsert({ post_id: p.remote, user_id: sbUser.id }, { onConflict: "post_id,user_id", ignoreDuplicates: true }) : sb.from("post_saves").delete().eq("post_id", p.remote).eq("user_id", sbUser.id)).then(() => {}, () => {});
+    // writes for one post run in the order of the taps, so a quick save then unsave ends as unsaved on the server too
+    const run = () => (on ? sb.from("post_saves").upsert({ post_id: p.remote, user_id: sbUser.id }, { onConflict: "post_id,user_id", ignoreDuplicates: true }) : sb.from("post_saves").delete().eq("post_id", p.remote).eq("user_id", sbUser.id));
+    const q = (saveQ.get(p.remote) || Promise.resolve()).then(run).then(() => {}, () => {});
+    saveQ.set(p.remote, q);
+    q.then(() => { if (saveQ.get(p.remote) === q) saveQ.delete(p.remote); });
   }
 }
+const saveQ = new Map();
 // saves made before the counter existed are added once, for the posts that are on screen
 function backfillSaves(rows, ids) {
   if (!sbUser || !S.sv) return;
@@ -7060,7 +7203,7 @@ async function notePriv(ns, key, r) {
   // known on this phone but gone from it: the removal goes up, it is not brought back
   if (ns.pushed[r.id] && !here) return false;
   if (here && ns.pushed[r.id] !== privSig(here)) return false;
-  const p = await noteOpen(key, r.body);
+  const p = await noteOpen(key, r.body, r.id);
   const text = String(p.x || "").slice(0, 5000), t = Number(p.t) || Date.now(), pa = typeof p.pa === "string" ? p.pa : null;
   if (here) {
     if (here.text === text && here.t === t && (here.parent || null) === pa && !!here.liked === !!p.l && !!here.reposted === !!p.r && !!here.saved === !!p.s) return false;
@@ -7079,7 +7222,7 @@ async function noteExtra(ns, key, r) {
   const known = ns.pushed[r.id], cur = docs[r.id];
   // changed on this phone since the last sync: this phone wins and the change goes up
   if (known && known !== xSig(cur)) return false;
-  const p = await noteOpen(key, r.body);
+  const p = await noteOpen(key, r.body, r.id);
   if (JSON.stringify(p) === JSON.stringify(cur)) { ns.pushed[r.id] = xSig(cur); return false; }
   xApply(r.id, p, !known);
   ns.pushed[r.id] = xSig(xDocs()[r.id]);
@@ -7087,15 +7230,18 @@ async function noteExtra(ns, key, r) {
   return true;
 }
 // saved posts and list entries that are not among the newest posts are fetched, and the flags follow the posts that are here
+// ids the server did not return (removed or hidden posts) are not asked for again during this visit, so the next hundred get their turn
+const wantGone = new Set();
 async function fillWanted() {
   if (!sbUser || !S) return false;
   const want = new Set(Object.keys(S.sv || {}));
   S.lists.forEach(l => l.ids.forEach(i => { const r = idToRemote(i); if (r) want.add(r); }));
   const have = new Set(S.posts.filter(p => p.remote).map(p => p.remote));
-  const miss = [...want].filter(r => !have.has(r)).slice(0, 100);
+  const miss = [...want].filter(r => !have.has(r) && !wantGone.has(r)).slice(0, 100);
   let changed = false;
   if (miss.length) {
-    const { data } = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url").in("id", miss);
+    const { data, error } = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url").in("id", miss);
+    if (!error) { const got = new Set((data || []).map(d => d.id)); miss.forEach(r => { if (!got.has(r)) wantGone.add(r); }); }
     changed = (await mapRemotePosts(data || [])) > 0;
   }
   S.posts.forEach(p => { if (p.remote && S.sv && S.sv[p.remote] && !p.saved) { p.saved = true; changed = true; } });
@@ -7103,14 +7249,21 @@ async function fillWanted() {
   return changed;
 }
 const blobToData = b => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(b); });
-async function noteOpen(key, raw) {
-  const parts = String(raw).slice(5).split(".");
-  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(parts[0]) }, key, fromB64(parts[1]));
+// the row id is bound to the sealed text, so the server cannot hand one note back as another; rows sealed before that are still opened and sealed again on the next push
+const legacySeen = new Set();
+async function noteOpen(key, raw, rid) {
+  const parts = String(raw).slice(5).split("."), iv = fromB64(parts[0]), ct = fromB64(parts[1]);
+  let pt;
+  if (typeof rid === "string" && rid) {
+    try { pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv, additionalData: new TextEncoder().encode(rid) }, key, ct); }
+    catch (e) { pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct); legacySeen.add(rid); }
+  } else pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
   return JSON.parse(new TextDecoder().decode(pt));
 }
-async function noteSeal(key, obj) {
+async function noteSeal(key, obj, rid) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify(obj)));
+  const alg = typeof rid === "string" && rid ? { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(rid) } : { name: "AES-GCM", iv };
+  const ct = await crypto.subtle.encrypt(alg, key, new TextEncoder().encode(JSON.stringify(obj)));
   return "e2e1:" + toB64(iv) + "." + toB64(new Uint8Array(ct));
 }
 async function notePicIn(key, md) {
@@ -7149,7 +7302,7 @@ async function noteTake(ns, key, r) {
   }
   // a note this phone already knew but no longer has was removed here: the removal goes up, it is not brought back
   if (ns.pushed[r.id] && !(isChat ? S.chats.some(x => x.id === rid) : S.chats.some(c => (c.msgs || []).some(x => x.id === rid)))) return false;
-  const p = await noteOpen(key, r.body);
+  const p = await noteOpen(key, r.body, r.id);
   if (isChat) {
     let c = S.chats.find(x => x.id === rid);
     if (c && (!isNoteChat(c) || ns.pushed[r.id] !== noteCSig(c))) return false;
@@ -7192,6 +7345,8 @@ async function notesPull(ns, key) {
     if (error) throw error;
     for (const r of data || []) {
       try { if (await noteTake(ns, key, r)) changed = true; } catch (e) { return changed; }
+      // a row that was sealed without its id is marked as not yet pushed, so the next push seals it again
+      if (legacySeen.delete(r.id) && ns.pushed[r.id] && ns.pushed[r.id] !== "gone") ns.pushed[r.id] = "reseal";
       if (!ns.cursor || r.updated_at > ns.cursor) ns.cursor = r.updated_at;
     }
     if (!data || data.length < 500) break;
@@ -7221,10 +7376,10 @@ async function notesPush(ns, key) {
           const h = noteImgSig(x.m), have = ns.pm[x.id];
           let media = have && have.h === h ? have.e : null;
           if (!media) { media = []; for (const src of x.m.imgs || []) { if (/^data:/.test(src)) media.push(await notePicOut(key, src)); } }
-          rows.push({ owner_id: sbUser.id, id: x.id, body: await noteSeal(key, { c: x.c.id, t: x.m.t, x: x.m.text || "", ...(x.m.rpost ? { rp: x.m.rpost } : {}), ...(x.m.zpost ? { zp: x.m.zpost } : {}) }), media, deleted: false });
+          rows.push({ owner_id: sbUser.id, id: x.id, body: await noteSeal(key, { c: x.c.id, t: x.m.t, x: x.m.text || "", ...(x.m.rpost ? { rp: x.m.rpost } : {}), ...(x.m.zpost ? { zp: x.m.zpost } : {}) }, x.id), media, deleted: false });
           done.push({ x, pm: { h, e: media } });
         } else {
-          rows.push({ owner_id: sbUser.id, id: x.id, body: await noteSeal(key, { n: x.c.name, t: x.c.t }), media: [], deleted: false });
+          rows.push({ owner_id: sbUser.id, id: x.id, body: await noteSeal(key, { n: x.c.name, t: x.c.t }, x.id), media: [], deleted: false });
           done.push({ x });
         }
       } catch (e) { /* this one is tried again on the next round */ }
@@ -7232,6 +7387,7 @@ async function notesPush(ns, key) {
     if (!rows.length) continue;
     const { error } = await sb.from("notes_self").upsert(rows, { onConflict: "owner_id,id" });
     if (error) throw error;
+    notesPushed = true;
     done.forEach(d => {
       const old = ns.pm[d.x.id];
       ns.pushed[d.x.id] = d.x.sig;
@@ -7242,6 +7398,7 @@ async function notesPush(ns, key) {
     const part = gone.slice(i, i + 50);
     const { error } = await sb.from("notes_self").upsert(part.map(id => ({ owner_id: sbUser.id, id, body: "", media: [], deleted: true })), { onConflict: "owner_id,id" });
     if (error) throw error;
+    notesPushed = true;
     part.forEach(id => { const o = ns.pm[id]; if (o) o.e.forEach(md => { const pth = notePath(md); if (pth) stale.push(pth); }); ns.pushed[id] = "gone"; delete ns.pm[id]; });
   }
   // settings, saved posts and lists go up only after the server copy has been read, so a fresh phone never wipes them
@@ -7249,15 +7406,16 @@ async function notesPush(ns, key) {
     const xd = xDocs(), xrows = [];
     for (const id of Object.keys(xd)) {
       const sig = xSig(xd[id]);
-      if (ns.pushed[id] !== sig) xrows.push({ id, sig, row: { owner_id: sbUser.id, id, body: await noteSeal(key, xd[id]), media: [], deleted: false } });
+      if (ns.pushed[id] !== sig) xrows.push({ id, sig, row: { owner_id: sbUser.id, id, body: await noteSeal(key, xd[id], id), media: [], deleted: false } });
     }
     for (const p of priv) {
       const id = "p:" + p.id, sig = privSig(p);
-      if (ns.pushed[id] !== sig) xrows.push({ id, sig, row: { owner_id: sbUser.id, id, body: await noteSeal(key, { i: p.id, pa: p.parent, x: p.text || "", t: p.t, l: !!p.liked, r: !!p.reposted, s: !!p.saved }), media: [], deleted: false } });
+      if (ns.pushed[id] !== sig) xrows.push({ id, sig, row: { owner_id: sbUser.id, id, body: await noteSeal(key, { i: p.id, pa: p.parent, x: p.text || "", t: p.t, l: !!p.liked, r: !!p.reposted, s: !!p.saved }, id), media: [], deleted: false } });
     }
     if (xrows.length) {
       const { error } = await sb.from("notes_self").upsert(xrows.map(x => x.row), { onConflict: "owner_id,id" });
       if (error) throw error;
+      notesPushed = true;
       xrows.forEach(x => { ns.pushed[x.id] = x.sig; });
     }
   }
@@ -7284,11 +7442,15 @@ async function notesSync() {
     await ensureE2E();
     const key = await sharedKey(sbUser.id);
     const ns = noteState();
-    if (!S.sv) { S.sv = {}; S.posts.forEach(p => { if (p.saved && p.remote) S.sv[p.remote] = 1; }); }
+    let moved = false;
+    if (!S.sv) { S.sv = {}; S.posts.forEach(p => { if (p.saved && p.remote) S.sv[p.remote] = 1; }); moved = true; }
+    const cur0 = ns.cursor;
+    notesPushed = false;
     const changed = await notesPull(ns, key);
-    if (ns.extra) { ns.extra = false; try { await fillWanted(); } catch (e) {} }
+    if (ns.extra) { ns.extra = false; moved = true; try { await fillWanted(); } catch (e) {} }
     await notesPush(ns, key);
-    notesQuiet = true; persist(); notesQuiet = false;
+    // the phone is only written again when this round moved something
+    if (moved || changed || ns.cursor !== cur0 || notesPushed) { notesQuiet = true; persist(); notesQuiet = false; }
     if (changed) { if (stack[stack.length - 1].r === "chat" || stack[stack.length - 1].r === "conv") notesRefreshUI(); else extrasRefreshUI(); }
   } catch (e) { notesQuiet = false; } finally { notesBusy = false; if (notesAgain) { notesAgain = false; setTimeout(notesSync, 1500); } }
 }

@@ -13,6 +13,47 @@ const MAX_FAILS = 5;
 const LOCK_MINUTES = 15;
 const GENERIC = "Wrong code, or too many tries. Wait 15 minutes and try again.";
 
+// seed encryption at rest: "enc1:" + base64(iv + AES-GCM ciphertext), key derived from the env TOTP_ENC_KEY.
+// Without the env var nothing is encrypted; plain seeds from before are still read and are encrypted on first use.
+const ENC = "enc1:";
+let encKey: CryptoKey | null = null;
+async function getEncKey(): Promise<CryptoKey | null> {
+  const raw = Deno.env.get("TOTP_ENC_KEY");
+  if (!raw) return null;
+  if (!encKey) {
+    const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("nook-totp|" + raw));
+    encKey = await crypto.subtle.importKey("raw", d, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+  }
+  return encKey;
+}
+async function sealSecret(plain: string): Promise<string> {
+  const k = await getEncKey();
+  if (!k) return plain;
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, k, new TextEncoder().encode(plain)));
+  const all = new Uint8Array(12 + ct.length);
+  all.set(iv); all.set(ct, 12);
+  return ENC + btoa(String.fromCharCode(...all));
+}
+// returns the plain seed, or null when it cannot be read (encrypted but no key, or a wrong key)
+async function openSecret(stored: string): Promise<string | null> {
+  if (!stored.startsWith(ENC)) return stored;
+  const k = await getEncKey();
+  if (!k) return null;
+  try {
+    const all = Uint8Array.from(atob(stored.slice(ENC.length)), (c) => c.charCodeAt(0));
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: all.slice(0, 12) }, k, all.slice(12)));
+  } catch { return null; }
+}
+
+// a short fingerprint of the caller's network address (cf-connecting-ip, else the last proxy hop; never the caller-written first entry)
+async function ipTag(req: Request): Promise<string> {
+  const fwd = (req.headers.get("x-forwarded-for") || "").split(",").map((x) => x.trim()).filter(Boolean);
+  const raw = (req.headers.get("cf-connecting-ip") || "").trim() || fwd[fwd.length - 1] || "none";
+  const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("nook-ip|" + raw)));
+  return Array.from(d.slice(0, 6), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 }
@@ -60,6 +101,7 @@ function same(a: string, b: string): boolean {
 
 // returns the matching time step or null; steps at or before lastCounter are refused so a code cannot be used twice
 async function check(secretB32: string, code: string, lastCounter: number | null): Promise<number | null> {
+  if (!secretB32) return null;
   const secret = b32decode(secretB32);
   const now = Math.floor(Date.now() / 1000 / STEP);
   let hit: number | null = null;
@@ -75,7 +117,17 @@ type Row = { user_id: string; secret: string; enabled: boolean; failed_attempts:
 
 async function getRow(id: string): Promise<Row | null> {
   const { data } = await admin.from("totp_secrets").select("*").eq("user_id", id).maybeSingle();
-  return (data as Row) || null;
+  const row = (data as Row) || null;
+  if (!row) return null;
+  const stored = row.secret;
+  const plain = await openSecret(stored);
+  if (plain == null) return { ...row, secret: "" };
+  row.secret = plain;
+  // an old plain seed is encrypted the first time it is read (only when the key is set and the row has not changed)
+  if (!stored.startsWith(ENC) && (await getEncKey())) {
+    await admin.from("totp_secrets").update({ secret: await sealSecret(plain) }).eq("user_id", id).eq("secret", stored);
+  }
+  return row;
 }
 
 function lockedNow(row: Row): boolean {
@@ -137,11 +189,14 @@ Deno.serve(async (req) => {
     const ident = String(body.ident || "").trim();
     // only a link back into the app is allowed
     const redirectTo = typeof body.redirectTo === "string" && body.redirectTo.length < 300 && /^https:\/\/nook-web-app\.github\.io(\/|$)/.test(body.redirectTo) ? body.redirectTo : undefined;
-    // a few reset mails per person, then a wait, so nobody can fill an inbox
-    const usable = ident.length > 0 && ident.length <= 100;
-    const slow = usable ? (await admin.rpc("nook_login_gate", { p_key: "r:" + ident.toLowerCase(), p_max: 3 })).data : null;
-    if (usable && !slow) await admin.rpc("nook_login_fail", { p_key: "r:" + ident.toLowerCase(), p_max: 3 });
-    if (usable && !slow) {
+    // everything below runs after the answer is ready, so the reply time is the same whether or not the account exists
+    const work = (async () => {
+      // a few reset mails per person, then a wait, so nobody can fill an inbox
+      const usable = ident.length > 0 && ident.length <= 100;
+      if (!usable) return;
+      const slow = (await admin.rpc("nook_login_gate", { p_key: "r:" + ident.toLowerCase(), p_max: 3 })).data;
+      if (slow) return;
+      await admin.rpc("nook_login_fail", { p_key: "r:" + ident.toLowerCase(), p_max: 3 });
       const found = await admin.rpc("nook_find_user", { ident });
       const id = typeof found.data === "string" ? found.data : null;
       if (id) {
@@ -149,7 +204,10 @@ Deno.serve(async (req) => {
         const email = data && data.user ? data.user.email : null;
         if (email) await admin.auth.resetPasswordForEmail(email, { redirectTo }).catch(() => {});
       }
-    }
+    })().catch(() => {});
+    // deno-lint-ignore no-explicit-any
+    const rt = (globalThis as any).EdgeRuntime;
+    if (rt && typeof rt.waitUntil === "function") rt.waitUntil(work); else await work;
     return json({ ok: true });
   }
 
@@ -157,6 +215,11 @@ Deno.serve(async (req) => {
   if (action === "has") {
     const ident = String(body.ident || "").trim();
     if (!ident || ident.length > 100) return json({ enabled: false });
+    // each place may ask only so often, so the answer cannot be used to list which people use an authenticator
+    const hk = "h:" + (await ipTag(req));
+    const hl = await admin.rpc("nook_login_gate", { p_key: hk, p_max: 20, p_first: 5, p_cap: 60 });
+    if (hl.data) return json({ enabled: false });
+    await admin.rpc("nook_login_fail", { p_key: hk, p_max: 20, p_first: 5, p_cap: 60 });
     const found = await admin.rpc("nook_find_user", { ident });
     const id = typeof found.data === "string" ? found.data : null;
     const r = id ? await getRow(id) : null;
@@ -171,11 +234,23 @@ Deno.serve(async (req) => {
 
   if (action === "begin") {
     if (row && row.enabled) return json({ error: "Authenticator is already on. Turn it off first." }, 400);
+    // starting needs a fresh proof of the password: required when TOTP_BEGIN_NEEDS_PASSWORD=1, checked whenever the app sends one
+    const pw = typeof body.password === "string" ? body.password : "";
+    if (pw || Deno.env.get("TOTP_BEGIN_NEEDS_PASSWORD") === "1") {
+      if (!pw || pw.length > 200 || !user.email) return json({ error: "Enter your password to continue." }, 400);
+      const pk = "t:" + user.id;
+      const lk = await admin.rpc("nook_login_gate", { p_key: pk, p_max: 5 });
+      if (lk.data) return json({ error: GENERIC }, 429);
+      const probe = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, { auth: { persistSession: false, autoRefreshToken: false } });
+      const pr = await probe.auth.signInWithPassword({ email: user.email, password: await pepper(admin, pw) });
+      if (pr.error || !pr.data.session) { await admin.rpc("nook_login_fail", { p_key: pk, p_max: 5 }); return json({ error: "That password is wrong." }, 400); }
+      await admin.rpc("nook_login_ok", { p_key: pk });
+    }
     const secret = b32encode(crypto.getRandomValues(new Uint8Array(20)));
     const { data: acc } = await admin.from("accounts").select("username").eq("id", user.id).maybeSingle();
     const label = encodeURIComponent("Nook:" + ((acc && acc.username) || user.email || "account"));
     const uri = "otpauth://totp/" + label + "?secret=" + secret + "&issuer=Nook&algorithm=SHA1&digits=6&period=" + STEP;
-    const { error } = await admin.from("totp_secrets").upsert({ user_id: user.id, secret, enabled: false, failed_attempts: 0, locked_until: null, last_counter: null });
+    const { error } = await admin.from("totp_secrets").upsert({ user_id: user.id, secret: await sealSecret(secret), enabled: false, failed_attempts: 0, locked_until: null, last_counter: null });
     if (error) return json({ error: "Could not start the setup. Try again." }, 500);
     return json({ secret, uri });
   }

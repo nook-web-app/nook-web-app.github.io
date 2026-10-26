@@ -53,8 +53,8 @@ Deno.serve(async (req) => {
   if (!n) return json({ sent: 0 });
   // a muted chat gets no alert
   if (n.kind === "message") {
-    const { data: mu } = await admin.from("dm_mutes").select("owner_id").eq("owner_id", n.user_id).eq("target_id", n.actor_id).maybeSingle();
-    if (mu) return json({ sent: 0, muted: true });
+    const { data: mu } = await admin.from("dm_mutes").select("owner_id, until_at").eq("owner_id", n.user_id).eq("target_id", n.actor_id).maybeSingle();
+    if (mu && (!mu.until_at || Date.parse(mu.until_at) > Date.now())) return json({ sent: 0, muted: true });
   }
   const { data: actor } = await admin.from("accounts").select("display_name, username").eq("id", n.actor_id).maybeSingle();
   const { data: subs } = await admin.from("push_subs").select("id, endpoint, p256dh, auth").eq("user_id", n.user_id);

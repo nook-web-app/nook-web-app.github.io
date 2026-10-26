@@ -101,6 +101,7 @@ const P = {
   send: '<path d="M4 12l16-8-6 16-3-7z"/>',
   smile: '<circle cx="12" cy="12" r="9"/><path d="M8 14c1 1.5 2.3 2.2 4 2.2s3-.7 4-2.2"/><path d="M9 9.5h.01M15 9.5h.01"/>',
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21h4"/>',
+  bellOff: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21h4"/><path d="M3 3l18 18"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5"/>'
 };
 
@@ -175,7 +176,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.16.1";
+const APP_VERSION = "3.16.2";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -4744,9 +4745,9 @@ function refreshBadge() {
   });
   Promise.all([
     sb.from("messages").select("sender_id").eq("recipient_id", sbUser.id).is("read_at", null).limit(500),
-    Promise.resolve(sb.from("dm_mutes").select("target_id").eq("owner_id", sbUser.id)).catch(() => ({ data: null }))
+    Promise.resolve(sb.from("dm_mutes").select("target_id, until_at").eq("owner_id", sbUser.id)).catch(() => ({ data: null }))
   ]).then(([{ data }, mu]) => {
-    if (mu && mu.data) { dmMuteSet.clear(); mu.data.forEach(r => dmMuteSet.add(r.target_id)); }
+    if (mu && mu.data) { dmMuteSet.clear(); mu.data.forEach(r => dmMuteSet.set(r.target_id, r.until_at ? Date.parse(r.until_at) : 0)); }
     const n = new Set((data || []).map(x => x.sender_id).filter(id => !dmMuted(id))).size;
     if (n !== unreadPeople) { unreadPeople = n; buildNav(null); }
   });
@@ -5689,8 +5690,8 @@ function paintTyping(from, on) {
   });
 }
 // people whose chat is muted: no alert and no number for them (the list comes with the unread check)
-const dmMuteSet = new Set();
-const dmMuted = id => dmMuteSet.has(id);
+const dmMuteSet = new Map();
+const dmMuted = id => { if (!dmMuteSet.has(id)) return false; const u = dmMuteSet.get(id); return !u || u > Date.now(); };
 const dmPinned = id => (S.ui.dmPins || []).includes(id);
 async function dmMenu(cv, inChat) {
   let blocked = false;
@@ -5706,14 +5707,30 @@ async function dmMenu(cv, inChat) {
       toast(pinned ? "Unpinned" : "Pinned to the top");
     } },
     { icon: "edit", label: "Nickname", fn: () => nicknameModal(cv) },
-    { icon: "eyeoff", label: muted ? "Unmute messages" : "Mute messages", fn: async () => {
-      const { error } = muted
-        ? await sb.from("dm_mutes").delete().eq("owner_id", sbUser.id).eq("target_id", cv.other)
-        : await sb.from("dm_mutes").insert({ owner_id: sbUser.id, target_id: cv.other });
-      if (error && !(!muted && error.code === "23505")) { toast("Could not update mute"); return; }
-      if (muted) dmMuteSet.delete(cv.other); else dmMuteSet.add(cv.other);
-      refreshBadge(); if (!inChat) render();
-      toast(muted ? "Messages unmuted" : "Messages muted. No alerts from this chat");
+    { icon: "bellOff", label: muted ? "Unmute messages" : "Mute messages", fn: () => {
+      const done = () => { refreshBadge(); if (!inChat) render(); };
+      const setMute = async (ms, label) => {
+        const until = ms ? new Date(Date.now() + ms).toISOString() : null;
+        const { error } = await sb.from("dm_mutes").upsert({ owner_id: sbUser.id, target_id: cv.other, until_at: until }, { onConflict: "owner_id,target_id" });
+        if (error) { toast("Could not update mute"); return; }
+        dmMuteSet.set(cv.other, ms ? Date.now() + ms : 0);
+        done(); toast("Messages muted " + label);
+      };
+      if (muted) {
+        sb.from("dm_mutes").delete().eq("owner_id", sbUser.id).eq("target_id", cv.other).then(({ error }) => {
+          if (error) { toast("Could not update mute"); return; }
+          dmMuteSet.delete(cv.other); done(); toast("Messages unmuted");
+        });
+        return;
+      }
+      const H = 3600000;
+      sheet([
+        { icon: "bellOff", label: "For 1 hour", fn: () => setMute(H, "for 1 hour") },
+        { icon: "bellOff", label: "For 8 hours", fn: () => setMute(8 * H, "for 8 hours") },
+        { icon: "bellOff", label: "For 1 day", fn: () => setMute(24 * H, "for 1 day") },
+        { icon: "bellOff", label: "For 1 week", fn: () => setMute(168 * H, "for 1 week") },
+        { icon: "bellOff", label: "Until I turn it back on", fn: () => setMute(0, "until you turn it back on") },
+        { label: "Cancel", cancel: true }], "Mute messages");
     } },
     { icon: "trash", label: "Delete chat", danger: true, fn: () => confirmSheet("Delete this chat for you? The other person keeps theirs.", "Delete chat", () => deleteChat(cv, inChat)) },
     { icon: "close", label: blocked ? "Unblock" : "Block", danger: !blocked, fn: async () => { toast((await setBlocked(cv.other, !blocked)) ? (blocked ? "Unblocked" : "Blocked") : "Could not update block"); } }

@@ -40,18 +40,23 @@ async function keep(challenge: string, purpose: string, user: string | null, ip:
 }
 // a challenge made by the phone itself (32 bytes, the time in bytes 16 to 23): accepted when it is fresh and was never used before.
 // Nothing has to be asked from this server before the phone's own window opens, so the window comes up at once.
-async function claimFresh(challenge: string, ip: string | null): Promise<boolean> {
+async function claimFresh(challenge: string, ip: string | null): Promise<"ok" | "expired" | "busy"> {
   let b: Uint8Array;
-  try { b = toU8(challenge); } catch { return false; }
-  if (b.length !== 32) return false;
+  try { b = toU8(challenge); } catch { return "expired"; }
+  if (b.length !== 32) return "expired";
   const age = Date.now() - new DataView(b.buffer, b.byteOffset, 32).getFloat64(16);
-  if (!(age > -60000 && age < 5 * 60000)) return false;
+  if (!(age > -60000 && age < 5 * 60000)) return "expired";
+  // one place can only try so often, so a flood of tries cannot fill the table or wear the server down
+  if (ip) {
+    const mine = await admin.from("passkey_challenges").select("challenge", { count: "exact", head: true }).eq("purpose", "auth").eq("ip", ip).gt("created_at", new Date(Date.now() - 60000).toISOString());
+    if (!mine.error && (mine.count || 0) > 40) return "busy";
+  }
   if (Math.random() < 0.1) await admin.from("passkey_challenges").delete().lt("created_at", new Date(Date.now() - 10 * 60000).toISOString());
   const ins = await admin.from("passkey_challenges").insert({ challenge, purpose: "auth", user_id: null, ip });
-  if (!ins.error) return true;
-  if (ins.error.code === "23505") return false;
+  if (!ins.error) return "ok";
+  if (ins.error.code === "23505") return "expired";
   // before the ip column exists the insert is refused; store the row without it
-  return !(await admin.from("passkey_challenges").insert({ challenge, purpose: "auth", user_id: null })).error;
+  return (await admin.from("passkey_challenges").insert({ challenge, purpose: "auth", user_id: null })).error ? "expired" : "ok";
 }
 // a challenge works once, for the right purpose, and only for a few minutes
 async function take(challenge: string, purpose: string): Promise<{ user_id: string | null } | null> {
@@ -92,7 +97,8 @@ Deno.serve(async (req) => {
         claimFresh(chal, await ipTag(req)),
         admin.from("passkeys").select("id, user_id, credential_id, public_key, counter, transports").eq("credential_id", resp.id).maybeSingle(),
       ]);
-      if (!fresh) return json({ error: "expired" }, 400);
+      if (fresh === "busy") return json({ error: "busy" }, 429);
+      if (fresh !== "ok") return json({ error: "expired" }, 400);
       const pk = pkq.data;
       if (!pk) return json({ error: "unknown_key" }, 404);
       let why = "";

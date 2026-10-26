@@ -177,7 +177,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.20.6";
+const APP_VERSION = "3.20.7";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2913,7 +2913,9 @@ async function loadUserPosts(id) {
 function userV(cur) {
   const found = S.posts.find(p => p.ra && p.ra.id === cur.id);
   const who = found ? found.ra : { id: cur.id, name: "user", handle: "user", avatar: null };
-  topEl.append(bar(backBtn(), ttl(who.name || "@" + who.handle)));
+  // opened from the menu (his page is a root page) there is nothing to go back to, so the menu button shows
+  const titleEl = ttl(who.name || "@" + who.handle);
+  topEl.append(bar(cur.r === "zen" ? menuBtn() : backBtn(), titleEl));
   const bn = h("div", { class: "banner" });
   const av = rAv(who, 0);
   av.className = "av xl";
@@ -3010,6 +3012,7 @@ function userV(cur) {
     bn.textContent = "";
     if (acc.banner_theme === "avatar" && acc.avatar) bn.append(mkImg(acc.avatar, "pic blur")); else if (acc.banner) bn.append(picImg(acc.banner));
     pnEl.textContent = acc.display_name != null ? acc.display_name : (acc.username || who.name);
+    if (pnEl.textContent) titleEl.textContent = pnEl.textContent;
     pnEl.hidden = !pnEl.textContent;
     phEl.textContent = "@" + (acc.username || who.handle);
     bio.textContent = acc.bio || "";

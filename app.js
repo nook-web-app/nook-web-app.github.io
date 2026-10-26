@@ -176,7 +176,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.19.1";
+const APP_VERSION = "3.19.2";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -4278,7 +4278,18 @@ function linkedLoginModal(x) {
   const m = modal({
     title: "@" + x.username,
     action: "Switch",
-    body: [pw.wrap, msg],
+    body: [pw.wrap, msg, pkOk() ? h("button", { class: "ghost", onclick: async e => {
+      const b = e.currentTarget; msg.textContent = ""; b.disabled = true;
+      try {
+        const r = await passkeyAsk();
+        if (!r.session) { if (r.err) say(r.err); return; }
+        const { data: u } = await sb.auth.getUser(r.session.access_token);
+        if (!u || !u.user || u.user.id !== x.id) { say("That key belongs to a different account"); return; }
+        const list = await acctList();
+        await acctPut("list", list.filter(a => a.id !== x.id).concat({ id: x.id, rt: r.session.refresh_token, username: x.username, name: x.name, avatar: x.avatar, main: false }));
+        m.close(() => switchAccount(x.id));
+      } finally { b.disabled = false; }
+    } }, "Use Face ID or fingerprint") : null],
     onAction: async close => {
       msg.textContent = "";
       if (!pw.input.value) { say("Enter the password"); return; }
@@ -4541,7 +4552,7 @@ function authV() {
   main.append(h("div", { class: "auth" },
     h("h1", {}, "Nook"),
     h("p", { class: "sub" }, up ? "Make your account" : "Sign in to continue"),
-    ...fields, agreeRow, msg, btn, up || !pkOk() ? null : h("button", { class: "ghost", onclick: async e => {
+    ...fields, agreeRow, msg, btn, !pkOk() ? null : h("button", { class: "ghost", onclick: async e => {
       const b = e.currentTarget; msg.textContent = ""; b.disabled = true;
       try {
         const r = await passkeyAsk();
@@ -4793,7 +4804,7 @@ const pkOk = () => !!(window.PublicKeyCredential && navigator.credentials && nav
 const pkBuf = s => { const b = atob(String(s).replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(String(s).length / 4) * 4, "=")); return Uint8Array.from(b, c => c.charCodeAt(0)).buffer; };
 const pkStr = buf => toB64(new Uint8Array(buf)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const pkName = () => { const u = navigator.userAgent || ""; return (/iPhone/.test(u) ? "iPhone" : /iPad/.test(u) ? "iPad" : /Android/.test(u) ? "Android phone" : "This device") + " " + new Date().toLocaleDateString([], { month: "short", day: "numeric" }); };
-const pkMsg = e => e === "banned" ? "That account is banned" : e === "busy" ? "Too many tries. Wait a minute" : e === "unknown_key" ? "This phone's key is not saved on any account. Sign in with your password and set it up again" : "Could not sign in with that. Try again";
+const pkMsg = (e, d) => e === "server" && d ? "Could not sign in (" + d + ")" : e === "banned" ? "That account is banned" : e === "busy" ? "Too many tries. Wait a minute" : e === "unknown_key" ? "This phone's key is not saved on any account. Sign in with your password and set it up again" : "Could not sign in with that. Try again";
 async function passkeyAdd() {
   if (!pkOk()) { toast("This phone cannot do that"); return false; }
   const r = await callFn("passkey", { action: "reg-start" });
@@ -4818,7 +4829,7 @@ async function passkeyAdd() {
 async function passkeyAsk() {
   if (!pkOk()) return { err: "This phone cannot do that" };
   const s = await callFn("passkey", { action: "auth-start" });
-  if (!s.ok) return { err: pkMsg(s.body && s.body.error) };
+  if (!s.ok) return { err: pkMsg(s.body && s.body.error, s.body && s.body.detail) };
   let cred = null;
   try { cred = await navigator.credentials.get({ publicKey: { challenge: pkBuf(s.body.challenge), rpId: s.body.rpId, timeout: 60000, userVerification: "required", allowCredentials: [] } }); }
   catch (e) { return { err: e && e.name === "NotAllowedError" ? "" : "Could not use the face or fingerprint here" }; }
@@ -4827,7 +4838,7 @@ async function passkeyAsk() {
   const resp = { id: cred.id, rawId: pkStr(cred.rawId), type: "public-key", authenticatorAttachment: cred.authenticatorAttachment || undefined, clientExtensionResults: {},
     response: { authenticatorData: pkStr(a.authenticatorData), clientDataJSON: pkStr(a.clientDataJSON), signature: pkStr(a.signature), userHandle: a.userHandle ? pkStr(a.userHandle) : undefined } };
   const f = await callFn("passkey", { action: "auth-finish", response: resp });
-  if (!f.ok || !f.body.session) return { err: pkMsg(f.body && f.body.error), banned: !!(f.body && f.body.error === "banned") };
+  if (!f.ok || !f.body.session) return { err: pkMsg(f.body && f.body.error, f.body && f.body.detail), banned: !!(f.body && f.body.error === "banned") };
   return { session: f.body.session };
 }
 function refreshBadge() {

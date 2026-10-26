@@ -68,11 +68,19 @@ Deno.serve(async (req) => {
       if (!u || !u.user || !u.user.email) return json({ error: "failed" }, 401);
       const link = await admin.auth.admin.generateLink({ type: "magiclink", email: u.user.email });
       const hashed = link.data && link.data.properties ? link.data.properties.hashed_token : "";
-      if (link.error || !hashed) return json({ error: "server" }, 500);
-      const s = await mk().auth.verifyOtp({ token_hash: hashed, type: "magiclink" });
+      if (link.error || !hashed) return json({ error: "server", detail: "link: " + (link.error ? link.error.message : "no token") }, 500);
+      // the newer name for a magic link is "email"; the old one is tried when it is refused
+      let s = await mk().auth.verifyOtp({ token_hash: hashed, type: "email" });
+      if (s.error || !s.data.session) {
+        const code0 = String((s.error as { code?: string } | null)?.code || "");
+        if (code0 === "user_banned") return json({ error: "banned" }, 403);
+        const link2 = await admin.auth.admin.generateLink({ type: "magiclink", email: u.user.email });
+        const h2 = link2.data && link2.data.properties ? link2.data.properties.hashed_token : "";
+        s = h2 ? await mk().auth.verifyOtp({ token_hash: h2, type: "magiclink" }) : s;
+      }
       if (s.error || !s.data.session) {
         const code = String((s.error as { code?: string } | null)?.code || "");
-        return json({ error: code === "user_banned" ? "banned" : "server" }, code === "user_banned" ? 403 : 500);
+        return json({ error: code === "user_banned" ? "banned" : "server", detail: "otp: " + (s.error ? s.error.message : "no session") }, code === "user_banned" ? 403 : 500);
       }
       return json({ session: { access_token: s.data.session.access_token, refresh_token: s.data.session.refresh_token } });
     }
@@ -108,7 +116,7 @@ Deno.serve(async (req) => {
       return json({ ok: true });
     }
     return json({ error: "bad_request" }, 400);
-  } catch (_e) {
-    return json({ error: "server" }, 500);
+  } catch (e) {
+    return json({ error: "server", detail: String((e as Error).message || e).slice(0, 120) }, 500);
   }
 });

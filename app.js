@@ -177,7 +177,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.20.5";
+const APP_VERSION = "3.20.6";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2825,6 +2825,8 @@ function rAv(ra, size) {
   for (const c of seed) hsh = (hsh * 31 + c.charCodeAt(0)) >>> 0;
   const a = h("div", { class: "av", style: "background:hsl(" + (hsh % 360) + " 45% 42%)" }, seed.trim().charAt(0).toUpperCase() || "?");
   if (ra && ra.avatar) { const im = picImg(ra.avatar); im.loading = "eager"; a.prepend(im); }
+  // Zenith without a picture shows his own Z, not a letter
+  else if (ra && ((ra.handle || "").toLowerCase() === "zenith" || (S && S.zen && S.zen.id && ra.id === S.zen.id))) { a.className = "av zenav"; a.style.background = ""; a.innerHTML = ZEN_SVG; }
   if (size) { a.style.width = size + "px"; a.style.height = size + "px"; a.style.fontSize = Math.round(size * 0.4) + "px"; }
   return a;
 }
@@ -3004,6 +3006,7 @@ function userV(cur) {
   const paintAcc = acc => {
     av.querySelectorAll(":scope > img.pic").forEach(i => i.remove());
     if (acc.avatar) av.prepend(picImg(acc.avatar));
+    else if ((acc.username || "").toLowerCase() === "zenith") { av.classList.add("zenav"); av.style.background = ""; av.innerHTML = ZEN_SVG; }
     bn.textContent = "";
     if (acc.banner_theme === "avatar" && acc.avatar) bn.append(mkImg(acc.avatar, "pic blur")); else if (acc.banner) bn.append(picImg(acc.banner));
     pnEl.textContent = acc.display_name != null ? acc.display_name : (acc.username || who.name);

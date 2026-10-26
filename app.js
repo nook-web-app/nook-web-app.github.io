@@ -177,7 +177,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.19.11";
+const APP_VERSION = "3.19.12";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -5960,6 +5960,12 @@ function dmV(c) {
   const ta = h("textarea", { rows: 1, placeholder: "Message", "aria-label": "Message", enterkeyhint: "send", autocomplete: "off" });
   const send = h("button", { class: "pri", "aria-label": "Send", disabled: true }, ic("send", 20));
   const scrollEnd = () => { main.scrollTop = main.scrollHeight; };
+  // the chat stays glued to the bottom while pictures, cards and shared posts are still loading in, until the person scrolls themselves
+  let stick = true, stickT = 0;
+  const stickFor = ms => { stick = true; clearTimeout(stickT); stickT = setTimeout(() => { stick = false; }, ms); };
+  stickFor(3500);
+  if (typeof ResizeObserver === "function") new ResizeObserver(() => { if (stick) scrollEnd(); }).observe(list);
+  ["touchstart", "wheel"].forEach(ev => main.addEventListener(ev, () => { stick = false; }, { passive: true }));
   const nearEnd = () => main.scrollHeight - main.scrollTop - main.clientHeight < 160;
   const sync = () => {
     send.disabled = busy || !!locked || jobs.length > 0 || (!ta.value.trim() && !pend.length);
@@ -6051,7 +6057,7 @@ function dmV(c) {
     if (!list.querySelector("[data-mid], .tmpm")) hint("No messages yet. Say hi.");
     const unread = rows.filter(m => m.recipient_id === me && !m.read_at).map(m => m.id);
     if (unread.length) markRead(unread);
-    if (added && (near || o.initial)) scrollEnd();
+    if (added && (near || o.initial)) { scrollEnd(); stickFor(1500); }
   };
 
   // only the owner can call Zenith in a chat: the answer is sent as a normal message with a hidden mark inside the sealed text, so both people see it as Zenith
@@ -6102,9 +6108,6 @@ function dmV(c) {
       row.dataset.mid = String(saved.id);
       list.querySelectorAll('[data-mid="' + saved.id + '"]').forEach(d => { if (d !== row) d.remove(); });
       row.classList.remove("tmpm");
-      // the little pop only plays when the chat was open while this message was on its way
-      row.classList.add("landed");
-      setTimeout(() => row.classList.remove("landed"), 450);
       row._sig = dmSig(saved);
       row._m = Object.assign({}, saved, { text });
     };

@@ -186,7 +186,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.20.13";
+const APP_VERSION = "3.20.14";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2085,6 +2085,35 @@ async function zenSync() {
 // sealed chat rows that were opened and merged once are not opened again until the server copy changes
 const zenEncDone = new Map();
 let zenPullSig = "", zenPullAt = 0;
+const zenDelKey = () => "nook-zdel-" + (sbUser ? sbUser.id : "");
+// copies he removed on another device go from this one too; a missing table (older server) simply means nothing is removed
+async function zenApplyDeleted() {
+  let cur = "";
+  try { cur = localStorage.getItem(zenDelKey()) || ""; } catch (e) {}
+  let q = sb.from("zenith_deleted").select("kind, doc_id, deleted_at").eq("owner_id", sbUser.id).order("deleted_at", { ascending: true }).limit(1000);
+  if (cur) q = q.gt("deleted_at", cur);
+  const { data, error } = await q;
+  if (error || !data || !data.length) return false;
+  let changed = false;
+  const gonePosts = new Set(), goneChats = new Set();
+  data.forEach(r => {
+    zenSeen.delete(r.kind + ":" + r.doc_id);
+    if (r.kind === "post") gonePosts.add(r.doc_id); else if (r.kind === "chat") goneChats.add(r.doc_id);
+  });
+  const gone = new Set(S.posts.filter(x => x.ai && gonePosts.has(x.id)).map(x => x.id));
+  if (gone.size) {
+    for (let grew = true; grew;) { grew = false; S.posts.forEach(x => { if (x.ai && x.parent && gone.has(x.parent) && !gone.has(x.id)) { gone.add(x.id); grew = true; } }); }
+    S.zen.gone = (S.zen.gone || []).concat([...gone]).slice(-500);
+    S.posts = S.posts.filter(x => !gone.has(x.id));
+    S.lists.forEach(l => { l.ids = l.ids.filter(i => !gone.has(i)); });
+    dropPostIndex();
+    changed = true;
+  }
+  if (S.chats.some(c => goneChats.has(c.id))) { S.chats = S.chats.filter(c => !goneChats.has(c.id)); changed = true; }
+  try { localStorage.setItem(zenDelKey(), data[data.length - 1].deleted_at); } catch (e) {}
+  if (changed) persist();
+  return changed;
+}
 async function zenPull() {
   if (!sbUser || !S || !isOwner()) return;
   // a small check first: when the newest change and the row count are the same as at the last full pull, and that pull was lately, nothing is downloaded
@@ -2097,11 +2126,13 @@ async function zenPull() {
     if (!nw.error && !ct.error && typeof ct.count === "number") sig = sbUser.id + "|" + ((nw.data && nw.data[0] && nw.data[0].updated_at) || "") + "|" + ct.count;
   } catch (e) { sig = ""; }
   if (sig && sig === zenPullSig && Date.now() - zenPullAt < 300000) return false;
+  // removals made on another device are read from the tombstones written since the last pull
+  const delChanged = await zenApplyDeleted();
   const { data, error } = await pageAll((a, b) => sb.from("zenith_docs").select("kind, doc_id, data").eq("owner_id", sbUser.id).order("kind").order("doc_id").range(a, b));
   if (error) return;
   const byLocal = new Map(S.posts.map(p => [p.id, p]));
   const byRemote = new Map(S.posts.filter(p => p.remote).map(p => [p.remote, p]));
-  let changed = false;
+  let changed = delChanged;
   // sealed chats are opened first; a copy from before sealing is used as it is and sealed again by the next sync
   const chatOpen = new Map();
   const encStale = r => r.kind === "chat" && r.data && r.data.enc && zenEncDone.get(r.doc_id) === r.data.enc;
@@ -3836,6 +3867,7 @@ function showBanned(email) {
     if (mail) sessionStorage.setItem(BAN_EMAIL, mail);
   } catch (e) {}
   if (rtChan) { try { sb.removeChannel(rtChan); } catch (e) {} rtChan = null; }
+  stopDelChan();
   leaving = true;
   Promise.resolve(sb.auth.signOut()).catch(() => {}).then(() => wipeLocal(true)).then(() => {
     sbUser = null;
@@ -7059,12 +7091,43 @@ async function maybeInstallPrompt() {
   layer.append(scrim, sh);
 }
 let rtBackoff = 2000, rtTimer = null;
+// deleted DMs arrive on a private channel only the two people in the chat can listen to; if that channel cannot be opened the old stream of every delete is used instead
+let delChan = null, delFallback = null, delErrN = 0;
+function startDelChan() {
+  if (!sbUser) return;
+  if (delChan) { try { sb.removeChannel(delChan); } catch (e) {} delChan = null; }
+  const me = sbUser.id;
+  const ch = sb.channel("dmdel-" + me, { config: { private: true } })
+    .on("broadcast", { event: "del" }, ({ payload }) => onDeletedMsg({ old: payload }))
+    .subscribe(st => {
+      if (delChan !== ch) return;
+      if (st === "SUBSCRIBED") {
+        delErrN = 0;
+        if (delFallback) { try { sb.removeChannel(delFallback); } catch (e) {} delFallback = null; }
+        return;
+      }
+      if (st === "CHANNEL_ERROR" || st === "TIMED_OUT") {
+        delErrN++;
+        if (!delFallback) {
+          delFallback = sb.channel("nook-del-" + me)
+            .on("postgres_changes", { event: "DELETE", schema: "public", table: "messages" }, onDeletedMsg)
+            .subscribe();
+        }
+        // the private channel is tried again later in case it was only a passing failure
+        setTimeout(() => { if (delChan === ch && delErrN > 0 && sbUser && sbUser.id === me) startDelChan(); }, Math.min(300000, 15000 * delErrN * delErrN));
+      }
+    });
+  delChan = ch;
+}
+function stopDelChan() {
+  [delChan, delFallback].forEach(c => { if (c) { try { sb.removeChannel(c); } catch (e) {} } });
+  delChan = delFallback = null; delErrN = 0;
+}
 function startRealtime() {
   if (!sbUser || rtChan) return;
   // a dropped connection is opened again by itself, a little later each time it fails
   const ch = sb.channel("nook-" + sbUser.id)
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: "recipient_id=eq." + sbUser.id }, onIncomingMsg)
-    .on("postgres_changes", { event: "DELETE", schema: "public", table: "messages" }, onDeletedMsg)
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications", filter: "user_id=eq." + sbUser.id }, onIncomingNote)
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "bans", filter: "user_id=eq." + sbUser.id }, () => showBanned())
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "mod_notices", filter: "user_id=eq." + sbUser.id }, p => showModNotice(p.new))
@@ -7082,6 +7145,7 @@ function startRealtime() {
       }
     });
   rtChan = ch;
+  startDelChan();
   if (tpChan) { try { sb.removeChannel(tpChan); } catch (e) {} }
   tpChan = sb.channel("tp-" + sbUser.id, { config: { private: true } })
     .on("broadcast", { event: "typing" }, ({ payload }) => onTyping(payload && payload.from, payload ? payload.on : undefined))

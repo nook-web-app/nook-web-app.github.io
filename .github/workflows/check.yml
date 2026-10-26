@@ -7,7 +7,7 @@ jobs:
   versions:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: |
           test "$(wc -c < sw.js)" -gt 2000 || { echo "sw.js is empty or tiny"; exit 1; }
           sw=$(grep -o 'nook-[0-9.]*' sw.js | head -1 | sed 's/nook-//')

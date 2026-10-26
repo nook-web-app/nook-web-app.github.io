@@ -460,6 +460,7 @@ create or replace trigger nook_block_banned before insert on public.blocks for e
 create or replace trigger nook_block_banned before insert on public.accounts for each row execute function public.nook_block_banned();
 
 -- remove one photo from one of your own dm messages (deletes the message if nothing is left)
+-- note: live messages.id is bigint (migration 20261026016000 keeps the bigint overload and drops the uuid one); this setup file matches the live schema
 create or replace function public.remove_dm_media(p_msg bigint, p_idx int) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare m public.messages%rowtype; newmedia jsonb;

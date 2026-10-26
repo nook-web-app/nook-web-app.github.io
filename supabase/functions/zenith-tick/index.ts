@@ -188,18 +188,25 @@ Deno.serve(async (req) => {
 const chainCache = new Map<string, unknown>();
 // the owner and Zenith only: what a thread says, from the top, so his answer fits what was said
 async function chainText(postId: string, owner: string, zen: string, last: string): Promise<{ text: string; zenIn: boolean }> {
-  const rows: { id: string; user_id: string; body: string | null; parent_id: string | null }[] = [];
-  let cur: string | null = postId;
-  for (let i = 0; i < 10 && cur; i++) {
-    // a thread that was already read in this run is not fetched again
-    let data = chainCache.get(cur) as typeof rows[number] | null | undefined;
-    if (data === undefined) {
-      data = ((await admin.from("posts").select("id, user_id, body, parent_id").eq("id", cur).maybeSingle()).data as typeof rows[number] | null) || null;
-      chainCache.set(cur, data);
+  type Row = { id: string; user_id: string; body: string | null; parent_id: string | null };
+  let rows: Row[] = [];
+  // the whole chain in one round trip (recursive sql function); the old one-by-one walk stays as the fallback when the function is not installed
+  const one = await admin.rpc("nook_post_chain", { p_id: postId, p_max: 10 });
+  if (!one.error && Array.isArray(one.data) && one.data.length) {
+    rows = (one.data as (Row & { depth: number })[]).slice().sort((x, y) => y.depth - x.depth).map(({ id, user_id, body, parent_id }) => ({ id, user_id, body, parent_id }));
+  } else {
+    let cur: string | null = postId;
+    for (let i = 0; i < 10 && cur; i++) {
+      // a thread that was already read in this run is not fetched again
+      let data = chainCache.get(cur) as Row | null | undefined;
+      if (data === undefined) {
+        data = ((await admin.from("posts").select("id, user_id, body, parent_id").eq("id", cur).maybeSingle()).data as Row | null) || null;
+        chainCache.set(cur, data);
+      }
+      if (!data) break;
+      rows.unshift(data);
+      cur = data.parent_id;
     }
-    if (!data) break;
-    rows.unshift(data as typeof rows[number]);
-    cur = data.parent_id as string | null;
   }
   const mine = rows.filter((r) => r.user_id === owner || r.user_id === zen);
   const text = mine.map((r, i) => (i === mine.length - 1 && r.user_id === owner ? "The user's new reply: " : r.user_id === zen ? "You: " : "The user: ") + String(r.body || "").slice(0, 600)).join("\n");
@@ -307,10 +314,15 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
 // one time: what Zenith posted before he had a public account becomes public, with its old times.
 // A reply to a post that is still here comes along; a reply to something that only lived on the phone cannot be placed and stays there.
 async function importOld(owner: string, zen: string): Promise<Response> {
-  const { data } = await admin.from("zenith_docs").select("kind, doc_id, data").eq("owner_id", owner).in("kind", ["post", "flag"]).limit(5000);
+  // only the rows still to import are read (his own posts without a public copy), then only the flags those rows point at; never the whole table
+  const { data: todo } = await admin.from("zenith_docs").select("kind, doc_id, data").eq("owner_id", owner).eq("kind", "post").eq("data->>ai", "true").is("data->>pub", null).limit(500);
+  const rows = (todo || []).filter((r) => r.data && typeof r.data.text === "string" && r.data.text.trim() && !r.data.pub);
   const remoteOf = new Map<string, string>();
-  for (const r of data || []) if (r.kind === "flag" && r.data && r.data.local && r.data.remote) remoteOf.set(String(r.data.local), String(r.data.remote));
-  const rows = (data || []).filter((r) => r.kind === "post" && r.data && r.data.ai && typeof r.data.text === "string" && r.data.text.trim() && !r.data.pub);
+  const locals = [...new Set(rows.map((r) => (r.data.parent && !r.data.parentRemote ? String(r.data.parent) : "")).filter(Boolean))];
+  if (locals.length) {
+    const { data: flags } = await admin.from("zenith_docs").select("data").eq("owner_id", owner).eq("kind", "flag").in("data->>local", locals);
+    for (const r of flags || []) if (r.data && r.data.local && r.data.remote) remoteOf.set(String(r.data.local), String(r.data.remote));
+  }
   let done = 0, skipped = 0;
   for (const r of rows) {
     const d = r.data;

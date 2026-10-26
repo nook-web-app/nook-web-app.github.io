@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { fetchImage } from "../_shared/preview.ts";
 // Aegis looks at a link preview picture once and says where the main thing in it is, so the app can crop around it
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
@@ -34,20 +35,15 @@ function publicHttps(u: string): URL | null {
   } catch { return null; }
 }
 let why = "";
+// the shared fetcher resolves the name (A and AAAA) and rejects private, loopback and link-local answers on every redirect hop, and reads the body as a capped stream
 async function fetchPic(u: string): Promise<{ inline_data: { mime_type: string; data: string } } | null> {
-  const x = publicHttps(u);
-  if (!x) return null;
+  if (!publicHttps(u)) return null;
   try {
-    const r = await fetch(x, { redirect: "manual", signal: AbortSignal.timeout(6000), headers: { accept: "image/*", "user-agent": "Mozilla/5.0 (compatible; NookPreview/1.0)" } });
-    if (!r.ok || !publicHttps(r.url)) { why = "status " + r.status; return null; }
-    const type = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
-    if (!PIC_TYPES.includes(type)) { why = "type " + type; return null; }
-    if (Number(r.headers.get("content-length") || 0) > 4 * 1024 * 1024) { why = "size"; return null; }
-    const buf = new Uint8Array(await r.arrayBuffer());
-    if (!buf.length || buf.length > 4 * 1024 * 1024) { why = "size " + buf.length; return null; }
+    const got = await fetchImage(u, PIC_TYPES, 4 * 1024 * 1024);
+    if (!got) { why = "not a safe public picture"; return null; }
     let bin = "";
-    for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-    return { inline_data: { mime_type: type, data: btoa(bin) } };
+    for (let i = 0; i < got.bytes.length; i += 0x8000) bin += String.fromCharCode(...got.bytes.subarray(i, i + 0x8000));
+    return { inline_data: { mime_type: got.type, data: btoa(bin) } };
   } catch (e) { why = "threw " + String((e as Error).message || e).slice(0, 80); return null; }
 }
 

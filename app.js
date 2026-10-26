@@ -35,26 +35,41 @@ const HASH_ERR = /error_code=/.test(location.hash);
 let RECOVERY = false;
 // the app reads the sign in link of a reset email itself, so a stranger's link cannot silently sign somebody in
 const sb = window.supabase ? window.supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } }) : null;
+function resetNonceGet() {
+  try {
+    const o = JSON.parse(localStorage.getItem("nook-reset-nonce") || "null");
+    if (o && typeof o.n === "string" && o.n.length >= 16 && Date.now() - Number(o.t) < 2 * 3600 * 1000) return o.n;
+  } catch (e) {}
+  return "";
+}
+// a device-bound nonce goes out inside the reset link's address and must come back unchanged on the same phone
+function resetNonceMake() {
+  const a = new Uint8Array(18);
+  crypto.getRandomValues(a);
+  const n = btoa(String.fromCharCode.apply(null, a)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  try { localStorage.setItem("nook-reset-nonce", JSON.stringify({ n, t: Date.now() })); localStorage.setItem("nook-reset-asked", String(Date.now())); } catch (e) { return ""; }
+  return n;
+}
 async function takeHashLogin() {
   const raw = location.hash;
   if (!/access_token=/.test(raw)) return;
   const p = new URLSearchParams(raw.replace(/^#/, ""));
-  history.replaceState(history.state, "", location.pathname + location.search);
-  let asked = 0, signedIn = false;
-  try {
-    asked = Number(localStorage.getItem("nook-reset-asked") || 0);
-    signedIn = Object.keys(localStorage).some(k => /^sb-.*-auth-token$/.test(k) && localStorage.getItem(k));
-  } catch (e) {}
-  const recent = asked && Date.now() - asked < 2 * 3600 * 1000;
-  // somebody who is already signed in only accepts the link when they asked for the reset on this phone
-  if (p.get("type") !== "recovery" || !p.get("access_token") || !p.get("refresh_token") || (signedIn && !recent)) { if (signedIn) setTimeout(() => toast("That link is for a reset requested on another device. Ask again here"), 800); return; }
+  let rn = "";
+  try { const q = new URLSearchParams(location.search); rn = q.get("rn") || ""; q.delete("rn"); const qs = q.toString(); history.replaceState(history.state, "", location.pathname + (qs ? "?" + qs : "")); } catch (e) { history.replaceState(history.state, "", location.pathname + location.search); }
+  const mine = resetNonceGet();
+  if (p.get("type") !== "recovery" || !p.get("access_token") || !p.get("refresh_token")) return;
+  // fail closed: the link has to carry the nonce made when the reset was asked for on this phone
+  if (!mine || !rn || rn.length !== mine.length || (() => { let d = 0; for (let i = 0; i < rn.length; i++) d |= rn.charCodeAt(i) ^ mine.charCodeAt(i); return d !== 0; })()) {
+    setTimeout(() => { try { toast("That link was not requested on this phone, so it was not used. Ask for a new reset link here"); } catch (e) {} }, 800);
+    return;
+  }
   if (!sb) { setTimeout(() => { try { toast("Could not check the reset link. Check your connection, or ask for a new link"); } catch (e) {} }, 1500); return; }
   // the token must at least be a live one issued by this project for a signed in user; the server checks the rest
   let claims = null;
   try { claims = JSON.parse(decodeURIComponent(escape(atob(p.get("access_token").split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))))); } catch (e) {}
   if (!claims || claims.iss !== SB_URL + "/auth/v1" || claims.role !== "authenticated" || !claims.sub || !(claims.exp * 1000 > Date.now() - 300000)) { setTimeout(() => { try { toast("That reset link is not valid. Ask for a new one"); } catch (e) {} }, 1500); return; }
   const { error } = await sb.auth.setSession({ access_token: p.get("access_token"), refresh_token: p.get("refresh_token") });
-  if (!error) { RECOVERY = true; try { localStorage.removeItem("nook-reset-asked"); } catch (e) {} }
+  if (!error) { RECOVERY = true; try { localStorage.removeItem("nook-reset-asked"); localStorage.removeItem("nook-reset-nonce"); } catch (e) {} }
   else setTimeout(() => { try { toast("Could not check the reset link. Check your connection, or ask for a new link"); } catch (e) {} }, 1500);
 }
 let sbUser = null;
@@ -186,11 +201,32 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.20.14";
+const APP_VERSION = "3.20.15";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
-const zenSeen = new Map();
+// a changed copy is told apart from an unchanged one by a cheap hash, so documents that did not change are never turned into text again
+const zenHashes = new Map();
+class ZenSeen extends Map {
+  set(k, v) { zenHashes.delete(k); return super.set(k, v); }
+  delete(k) { zenHashes.delete(k); return super.delete(k); }
+  clear() { zenHashes.clear(); return super.clear(); }
+}
+const zenSeen = new ZenSeen();
+function zenHash(o) {
+  let a = 0x811c9dc5, b = 0x5bd1e995, n = 0;
+  const mix = str => { for (let i = 0; i < str.length; i++) { const c = str.charCodeAt(i); a = Math.imul(a ^ c, 16777619); b = (Math.imul(b ^ c, 0x01000193) + i) | 0; } n += str.length; };
+  const walk = v => {
+    if (v === null || v === undefined) { mix("n"); return; }
+    const t = typeof v;
+    if (t === "string") { mix("s" + v.length + ":"); mix(v); }
+    else if (t === "number" || t === "boolean") mix("p" + v);
+    else if (Array.isArray(v)) { mix("["); v.forEach(walk); mix("]"); }
+    else if (t === "object") { mix("{"); for (const k in v) { if (v[k] === undefined) continue; mix(k + "="); walk(v[k]); } mix("}"); }
+  };
+  walk(o);
+  return n.toString(36) + "-" + (a >>> 0).toString(36) + "-" + (b >>> 0).toString(36);
+}
 let db = null;
 let timer = null;
 const imgIds = new Map();
@@ -211,26 +247,38 @@ function idbOpen() {
     } catch (e) { rej(e); }
   });
 }
+// posts and chats are kept as one record each (p:<id>, c:<id>) beside a small "state2" record, so a save only writes the ones that changed;
+// phones that still hold the old single "state" record are read as before and moved over by their first save
+const idbSig = new Map();
+let idbMetaSig = "", idbLegacy = false;
 function idbLoad(d) {
   return new Promise((res, rej) => {
     const t = d.transaction(["kv", "img"]);
-    const a = t.objectStore("kv").get("state");
+    const kv = t.objectStore("kv");
+    const a = kv.get("state2");
+    const o = kv.get("state");
+    const pr = kv.getAll(IDBKeyRange.bound("p:", "p;", false, true));
+    const cr = kv.getAll(IDBKeyRange.bound("c:", "c;", false, true));
     const ik = t.objectStore("img").getAllKeys();
     const iv = t.objectStore("img").getAll();
-    t.oncomplete = () => res({ meta: a.result || null, keys: ik.result, vals: iv.result });
+    t.oncomplete = () => res({ meta: a.result || o.result || null, v2: !!a.result, posts: pr.result, chats: cr.result, keys: ik.result, vals: iv.result });
     t.onerror = () => rej(t.error);
     t.onabort = () => rej(t.error);
   });
 }
-function idbSave(d, meta, fresh, drop) {
+function idbSave(d, meta, fresh, drop, puts, dels, dropLegacy) {
   // a save that never finishes is given up after a while, so the queue behind it keeps moving
   let tm;
-  return Promise.race([idbSaveNow(d, meta, fresh, drop), new Promise((_, rej) => { tm = setTimeout(() => rej(new Error("slow save")), 10000); })]).finally(() => clearTimeout(tm));
+  return Promise.race([idbSaveNow(d, meta, fresh, drop, puts, dels, dropLegacy), new Promise((_, rej) => { tm = setTimeout(() => rej(new Error("slow save")), 10000); })]).finally(() => clearTimeout(tm));
 }
-function idbSaveNow(d, meta, fresh, drop) {
+function idbSaveNow(d, meta, fresh, drop, puts, dels, dropLegacy) {
   return new Promise((res, rej) => {
     const t = d.transaction(["kv", "img"], "readwrite");
-    t.objectStore("kv").put(meta, "state");
+    const kv = t.objectStore("kv");
+    if (meta) kv.put(meta, "state2");
+    puts.forEach(f => kv.put(f[1], f[0]));
+    dels.forEach(k => kv.delete(k));
+    if (dropLegacy) kv.delete("state");
     const im = t.objectStore("img");
     fresh.forEach(f => im.put(f[1], f[0]));
     drop.forEach(id => im.delete(id));
@@ -271,16 +319,38 @@ async function doFlush() {
         if (!knownIds.has(id)) fresh.set(id, src);
         return id;
       };
-      const posts = S.posts.map(p => ({ ...p, imgs: p.imgs.map(idFor) }));
-      const chats = S.chats.map(c => ({ ...c, msgs: c.msgs.map(m => ({ ...m, imgs: (m.imgs || []).map(idFor) })) }));
+      // only records whose content differs from what was last written are sent to the database
+      const puts = [], seenKeys = new Set(), sigs = new Map();
+      const rec = (key, r) => {
+        seenKeys.add(key);
+        const sg = zenHash(r);
+        if (idbSig.get(key) !== sg) { puts.push([key, r]); sigs.set(key, sg); }
+      };
+      const pids = [], cids = [];
+      S.posts.forEach(p => { if (!p || typeof p.id !== "string") return; pids.push(p.id); rec("p:" + p.id, { ...p, imgs: (p.imgs || []).map(idFor) }); });
+      S.chats.forEach(c => { if (!c || typeof c.id !== "string") return; cids.push(c.id); rec("c:" + c.id, { ...c, msgs: (c.msgs || []).map(m => ({ ...m, imgs: (m.imgs || []).map(idFor) })) }); });
       const profile = { ...S.profile, avatar: idFor(S.profile.avatar), banner: idFor(S.profile.banner) };
+      const dels = Array.from(idbSig.keys()).filter(k => !seenKeys.has(k));
       const drop = Array.from(knownIds).filter(id => !used.has(id));
-      await idbSave(db, { ...S, posts, chats, profile, split: 1 }, Array.from(fresh), drop);
+      const rest = { ...S, profile, split: 2, pids, cids };
+      delete rest.posts; delete rest.chats;
+      const msig = zenHash(rest);
+      const metaOut = msig !== idbMetaSig || idbLegacy || puts.length || dels.length ? rest : null;
+      if (metaOut || puts.length || dels.length || fresh.size || drop.length || idbLegacy) {
+        await idbSave(db, metaOut, Array.from(fresh), drop, puts, dels, idbLegacy);
+      }
+      sigs.forEach((v, k) => idbSig.set(k, v));
+      dels.forEach(k => idbSig.delete(k));
+      idbMetaSig = msig;
+      idbLegacy = false;
       fresh.forEach((_, id) => knownIds.add(id));
       drop.forEach(id => knownIds.delete(id));
       hashMemo = memo;
       return;
-    } catch (e) {}
+    } catch (e) {
+      // a save that was only slow may still finish; the localStorage copy is not made for it, and it is tried again shortly
+      if (e && e.message === "slow save") { clearTimeout(timer); timer = setTimeout(flush, 4000); return; }
+    }
   }
   try { localStorage.setItem("tiny-posts-v3", JSON.stringify(S)); } catch (e) { toast("storage is full"); }
 }
@@ -506,12 +576,25 @@ function langSheet() {
 }
 const langText = () => { const ids = new Set(LANGS.map(l => l[0])); const l = Array.isArray(S.ui.langs) ? S.ui.langs.filter(x => ids.has(x)) : []; return l.length ? l.map(id => LANGS.find(x => x[0] === id)[1]).sort().join(", ") : "Automatic"; };
 // a very long text is cut with a Show more button, so one huge post can never fill the page
+// cuts on whole characters and never in the middle of a link: a link that would be cut is left out whole (or kept whole when it is the first thing)
+function cutText(text, n) {
+  const cp = [...String(text)];
+  if (cp.length <= n) return cp.join("");
+  const head = cp.slice(0, n).join(""), full = String(text);
+  const m = /https?:\/\/\S*$/.exec(head);
+  if (m && /\S/.test(full.charAt(head.length))) {
+    if (m.index > 0) return head.slice(0, m.index).replace(/\s+$/, "");
+    const e = /^\S*/.exec(full.slice(head.length))[0];
+    return head + e;
+  }
+  return head;
+}
 function txBody(text, extra) {
   const box = h("div", { class: "tx" + extra });
   const LIMIT = 700;
   if (String(text).length <= LIMIT) { box.append(...rich(text)); return box; }
   const more = h("button", { class: "tbtn", type: "button", style: "padding:6px 0;color:var(--lnk)", onclick: e => { e.stopPropagation(); box.textContent = ""; box.append(...rich(text)); } }, "Show more");
-  box.append(...rich([...String(text)].slice(0, 600).join("") + "…"), h("div", {}, more));
+  box.append(...rich(cutText(text, 600) + "…"), h("div", {}, more));
   return box;
 }
 function feedPosts(f) {
@@ -1404,7 +1487,7 @@ function chatV() {
     const seq = ++paintSeq;
     await loadDmMutes();
     convos = convos.filter(cv => !dmHideSet.has(cv.other)).sort((a, b) => (dmPinned(b.other) ? 1 : 0) - (dmPinned(a.other) ? 1 : 0));
-    const bodies = await Promise.all(convos.map(cv => (cv.last ? openText(cv.other, cv.last.body).then(zUn) : "")));
+    const bodies = await Promise.all(convos.map(cv => (cv.last ? openText(cv.other, cv.last.body, true).then(zUn) : "")));
     if (seq !== paintSeq || !dmBox.isConnected) return;
     dmBox.textContent = "";
     convos.forEach((cv, i) => dmBox.append(dmRow(cv, bodies[i])));
@@ -2030,6 +2113,8 @@ function zenDocs() {
   S.chats.forEach(c => { if (c.msgs.some(m => m.ai)) out.set("chat:" + c.id, { id: c.id, name: c.name, t: c.t, msgs: c.msgs.map(m => ({ id: m.id, text: m.text, t: m.t, ai: !!m.ai, ph: (m.imgs || []).map(imgH) })) }); });
   return out;
 }
+// the sealed chat is bound to its own row, so the server cannot hand one chat back as another; copies sealed before that still open
+const zenRowId = key => "zenith:" + (sbUser ? sbUser.id : "") + ":" + key;
 const zenKey = k => { const i = k.indexOf(":"); return { kind: k.slice(0, i), doc_id: k.slice(i + 1) }; };
 // the pictures of a chat with Zenith go up locked with the owner's key, like the notes, and come back with the text
 async function zenChatMedia(d) {
@@ -2060,20 +2145,25 @@ async function zenSync() {
   try {
     const now = zenDocs();
     const up = [], del = [];
-    now.forEach((data, key) => { const j = zenJson(data); if (zenSeen.get(key) !== j) up.push({ key, data, j }); });
+    now.forEach((data, key) => {
+      const hh = zenHash(data);
+      if (zenHashes.get(key) === hh && zenSeen.has(key)) return;
+      const j = zenJson(data);
+      if (zenSeen.get(key) !== j) up.push({ key, data, j, hh }); else zenHashes.set(key, hh);
+    });
     // a wiped device must never wipe the copy on the server
     if (S.posts.length || S.chats.length) zenSeen.forEach((j, key) => { if (!now.has(key) && !/"pub":/.test(j || "")) del.push(key); });
     // his chats are sealed with the owner's own chat key before the copy leaves the phone, so the server cannot read them
     let seal = null;
-    if (up.some(u => u.key.startsWith("chat:"))) { try { const k = await sharedKey(sbUser.id); seal = o => noteSeal(k, o); } catch (e) { seal = null; } }
+    if (up.some(u => u.key.startsWith("chat:"))) { try { const k = await sharedKey(sbUser.id); seal = (o, key) => noteSeal(k, o, zenRowId(key)); } catch (e) { seal = null; } }
     for (let i = 0; i < up.length; i += 100) {
       const part = up.slice(i, i + 100).filter(u => seal || !u.key.startsWith("chat:"));
       if (!part.length) continue;
-      for (const u of part) if (u.key.startsWith("chat:")) u.sealed = { id: u.data.id, enc: await seal({ name: u.data.name, t: u.data.t, msgs: await zenChatMedia(u.data) }) };
+      for (const u of part) if (u.key.startsWith("chat:")) u.sealed = { id: u.data.id, enc: await seal({ name: u.data.name, t: u.data.t, msgs: await zenChatMedia(u.data) }, u.key) };
       const rows = part.map(u => Object.assign({ owner_id: sbUser.id, data: u.sealed || u.data, updated_at: new Date().toISOString() }, zenKey(u.key)));
       const { error } = await sb.from("zenith_docs").upsert(rows, { onConflict: "owner_id,kind,doc_id" });
       if (error) throw error;
-      part.forEach(u => zenSeen.set(u.key, u.j));
+      part.forEach(u => { zenSeen.set(u.key, u.j); zenHashes.set(u.key, u.hh); });
     }
     for (const key of del) {
       const k = zenKey(key);
@@ -2084,7 +2174,7 @@ async function zenSync() {
 }
 // sealed chat rows that were opened and merged once are not opened again until the server copy changes
 const zenEncDone = new Map();
-let zenPullSig = "", zenPullAt = 0;
+let zenPullSig = "", zenPullAt = 0, zenFullAt = 0, zenPulledIso = "", zenFullNext = false;
 const zenDelKey = () => "nook-zdel-" + (sbUser ? sbUser.id : "");
 // copies he removed on another device go from this one too; a missing table (older server) simply means nothing is removed
 async function zenApplyDeleted() {
@@ -2126,17 +2216,21 @@ async function zenPull() {
     if (!nw.error && !ct.error && typeof ct.count === "number") sig = sbUser.id + "|" + ((nw.data && nw.data[0] && nw.data[0].updated_at) || "") + "|" + ct.count;
   } catch (e) { sig = ""; }
   if (sig && sig === zenPullSig && Date.now() - zenPullAt < 300000) return false;
+  // only documents changed since the last pull are downloaded; a full pull still runs now and then (and after a failure) in case a clock was off
+  const incr = !!(zenPulledIso && !zenFullNext && Date.now() - zenFullAt < 600000);
   // removals made on another device are read from the tombstones written since the last pull
   const delChanged = await zenApplyDeleted();
-  const { data, error } = await pageAll((a, b) => sb.from("zenith_docs").select("kind, doc_id, data").eq("owner_id", sbUser.id).order("kind").order("doc_id").range(a, b));
+  const { data, error } = await pageAll((a, b) => { let q = sb.from("zenith_docs").select("kind, doc_id, data, updated_at").eq("owner_id", sbUser.id); if (incr) q = q.gte("updated_at", zenPulledIso); return q.order("kind").order("doc_id").range(a, b); });
   if (error) return;
+  let newest = incr ? zenPulledIso : "";
+  for (const r of data || []) if (r.updated_at && r.updated_at > newest) newest = r.updated_at;
   const byLocal = new Map(S.posts.map(p => [p.id, p]));
   const byRemote = new Map(S.posts.filter(p => p.remote).map(p => [p.remote, p]));
   let changed = delChanged;
   // sealed chats are opened first; a copy from before sealing is used as it is and sealed again by the next sync
   const chatOpen = new Map();
   const encStale = r => r.kind === "chat" && r.data && r.data.enc && zenEncDone.get(r.doc_id) === r.data.enc;
-  for (const r of data || []) if (r.kind === "chat" && r.data && r.data.enc && !encStale(r)) { try { const k = await sharedKey(sbUser.id); chatOpen.set(r.doc_id, Object.assign({ id: r.data.id }, await noteOpen(k, r.data.enc))); } catch (e) {} }
+  for (const r of data || []) if (r.kind === "chat" && r.data && r.data.enc && !encStale(r)) { try { const k = await sharedKey(sbUser.id); chatOpen.set(r.doc_id, Object.assign({ id: r.data.id }, await noteOpen(k, r.data.enc, zenRowId("chat:" + r.doc_id)))); } catch (e) {} }
   // the pictures that belong to the sealed chats are opened first; one that cannot be fetched is left out and tried again at the next pull
   const zenPics = new Map();
   const picFail = new Set();
@@ -2169,7 +2263,7 @@ async function zenPull() {
       const sealedRow = !!(r.data && r.data.enc);
       if (sealedRow && encStale(r)) return;
       if (sealedRow && chatOpen.get(r.doc_id) && !picFail.has(r.doc_id)) zenEncDone.set(r.doc_id, r.data.enc);
-      if (sealedRow) { const dd = chatOpen.get(r.doc_id); if (!dd) return; zenSeen.set(key, zenJson({ id: dd.id, name: dd.name, t: dd.t, msgs: (dd.msgs || []).map(m => ({ id: m.id, text: m.text, t: m.t, ai: !!m.ai, ph: ((zenPics.get(m.id) || {}).zm || []).map(e => e.h) })) })); d = dd; }
+      if (sealedRow) { const dd = chatOpen.get(r.doc_id); if (!dd) return; if (legacySeen.has(zenRowId(key))) { legacySeen.delete(zenRowId(key)); zenSeen.delete(key); } else zenSeen.set(key, zenJson({ id: dd.id, name: dd.name, t: dd.t, msgs: (dd.msgs || []).map(m => ({ id: m.id, text: m.text, t: m.t, ai: !!m.ai, ph: ((zenPics.get(m.id) || {}).zm || []).map(e => e.h) })) })); d = dd; }
       const c = chatById.get(d.id);
       const msgs = (d.msgs || []).map(m => ({ id: m.id, text: m.text || "", t: m.t, ai: !!m.ai, imgs: (zenPics.get(m.id) || {}).imgs || [], zm: (zenPics.get(m.id) || {}).zm }));
       if (!c) { S.chats.push({ id: d.id, name: d.name, t: d.t, msgs }); chatById.set(d.id, S.chats[S.chats.length - 1]); changed = true; }
@@ -2212,6 +2306,9 @@ async function zenPull() {
   if (changed) persist();
   zenPullSig = picFail.size ? "" : sig;
   zenPullAt = Date.now();
+  if (!incr) zenFullAt = zenPullAt;
+  zenFullNext = picFail.size > 0;
+  if (newest) zenPulledIso = newest;
   return changed;
 }
 async function zenStart() {
@@ -2713,11 +2810,13 @@ async function cropGif(f, o) {
   if (!window.ImageDecoder) return intake(f);
   const r = await openCropper(f, { ...o, rect: true });
   if (!r) return null;
-  const k = Math.min(1, (o.round ? 256 : 480) / o.w);
+  const k = Math.min(1, (o.round ? 256 : 360) / Math.max(o.w, o.h));
   const W = Math.max(2, Math.round(o.w * k)), H = Math.max(2, Math.round(o.h * k));
+  if (f.size > 12582912) { toast("That GIF is too big to crop (over 12 MB)"); return null; }
   toast("Cropping your GIF...");
+  let dec = null;
   try {
-    const dec = new ImageDecoder({ data: await f.arrayBuffer(), type: "image/gif" });
+    dec = new ImageDecoder({ data: await f.arrayBuffer(), type: "image/gif" });
     await dec.tracks.ready;
     const count = dec.tracks.selectedTrack.frameCount;
     const c = document.createElement("canvas");
@@ -2734,7 +2833,8 @@ async function cropGif(f, o) {
     }
     const fr = [];
     let tAt = 0, nextAt = 0;
-    const step = 1e6 / 12, maxFrames = 12 * 8;
+    // the frames are all held in memory until the gif is made again, so a larger crop keeps fewer of them (about 48 MB at most)
+    const step = 1e6 / 12, maxFrames = Math.max(24, Math.min(12 * 8, Math.floor(48e6 / (W * H * 4))));
     for (let i = 0; i < count && fr.length < maxFrames; i++) {
       const { image } = await dec.decode({ frameIndex: i });
       const d = image.duration || 100000;
@@ -2750,12 +2850,12 @@ async function cropGif(f, o) {
     dec.close();
     if (!fr.length) throw new Error("no frames");
     return await readDataURL(await gifEncode(fr, W, H, 12));
-  } catch (e) { toast("Could not crop that GIF"); return null; }
+  } catch (e) { try { if (dec) dec.close(); } catch (e2) {} toast("Could not crop that GIF"); return null; }
 }
 async function addMedia(files, arr, jobs, max, redraw) {
   let bad = 0, why = "";
   for (const f of Array.from(files)) {
-    if (arr.length + jobs.length >= max) { toast("Only " + max + " allowed, extra ones skipped", true); break; }
+    if (arr.length + jobs.length >= max) { toast("Only " + max + " allowed, extra ones skipped"); break; }
     const lbl = h("span", {}), job = { el: h("div", { class: "skel" }, lbl) };
     jobs.push(job);
     redraw();
@@ -2816,11 +2916,14 @@ async function pageAll(mk) {
   }
   return { data: out, error: null };
 }
+// every group of ids is read page by page, and one group that fails fails the whole answer, so a count is never silently short
 async function rowsFor(table, ids) {
   const parts = [];
   for (let i = 0; i < ids.length; i += 80) parts.push(ids.slice(i, i + 80));
-  const res = await Promise.all(parts.map(c => sb.from(table).select("post_id, user_id").in("post_id", c)));
-  return { data: res.flatMap(r => (r && r.data) || []) };
+  const res = await Promise.all(parts.map(c => pageAll((a, b) => sb.from(table).select("post_id, user_id").in("post_id", c).order("post_id").order("user_id").range(a, b))));
+  const bad = res.find(r => !r || r.error);
+  if (bad) return { data: null, error: (bad && bad.error) || new Error("rows") };
+  return { data: res.flatMap(r => r.data || []), error: null };
 }
 // counts of shares and saves (plus this person's own flags) come from one server call, because the rows of other people are not readable
 async function shareSaveStats(ids) {
@@ -2858,15 +2961,18 @@ async function loadFeed() {
   const inlLater = inlAll.filter(p => p.media_inline).map(p => p.id);
   posts.forEach(p => { if (p.media_inline && prevImgs.has(p.id)) { p.media_inline = false; p._imgs = prevImgs.get(p.id); } });
   // what the people you follow reposted comes in too, even when the post itself is older than the newest 300
-  let rpRows = [];
+  let rpRows = [], rpFailed = false;
   try {
-    const fq = await sb.from("follows").select("followee_id").eq("follower_id", sbUser.id).limit(1000);
+    const fq = await pageAll((a, b) => sb.from("follows").select("followee_id").eq("follower_id", sbUser.id).order("followee_id").range(a, b));
+    if (fq.error) throw fq.error;
     const fids = (fq.data || []).map(r => r.followee_id);
     if (fids.length) {
       // the ids go in small groups, or the address gets too long
       const rparts = [];
       for (let i = 0; i < fids.length; i += 80) rparts.push(fids.slice(i, i + 80));
       const rqs = await Promise.all(rparts.map(c => sb.from("reposts").select("user_id, post_id, created_at").in("user_id", c).order("created_at", { ascending: false }).limit(60)));
+      // one group that fails must not make the reposts of those people quietly vanish
+      if (rqs.some(r => !r || r.error)) throw new Error("reposts");
       const rq = { data: rqs.flatMap(r => (r && r.data) || []).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).slice(0, 60) };
       rpRows = (rq.data || []).filter(r => r.user_id !== sbUser.id);
       const have = new Set(posts.map(p => p.id));
@@ -2876,7 +2982,7 @@ async function loadFeed() {
         (mq.data || []).forEach(p => { if (!p.parent_id) posts.push(p); });
       }
     }
-  } catch (e) { rpRows = []; }
+  } catch (e) { rpRows = []; rpFailed = true; }
   const pend = new Set(S.pendDel || []);
   if (S.pendDel && S.pendDel.length) { try { await deleteRemote(S.pendDel.map(r => ({ remote: r }))); } catch (e) {} }
   const ids = posts.map(p => p.id);
@@ -2889,12 +2995,13 @@ async function loadFeed() {
     rowsFor("reposts", ids),
     shareSaveStats(ids),
     sb.from("accounts").select(ACC_COLS).eq("id", sbUser.id).maybeSingle(),
-    sb.from("follows").select("followee_id").eq("follower_id", sbUser.id).limit(1000)
+    pageAll((a, b) => sb.from("follows").select("followee_id").eq("follower_id", sbUser.id).order("followee_id").range(a, b)),
+    pageAll((a, b) => sb.from("mutes").select("muted_id").eq("muter_id", sbUser.id).order("muted_id").range(a, b))
   ]);
-  // a failed answer is not an empty one: nothing is changed (a blocked person must not come back because a call failed)
-  if ([0, 1, 2, 3].some(i => !feedRes[i] || feedRes[i].error)) { feedFail(); return; }
+  // a failed answer is not an empty one: nothing is changed (a blocked or muted person must not come back, and counts must not fall short, because a call failed)
+  if (rpFailed || [0, 1, 2, 3, 4, 5, 9].some(i => !feedRes[i] || feedRes[i].error)) { feedFail(); return; }
   feedStatus = "ok"; feedTries = 0;
-  const [{ data: myLikes }, { data: myReposts }, { data: blocksOut }, { data: blocksIn }, { data: likeRows }, { data: repostRows }, shareStats, { data: meRow }, { data: myFollows }] = feedRes;
+  const [{ data: myLikes }, { data: myReposts }, { data: blocksOut }, { data: blocksIn }, { data: likeRows }, { data: repostRows }, shareStats, { data: meRow }, { data: myFollows }, { data: myMutes }] = feedRes;
   if (myFollows) { followSet = new Set(myFollows.map(r => r.followee_id)); cacheWrite("follows:" + sbUser.id, [...followSet]); }
   if (meRow) {
     let changed = false;
@@ -2933,8 +3040,7 @@ async function loadFeed() {
   const liked = new Set((myLikes || []).map(x => x.post_id));
   const reposted = new Set((myReposts || []).map(x => x.post_id));
   const rpTime = new Map((myReposts || []).map(x => [x.post_id, Date.parse(x.created_at) || 0]));
-  let muted = [];
-  try { const mq = await sb.from("mutes").select("muted_id").eq("muter_id", sbUser.id); if (!mq.error) muted = (mq.data || []).map(x => x.muted_id); } catch (e) {}
+  const muted = (myMutes || []).map(x => x.muted_id);
   const hidden = new Set([...(blocksOut || []).map(x => x.blocked_id), ...(blocksIn || []).map(x => x.blocker_id), ...muted]);
   const shown = posts.filter(p => !hidden.has(p.user_id));
   const postIds = new Set(shown.map(p => p.id));
@@ -3155,11 +3261,13 @@ function userV(cur) {
     const key = "ids:" + name + ":" + cur.id;
     const hit = cacheRead(key);
     if (hit) showIds(hit.v, empty, icon); else { listEl.textContent = ""; listEl.append(loadingEl()); }
-    sb.from(table).select("post_id").eq("user_id", cur.id).then(({ data }) => {
-      const ids = (data || []).map(x => x.post_id);
+    pageAll((f, t) => sb.from(table).select("post_id").eq("user_id", cur.id).order("post_id").range(f, t)).then(({ data, error }) => {
+      // a failed read is shown as a failure (or leaves the saved list as it was), never as an empty list
+      if (error || !data) { if (tab === name && !hit) { listEl.textContent = ""; failBox(listEl, "Could not load this list. Check your connection.", () => idsTab(name, table, empty, icon)); } return; }
+      const ids = data.map(x => x.post_id);
       cacheWrite(key, ids);
       if (tab === name) showIds(ids, empty, icon);
-    });
+    }, () => { if (tab === name && !hit) { listEl.textContent = ""; failBox(listEl, "Could not load this list. Check your connection.", () => idsTab(name, table, empty, icon)); } });
   };
   const drawList = () => {
     listEl.textContent = "";
@@ -3851,6 +3959,7 @@ async function wipeLocal(keepKeys) {
   try {
     localStorage.removeItem("tiny-posts-v3");
     Object.keys(localStorage).filter(k => k.startsWith(CACHE_PFX)).forEach(k => localStorage.removeItem(k));
+    memCache.clear();
     sessionStorage.removeItem("nook-route");
   } catch (e) {}
   // the chat key stays while a banned person can still download their backup, so old messages can be opened
@@ -4135,8 +4244,8 @@ function recoverModal(prefill) {
       if (!id) { msg.textContent = "Type your email or username"; return; }
       m.act.disabled = true;
       try {
-        try { localStorage.setItem("nook-reset-asked", String(Date.now())); } catch (e) {}
-        const r = await callFn("totp", { action: "reset", ident: id, code: code.value.replace(/\s+/g, ""), redirectTo: location.origin + location.pathname });
+        const rn = resetNonceMake();
+        const r = await callFn("totp", { action: "reset", ident: id, code: code.value.replace(/\s+/g, ""), redirectTo: location.origin + location.pathname + (rn ? "?rn=" + rn : "") });
         if (!r.ok) { msg.textContent = "Could not send the link. Try again later."; return; }
         close();
         toast("If that account exists and the code fits, a reset link is on its way");
@@ -4450,7 +4559,8 @@ async function leaveThisAccount(keep) {
   await forgetAccount(me, !!keep);
   // the saved copies of this account's inbox and chats leave the phone with it
   // the saved follows, nicknames, inbox and follower counts never stay behind on the phone after a sign out, even when the rest is kept
-  try { Object.keys(localStorage).filter(k => k.startsWith(CACHE_PFX) && (!keep && k.includes(me) || /^nook-cache:(follows|nicks|clears|inbox|fc|rpt|ui):/.test(k))).forEach(k => localStorage.removeItem(k)); } catch (e) {}
+  try { Object.keys(localStorage).filter(k => k.startsWith(CACHE_PFX) && (!keep && k.includes(me) || /^nook-cache:(follows|fl|ids|nicks|clears|inbox|fc|rpt|ui):/.test(k))).forEach(k => localStorage.removeItem(k)); } catch (e) {}
+  memCache.clear();
   const rest = await acctList();
   const next = rest.find(a => a.id === mainAccountId(rest)) || rest[0];
   // this phone's login is removed here and now; telling the server happens in the background and can fail without blocking anything
@@ -4983,10 +5093,15 @@ let unreadN = 0;
 let unreadPeople = 0;
 const ACCT_TTL = 10 * 60 * 1000;
 const CACHE_PFX = "nook-cache:";
+// who follows whom (and who liked or reposted what) is never written to the phone's storage; it lives in memory until the page closes or the account leaves
+const memCache = new Map();
+const MEM_KEYS = /^(follows|fl|ids|rpt):/;
 function cacheRead(k) {
+  if (MEM_KEYS.test(k)) { const m = memCache.get(k); return m ? { v: m.v, t: m.t } : undefined; }
   try { const r = JSON.parse(localStorage.getItem(CACHE_PFX + k) || "null"); return r || undefined; } catch (e) { return undefined; }
 }
 function cacheWrite(k, v) {
+  if (MEM_KEYS.test(k)) { memCache.set(k, { v, t: Date.now() }); return; }
   const val = JSON.stringify({ v, t: Date.now() });
   try { localStorage.setItem(CACHE_PFX + k, val); }
   catch (e) {
@@ -5269,16 +5384,27 @@ function refreshBadgeNow() {
     unreadN = a.count || 0;
     paintBell();
   });
+  // the server counts the unread chats itself (dm_inbox); an older server without it is asked the old way, with at most 500 rows
+  const unreadQ = async () => {
+    if (badgeRpc !== false) {
+      const r = await Promise.resolve(sb.rpc("dm_inbox")).catch(() => ({ error: true }));
+      if (!r.error) { badgeRpc = true; return { ids: (r.data || []).filter(x => x.unread > 0).map(x => x.other_id), error: null }; }
+      if (badgeRpc === undefined) badgeRpc = false;
+    }
+    const q = await sb.from("messages").select("sender_id").eq("recipient_id", sbUser.id).is("read_at", null).limit(500);
+    return { ids: (q.data || []).map(x => x.sender_id), error: q.error };
+  };
   Promise.all([
-    sb.from("messages").select("sender_id").eq("recipient_id", sbUser.id).is("read_at", null).limit(500),
+    unreadQ(),
     Promise.resolve(sb.from("dm_mutes").select("target_id, until_at, hidden").eq("owner_id", sbUser.id)).catch(() => ({ data: null }))
-  ]).then(([{ data, error }, mu]) => {
+  ]).then(([{ ids, error }, mu]) => {
     if (error) return;
     if (mu && mu.data) { dmMuteSet.clear(); dmHideSet.clear(); mu.data.forEach(r => { if (r.hidden) dmHideSet.add(r.target_id); else dmMuteSet.set(r.target_id, r.until_at ? Date.parse(r.until_at) : 0); }); }
-    const n = new Set((data || []).map(x => x.sender_id).filter(id => !dmMuted(id))).size;
+    const n = new Set(ids.filter(id => !dmMuted(id))).size;
     if (n !== unreadPeople) { unreadPeople = n; buildNav(null); }
   });
 }
+let badgeRpc;
 function paintBell() {
   document.querySelectorAll(".bellb").forEach(el => el.classList.toggle("unread", unreadN > 0));
 }
@@ -5414,6 +5540,8 @@ async function recoveryKey(pw, salt, iters) {
 const kbAad = (uid, mode) => new TextEncoder().encode("nook-key-backup-v2:" + uid + ":" + mode);
 // the key is sealed on this phone with the recovery password: the server only ever holds the sealed copy
 async function sealKeyBackup(priv, pub, pw, mode) {
+  // a copy locked with the login password is only ever made with the strong lock (never the old weak one) and a password of a sane length
+  if ((mode || "recovery") === "login" && (!kbV2(KDF_ITERS) || typeof pw !== "string" || pw.length < 8)) throw new Error("weak lock");
   const jwk = await crypto.subtle.exportKey("jwk", priv);
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -5449,7 +5577,14 @@ async function loginBackup(pw, opt) {
     const optedOut = rows.some(r => r.mode === "off");
     if (!mine) {
       if (login && me && me.public_key === login.pub) {
-        try { const rec = await openKeyBackup(login, pw); await saveLocalKeys(await keyDb(), sbUser.id, rec); resetKeyCaches(); return "restored"; } catch (e) { return "locked"; }
+        try {
+          const rec = await openKeyBackup(login, pw);
+          await saveLocalKeys(await keyDb(), sbUser.id, rec);
+          resetKeyCaches();
+          // a copy that was made with the old weaker lock is locked again with the strong one now that it is open
+          if (!kbV2(login.iters)) { try { await sb.from("key_backups").upsert(await sealKeyBackup(rec.priv, rec.pub, pw, "login"), { onConflict: "user_id,mode" }); } catch (e2) {} }
+          return "restored";
+        } catch (e) { return "locked"; }
       }
       if (me && me.public_key) return "locked";
       if (rows.some(r => r.mode !== "off")) return "locked";
@@ -5617,13 +5752,18 @@ async function checkLinks() {
     if (data && data[0] && !linkShown.has(data[0].id)) { linkShown.add(data[0].id); approveLinkModal(data[0]).catch(() => {}); }
   } catch (e) {}
 }
+let linkWatching = false;
 function watchLinks() {
-  if (linkTimer) return;
-  // asks every 8 s at first, then every 24 s once nobody has asked for a while; coming back to the tab asks at once
-  const tick = () => { linkTimer = setTimeout(() => { checkLinks().finally(tick); }, linkIdle > 200 ? 60000 : linkIdle > 40 ? 24000 : 8000); };
-  tick();
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { linkIdle = 0; checkLinks(); } });
-  checkLinks();
+  if (linkWatching) return;
+  linkWatching = true;
+  // asks every 8 s at first, then less often once nobody has asked for a while; nothing is asked while the tab is hidden, and coming back to the tab asks at once
+  const tick = () => {
+    clearTimeout(linkTimer); linkTimer = 0;
+    if (document.visibilityState !== "visible") return;
+    linkTimer = setTimeout(() => { linkTimer = 0; checkLinks().finally(tick); }, linkIdle > 200 ? 60000 : linkIdle > 40 ? 24000 : 8000);
+  };
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { linkIdle = 0; checkLinks().finally(tick); } else { clearTimeout(linkTimer); linkTimer = 0; } });
+  checkLinks().finally(tick);
 }
 async function approveLinkModal(req) {
   const code = await linkCode(req.req_pub);
@@ -5970,8 +6110,10 @@ function viewZPost(zp) {
   const cb = m.ov.querySelector(".tbtn");
   if (cb) cb.textContent = "Close";
 }
-async function openText(otherId, raw) {
-  if (!raw || raw.slice(0, 5) !== "e2e1:") return raw || "";
+// flag: a body that is not sealed is shown with a visible mark, so plain text put in by the server or a stranger never looks like a private message
+async function openText(otherId, raw, flag) {
+  if (!raw) return "";
+  if (raw.slice(0, 5) !== "e2e1:") return flag ? "[not encrypted] " + raw : raw;
   try {
     const parts = raw.slice(5).split(".");
     const key = await sharedKey(otherId);
@@ -6965,7 +7107,7 @@ function onIncomingMsg(payload) {
   if (liveDm && liveDm.id === m.sender_id) { liveDm.add(m); return; }
   Promise.all([acctsFor([m.sender_id]), loadSocial()]).then(() => {
     const a = acctCache.get(m.sender_id) || { name: "user" };
-    openText(m.sender_id, m.body).then(zUn).then(t => alertMe(nickOf(m.sender_id) || a.name, dmGist(t, m.media, false), () => openDm(m.sender_id)));
+    openText(m.sender_id, m.body, true).then(zUn).then(t => alertMe(nickOf(m.sender_id) || a.name, dmGist(t, m.media, false), () => openDm(m.sender_id)));
   });
 }
 function onIncomingNote(payload) {
@@ -7237,6 +7379,16 @@ async function boot() {
     const r = await idbLoad(db);
     if (r.meta) {
       S = r.meta;
+      if (r.v2) {
+        // one record per post and chat; the saved order is kept, and a record that is missing is simply left out
+        const pm = new Map(r.posts.filter(x => x && typeof x.id === "string").map(x => ["p:" + x.id, x]));
+        const cm = new Map(r.chats.filter(x => x && typeof x.id === "string").map(x => ["c:" + x.id, x]));
+        pm.forEach((x, k) => idbSig.set(k, zenHash(x)));
+        cm.forEach((x, k) => idbSig.set(k, zenHash(x)));
+        S.posts = (Array.isArray(S.pids) ? S.pids : []).map(i => pm.get("p:" + i)).filter(Boolean);
+        S.chats = (Array.isArray(S.cids) ? S.cids : []).map(i => cm.get("c:" + i)).filter(Boolean);
+        delete S.pids; delete S.cids;
+      } else idbLegacy = true;
       const byKey = new Map(r.keys.map((k, i) => [k, r.vals[i]]));
       const hy = v => (typeof v === "string" && !v.startsWith("data:") ? byKey.get(v) || null : v);
       (S.posts || []).forEach(p => { p.imgs = (p.imgs || []).map(hy).filter(Boolean); });
@@ -7253,7 +7405,7 @@ async function boot() {
   if (badShape(S)) S = null;
   if (!S) { S = freshState(); persist(); }
   // keys that older versions left on this device
-  try { ["tiny-bsky-v2", "zenith-pw", "nook-banned"].forEach(k => localStorage.removeItem(k)); } catch (e) {}
+  try { ["tiny-bsky-v2", "zenith-pw", "nook-banned"].forEach(k => localStorage.removeItem(k)); Object.keys(localStorage).filter(k => /^nook-cache:(follows|fl|ids|rpt):/.test(k)).forEach(k => localStorage.removeItem(k)); } catch (e) {}
   try { if (normalize()) persist(); } catch (e) { S = freshState(); normalize(); persist(); }
   applyTheme();
   try {
@@ -7357,7 +7509,7 @@ async function boot() {
   notesStart();
   refreshBadge();
   pushSync();
-  setInterval(checkBan, 60000);
+  setInterval(() => { if (document.visibilityState === "visible") checkBan(); }, 60000);
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { checkBan(); refreshBadge(); checkModNotices().catch(() => {}); } });
 }
 // ---- notes to self: sealed on this phone and kept on every phone ----
@@ -7387,11 +7539,24 @@ function setSaved(p, on) {
     p.svc = Math.max(0, (p.svc || 0) + (on ? 1 : -1));
     // writes for one post run in the order of the taps, so a quick save then unsave ends as unsaved on the server too
     const run = () => (on ? sb.from("post_saves").upsert({ post_id: p.remote, user_id: sbUser.id }, { onConflict: "post_id,user_id", ignoreDuplicates: true }) : sb.from("post_saves").delete().eq("post_id", p.remote).eq("user_id", sbUser.id));
-    const q = (saveQ.get(p.remote) || Promise.resolve()).then(run).then(() => {}, () => {});
+    const seq = (saveSeq.get(p.remote) || 0) + 1;
+    saveSeq.set(p.remote, seq);
+    // a write that fails is undone on screen, but only when no later tap came after it, so the screen always matches the last thing the server accepted
+    const undo = () => {
+      if (saveSeq.get(p.remote) !== seq) return;
+      p.saved = !on;
+      if (on) delete S.sv[p.remote]; else S.sv[p.remote] = 1;
+      p.svc = Math.max(0, (p.svc || 0) + (on ? -1 : 1));
+      persist();
+      try { refreshActs(p); } catch (e) {}
+      toast("Could not " + (on ? "save" : "remove") + " that post. Check your connection");
+    };
+    const q = (saveQ.get(p.remote) || Promise.resolve()).then(run).then(r => { if (r && r.error) undo(); }, undo);
     saveQ.set(p.remote, q);
-    q.then(() => { if (saveQ.get(p.remote) === q) saveQ.delete(p.remote); });
+    q.then(() => { if (saveQ.get(p.remote) === q) { saveQ.delete(p.remote); saveSeq.delete(p.remote); } });
   }
 }
+const saveSeq = new Map();
 const saveQ = new Map();
 // saves made before the counter existed are added once, for the posts that are on screen
 function backfillSaves(mySaved, ids) {

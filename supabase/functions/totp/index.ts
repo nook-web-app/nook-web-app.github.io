@@ -14,7 +14,7 @@ const LOCK_MINUTES = 15;
 const GENERIC = "Wrong code, or too many tries. Wait 15 minutes and try again.";
 
 // seed encryption at rest: "enc1:" + base64(iv + AES-GCM ciphertext), key derived from the env TOTP_ENC_KEY.
-// Without the env var nothing is encrypted; plain seeds from before are still read and are encrypted on first use.
+// With TOTP_ENC_KEY set (required in production) every new seed is encrypted; plain seeds from before are still read and are re-encrypted on first use.
 const ENC = "enc1:";
 let encKey: CryptoKey | null = null;
 async function getEncKey(): Promise<CryptoKey | null> {
@@ -28,7 +28,7 @@ async function getEncKey(): Promise<CryptoKey | null> {
 }
 async function sealSecret(plain: string): Promise<string> {
   const k = await getEncKey();
-  if (!k) return plain;
+  if (!k) { console.warn("totp: TOTP_ENC_KEY is not set, seed stored in plain text"); return plain; }
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, k, new TextEncoder().encode(plain)));
   const all = new Uint8Array(12 + ct.length);
@@ -222,9 +222,11 @@ Deno.serve(async (req) => {
 
   if (action === "begin") {
     if (row && row.enabled) return json({ error: "Authenticator is already on. Turn it off first." }, 400);
-    // starting needs a fresh proof of the password: required when TOTP_BEGIN_NEEDS_PASSWORD=1, checked whenever the app sends one
+    // starting needs a fresh proof of the password: required by default (the app always sends it), only TOTP_BEGIN_NEEDS_PASSWORD=0 turns that off, and then a missing one is logged
     const pw = typeof body.password === "string" ? body.password : "";
-    if (pw || Deno.env.get("TOTP_BEGIN_NEEDS_PASSWORD") === "1") {
+    const needPw = Deno.env.get("TOTP_BEGIN_NEEDS_PASSWORD") !== "0";
+    if (!pw && !needPw) console.warn("totp begin without a password for", user.id);
+    if (pw || needPw) {
       if (!pw || pw.length > 200 || !user.email) return json({ error: "Enter your password to continue." }, 400);
       const pk = "t:" + user.id;
       const lk = await admin.rpc("nook_login_gate", { p_key: pk, p_max: 5 });

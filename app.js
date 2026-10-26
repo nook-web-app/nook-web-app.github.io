@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.15.1";
+const APP_VERSION = "3.16.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1363,6 +1363,7 @@ function chatV() {
   const dmBox = h("div");
   main.append(dmBox);
   const paintInbox = async convos => {
+    convos = convos.slice().sort((a, b) => (dmPinned(b.other) ? 1 : 0) - (dmPinned(a.other) ? 1 : 0));
     const bodies = await Promise.all(convos.map(cv => (cv.last ? openText(cv.other, cv.last.body).then(zUn) : "")));
     if (!dmBox.isConnected) return;
     dmBox.textContent = "";
@@ -2673,7 +2674,9 @@ async function loadFeed() {
   const liked = new Set((myLikes || []).map(x => x.post_id));
   const reposted = new Set((myReposts || []).map(x => x.post_id));
   const rpTime = new Map((myReposts || []).map(x => [x.post_id, Date.parse(x.created_at) || 0]));
-  const hidden = new Set([...(blocksOut || []).map(x => x.blocked_id), ...(blocksIn || []).map(x => x.blocker_id)]);
+  let muted = [];
+  try { const mq = await sb.from("mutes").select("muted_id").eq("muter_id", sbUser.id); if (!mq.error) muted = (mq.data || []).map(x => x.muted_id); } catch (e) {}
+  const hidden = new Set([...(blocksOut || []).map(x => x.blocked_id), ...(blocksIn || []).map(x => x.blocker_id), ...muted]);
   const shown = posts.filter(p => !hidden.has(p.user_id));
   const postIds = new Set(shown.map(p => p.id));
   const rpFirst = new Map();
@@ -2844,12 +2847,12 @@ function userV(cur) {
   const stat = h("div", { class: "pstat" });
   const followBtn = h("button", { class: "fbtn", disabled: true }, "Follow");
   const msgBtn = h("button", { class: "ghost", style: "display:none", onclick: () => openDm(cur.id) }, "Message");
-  const blockBtn = h("button", { class: "ghost", disabled: true }, "Block");
+  const moreBtn = h("button", { class: "ghost", disabled: true, "aria-label": "More" }, ic("dots", 20));
   const pnEl = h("h1", { class: "pname" }, who.name), phEl = h("p", { class: "phand" }, "@" + who.handle);
   // on his own profile the owner changes how Zenith looks; everybody else can follow or block him like anyone
   const ownerOfZen = !!(S.zen && cur.id === S.zen.id && isOwner());
   const info = h("div", { class: "pinfo" },
-    h("div", { class: "arow" }, av, h("div", { class: "btns" }, ownerOfZen ? h("button", { class: "ghost", onclick: zenEdit }, "Edit Profile") : [followBtn, msgBtn, blockBtn])),
+    h("div", { class: "arow" }, av, h("div", { class: "btns" }, ownerOfZen ? h("button", { class: "ghost", onclick: zenEdit }, "Edit Profile") : [followBtn, msgBtn, moreBtn])),
     pnEl, phEl, stat, bio);
   main.append(bn, info);
   const tabsEl = h("div", { class: "ptabs", role: "tablist" });
@@ -2923,8 +2926,7 @@ function userV(cur) {
     followBtn.textContent = st && st.following ? "Following" : st && st.followsMe ? "Follow back" : "Follow";
     followBtn.classList.toggle("on", !!(st && st.following));
     msgBtn.style.display = st && st.following && st.followsMe && !st.blocked ? "" : "none";
-    blockBtn.disabled = !st;
-    blockBtn.textContent = st && st.blocked ? "Unblock" : "Block";
+    moreBtn.disabled = !st;
   };
   const paintAcc = acc => {
     av.querySelectorAll(":scope > img.pic").forEach(i => i.remove());
@@ -2969,8 +2971,9 @@ function userV(cur) {
       main.append(h("div", { class: "rest" }, h("b", {}, who.name), h("p", { class: "note" }, "This account blocked you")));
       return;
     }
-    applyState({ acc, following: !!(fol && fol.length), followsMe: !!(folMe && folMe.length), blocked: !!(blk && blk.length) });
+    applyState(Object.assign({ acc, following: !!(fol && fol.length), followsMe: !!(folMe && folMe.length), blocked: !!(blk && blk.length) }, st && st.muted ? { muted: true } : {}));
     saveState();
+    Promise.resolve(sb.from("mutes").select("muted_id").eq("muter_id", sbUser.id).eq("muted_id", cur.id).maybeSingle()).then(r => { if (st && r && !r.error) { st.muted = !!r.data; saveState(); } }, () => {});
   }, () => { if (!st) profileFail(); });
   let followBusy = false, followQueued = false;
   followBtn.onclick = async () => {
@@ -2992,20 +2995,54 @@ function userV(cur) {
       : await sb.from("follows").delete().eq("follower_id", sbUser.id).eq("followee_id", cur.id);
     if (error) { st.following = !on; counts.followers += on ? -1 : 1; paintFollow(); paintStat(); saveState(); toast("Could not update follow"); }
   };
-  blockBtn.onclick = async () => {
+  const toggleBlock = async () => {
     if (!st) return;
     const on = !st.blocked;
     st.blocked = on; paintFollow(); saveState();
-    const { error } = on
-      ? await sb.from("blocks").insert({ blocker_id: sbUser.id, blocked_id: cur.id })
-      : await sb.from("blocks").delete().eq("blocker_id", sbUser.id).eq("blocked_id", cur.id);
-    if (error) { st.blocked = !on; paintFollow(); saveState(); toast("Could not update block"); return; }
+    if (!(await setBlocked(cur.id, on))) { st.blocked = !on; paintFollow(); saveState(); toast("Could not update block"); return; }
     st.following = false; st.followsMe = false;
-    await sb.from("follows").delete().or("and(follower_id.eq." + sbUser.id + ",followee_id.eq." + cur.id + "),and(follower_id.eq." + cur.id + ",followee_id.eq." + sbUser.id + ")");
     countsOf(cur.id, c => { counts = c; paintStat(); });
     paintFollow(); saveState(); paintStat();
-    loadFeed();
+    toast(on ? "Blocked" : "Unblocked");
   };
+  const toggleMute = async () => {
+    if (!st) return;
+    const on = !st.muted;
+    const { error } = on
+      ? await sb.from("mutes").insert({ muter_id: sbUser.id, muted_id: cur.id })
+      : await sb.from("mutes").delete().eq("muter_id", sbUser.id).eq("muted_id", cur.id);
+    if (error && !(on && error.code === "23505")) { toast("Could not update mute"); return; }
+    st.muted = on; saveState();
+    toast(on ? "Muted. Their posts are hidden from your feed" : "Unmuted");
+    loadFeed().catch(() => {});
+  };
+  moreBtn.onclick = () => {
+    if (!st) return;
+    sheet([
+      { icon: "close", label: st.blocked ? "Unblock" : "Block", danger: !st.blocked, fn: toggleBlock },
+      { icon: "eyeoff", label: st.muted ? "Unmute account" : "Mute account", fn: toggleMute },
+      { icon: "flag", label: "Report account", danger: true, fn: () => reportAccount(cur.id) },
+      { label: "Cancel", cancel: true }], "@" + (st.acc && st.acc.username || who.handle));
+  };
+}
+// blocking also ends the follows between the two people; the feed is asked again afterwards
+async function setBlocked(id, on) {
+  const { error } = on
+    ? await sb.from("blocks").insert({ blocker_id: sbUser.id, blocked_id: id })
+    : await sb.from("blocks").delete().eq("blocker_id", sbUser.id).eq("blocked_id", id);
+  if (error && !(on && error.code === "23505")) return false;
+  await sb.from("follows").delete().or("and(follower_id.eq." + sbUser.id + ",followee_id.eq." + id + "),and(follower_id.eq." + id + ",followee_id.eq." + sbUser.id + ")");
+  loadFeed().catch(() => {});
+  return true;
+}
+// tell us an account breaks the rules
+function reportAccount(id) {
+  const why = [["harassment", "Bullying or harassment"], ["hate", "Hate speech"], ["threats", "Threats or violence"], ["selfharm", "Self harm"], ["sexual", "Sexual content"], ["impersonation", "Pretending to be someone"], ["spam", "Spam or scam"], ["other", "Something else"]];
+  sheet([...why.map(w => ({ label: w[1], fn: async () => {
+    const { error } = await sb.from("user_reports").insert({ reporter_id: sbUser.id, reported_id: id, reason: w[0] });
+    if (error && error.code !== "23505") { toast("Could not send the report"); return; }
+    toast("Thanks, we will check it");
+  } })), { label: "Cancel", cancel: true }], "Why are you reporting this account?");
 }
 
 
@@ -5647,9 +5684,21 @@ function paintTyping(from, on) {
     }
   });
 }
-function dmMenu(cv, inChat) {
+const dmPinned = id => (S.ui.dmPins || []).includes(id);
+async function dmMenu(cv, inChat) {
+  let blocked = false;
+  try { const r = await withTimeout(Promise.resolve(sb.from("blocks").select("blocked_id").eq("blocker_id", sbUser.id).eq("blocked_id", cv.other).maybeSingle()), 3000); blocked = !!(r && r.data); } catch (e) {}
+  const pinned = dmPinned(cv.other);
   sheet([
+    { icon: "pin", label: pinned ? "Unpin chat" : "Pin chat", fn: () => {
+      const pins = (S.ui.dmPins || []).filter(x => x !== cv.other);
+      if (!pinned) pins.unshift(cv.other);
+      S.ui.dmPins = pins.slice(0, 5);
+      persist(); render();
+      toast(pinned ? "Unpinned" : "Pinned to the top");
+    } },
     { icon: "edit", label: "Nickname", fn: () => nicknameModal(cv) },
+    { icon: "close", label: blocked ? "Unblock" : "Block", danger: !blocked, fn: async () => { toast((await setBlocked(cv.other, !blocked)) ? (blocked ? "Unblocked" : "Blocked") : "Could not update block"); } },
     { icon: "trash", label: "Delete chat", danger: true, fn: () => confirmSheet("Delete this chat for you? The other person keeps theirs.", "Delete chat", () => deleteChat(cv, inChat)) }
   ], nickOf(cv.other) || cv.name);
 }
@@ -6105,7 +6154,7 @@ function dmRow(cv, body) {
   if (typeIn.has(cv.other)) { sub.textContent = "typing..."; sub.classList.add("tp"); }
   return h("div", { class: "lrow", "data-uid": cv.other, onclick: () => openDm(cv.other) },
     rAv({ name: cv.name, avatar: cv.avatar }, 48),
-    h("div", { class: "nm" }, h("b", {}, nickOf(cv.other) || cv.name), sub),
+    h("div", { class: "nm" }, h("b", {}, nickOf(cv.other) || cv.name, dmPinned(cv.other) ? h("span", { style: "margin-left:6px;opacity:.6;display:inline-flex;vertical-align:middle" }, ic("pin", 13)) : null), sub),
     last ? h("span", { class: "time" }, ago(Date.parse(last.created_at))) : null,
     cv.unread ? h("span", { class: "nbadge" }, String(cv.unread)) : null);
 }
@@ -6614,7 +6663,7 @@ function idToRemote(id) {
 }
 const remoteToId = r => { const p = S.posts.find(x => x.remote === r); return p ? p.id : "r" + r; };
 const xDocs = () => ({
-  "x:ui": { theme: S.ui.theme || "system", homeTab: S.ui.homeTab || "latest", profTab: S.ui.profTab || "posts", langs: S.ui.langs || null, less: S.ui.less || null, hidden: S.ui.hidden || [] },
+  "x:ui": { theme: S.ui.theme || "system", homeTab: S.ui.homeTab || "latest", profTab: S.ui.profTab || "posts", langs: S.ui.langs || null, less: S.ui.less || null, hidden: S.ui.hidden || [], dmPins: S.ui.dmPins || [] },
   "x:saved": { ids: Object.keys(S.sv || {}).sort() },
   "x:lists": { lists: S.lists.map(l => ({ id: l.id, name: l.name, desc: l.desc || "", rids: l.ids.map(idToRemote).filter(Boolean) })) }
 });
@@ -6627,6 +6676,7 @@ function xApply(id, p, first) {
     S.ui.langs = Array.isArray(p.langs) ? p.langs.map(String).slice(0, 60) : null;
     if (p.less && typeof p.less === "object") S.ui.less = { a: p.less.a || {}, w: p.less.w || {} };
     if (Array.isArray(p.hidden)) S.ui.hidden = p.hidden.map(String).slice(-300);
+    if (Array.isArray(p.dmPins)) S.ui.dmPins = p.dmPins.map(String).slice(0, 5);
     applyTheme();
   } else if (id === "x:saved") {
     const next = {};

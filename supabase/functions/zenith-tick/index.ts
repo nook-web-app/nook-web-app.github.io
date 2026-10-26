@@ -263,8 +263,15 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
   const parents = new Map<string, string>();
   const pids = [...new Set(others.map((p) => p.parent_id).filter(Boolean))] as string[];
   if (pids.length) ((await admin.from("posts").select("id, user_id").in("id", pids)).data || []).forEach((r: { id: string; user_id: string }) => parents.set(r.id, r.user_id));
+  // people who blocked or muted him are never answered or liked
+  const shut = new Set<string>();
+  for (const t of ["blocks", "mutes"]) {
+    const col = t === "blocks" ? "blocker_id" : "muter_id", tgt = t === "blocks" ? "blocked_id" : "muted_id";
+    ((await admin.from(t).select(col).eq(tgt, zen)).data || []).forEach((r: Record<string, string>) => shut.add(r[col]));
+  }
   for (const p of others) {
     if (seenOth.has(p.id)) continue;
+    if (shut.has(p.user_id)) { await mark(p.id, "shut"); continue; }
     // a reply to him is never answered; the post is only noted, so it is not looked at again
     if (p.parent_id && parents.get(p.parent_id) === zen) { await mark(p.id, "to-him"); continue; }
     if (!p.body || !String(p.body).trim() || budget <= 0) { if (!(budget <= 0)) await mark(p.id, "skip"); continue; }

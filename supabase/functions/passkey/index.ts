@@ -24,10 +24,10 @@ const fromU8 = (u: Uint8Array): string => btoa(String.fromCharCode(...u)).replac
 function challengeOf(resp: { response?: { clientDataJSON?: string } }): string {
   try { return JSON.parse(new TextDecoder().decode(toU8(String(resp.response!.clientDataJSON)))).challenge || ""; } catch { return ""; }
 }
-// a short fingerprint of the caller's network address (cf-connecting-ip, else the last proxy hop); the address itself is never stored
+// a short fingerprint of the caller's network address (the last proxy hop; cf-connecting-ip can be set by the caller); the address itself is never stored
 async function ipTag(req: Request): Promise<string | null> {
   const fwd = (req.headers.get("x-forwarded-for") || "").split(",").map((x) => x.trim()).filter(Boolean);
-  const raw = (req.headers.get("cf-connecting-ip") || "").trim() || fwd[fwd.length - 1] || "";
+  const raw = fwd[fwd.length - 1] || "";
   if (!raw) return null;
   const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("nook-ip|" + raw)));
   return Array.from(d.slice(0, 6), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -62,7 +62,7 @@ Deno.serve(async (req) => {
         if (!mine.error && (mine.count || 0) > 30) return json({ error: "busy" }, 429);
       }
       const recent = await admin.from("passkey_challenges").select("challenge", { count: "exact", head: true }).eq("purpose", "auth").gt("created_at", since);
-      if ((recent.count || 0) > 1000) return json({ error: "busy" }, 429);
+      if ((recent.count || 0) > 20000) return json({ error: "busy" }, 429);
       const o = await generateAuthenticationOptions({ rpID: RP_ID, userVerification: "required", timeout: 60000 });
       await keep(o.challenge, "auth", null, ip);
       return json(o);

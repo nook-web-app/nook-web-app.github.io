@@ -35,9 +35,11 @@ Deno.serve(async (req) => {
   const age = ageOf(body.age);
   if (age === null) return json({ error: "Enter your age as a number." }, 400);
   if (age >= ADULT) {
-    await admin.from("accounts").update({ age_hold: false, age_verified: true }).eq("id", id).eq("age_hold", true);
+    const upd = await admin.from("accounts").update({ age_hold: false, age_verified: true }).eq("id", id).eq("age_hold", true);
+    if (upd.error) return json({ error: "Could not save. Try again." }, 500);
     return json({ state: "passed" });
   }
-  await admin.auth.admin.updateUserById(id, { ban_duration: "876000h" });
+  const ban = await admin.auth.admin.updateUserById(id, { ban_duration: "876000h" });
+  if (ban.error) return json({ error: "Could not save. Try again." }, 500);
   return json({ state: "banned" });
 });

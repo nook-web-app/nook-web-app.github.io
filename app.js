@@ -246,8 +246,10 @@ function mkImg(src, cls, on) {
   return i;
 }
 const picImg = src => mkImg(src, "pic");
+// pictures of other people are only loaded from our own storage or inline data, never from an address they chose
+const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.20.17";
+const APP_VERSION = "3.20.18";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -629,7 +631,7 @@ const zenThread = p => { for (let q = p && p.parent ? byId(p.parent) : null, n =
 // a post that shows a link card does not also print the link; the copy button in the menu still has the whole text
 const cardless = p => { if (!p.text || (p.imgs && p.imgs.length) || !firstUrl(p.text)) return p.text; return p.text.replace(/https?:\/\/[^\s<>"]+/i, "").replace(/[ \t]{2,}/g, " ").trim(); };
 // every reply under a post counts, the ones to replies too
-const replyTotal = id => flat(id, 0, []).length;
+const replyTotal = id => { const pi = postIndex(); pi.rt = pi.rt || new Map(); if (!pi.rt.has(id)) pi.rt.set(id, flat(id, 0, []).length); return pi.rt.get(id); };
 function flat(id, d, out, seen) {
   seen = seen || new Set([id]);
   // a parent loop in stored data must not run forever
@@ -1313,8 +1315,8 @@ async function messageTargets() {
     const [a, b, k1, k2] = await Promise.all([
       pageAll((f, t) => sb.from("follows").select("followee_id").eq("follower_id", sbUser.id).order("followee_id").range(f, t)),
       pageAll((f, t) => sb.from("follows").select("follower_id").eq("followee_id", sbUser.id).order("follower_id").range(f, t)),
-      sb.from("blocks").select("blocked_id").eq("blocker_id", sbUser.id),
-      sb.from("blocks").select("blocker_id").eq("blocked_id", sbUser.id)
+      pageAll((f, t) => sb.from("blocks").select("blocked_id").eq("blocker_id", sbUser.id).order("blocked_id").range(f, t)),
+      pageAll((f, t) => sb.from("blocks").select("blocker_id").eq("blocked_id", sbUser.id).order("blocker_id").range(f, t))
     ]);
     const mineF = new Set((a.data || []).map(r => r.followee_id));
     const hidden = new Set([...(k1.data || []).map(r => r.blocked_id), ...(k2.data || []).map(r => r.blocker_id)]);
@@ -1386,7 +1388,7 @@ async function sharePost(p) {
         chat.msgs.push(m); persist(); toast("Saved in " + t.name);
         return;
       }
-      const b = await pic(); if (b) sendPicTo(t, b, true);
+      const b = await pic(); if (b) sendPicTo(t, b, true).catch(() => toast("Could not send"));
     }) }] : []),
     { icon: "share", label: "Another app", fn: () => { sharePic(p).then(ok => { if (ok) countShare(p); }, () => {}); } },
     { label: "Cancel", cancel: true }], "Share post");
@@ -1528,11 +1530,11 @@ async function deleteRemote(items) {
   if (!own.length) return;
   const ids = own.map(x => x.remote);
   const paths = [];
-  own.forEach(x => (x.media || []).forEach(u => { const p = storagePath(u, "media"); if (p) paths.push(p); }));
+  own.forEach(x => (x.media || []).forEach(u => { const p = storagePath(u, "media"); if (p && p.startsWith(sbUser.id + "/")) paths.push(p); }));
   const { data: rows } = await sb.from("posts").select("id, media_url").in("id", ids).eq("user_id", sbUser.id);
-  (rows || []).forEach(r => parseMedia(r.media_url).forEach(u => { const p = storagePath(u, "media"); if (p) paths.push(p); }));
+  (rows || []).forEach(r => parseMedia(r.media_url).forEach(u => { const p = storagePath(u, "media"); if (p && p.startsWith(sbUser.id + "/")) paths.push(p); }));
   const { data: kids } = await sb.from("posts").select("id, media_url").in("parent_id", ids).eq("user_id", sbUser.id);
-  (kids || []).forEach(r => parseMedia(r.media_url).forEach(u => { const p = storagePath(u, "media"); if (p) paths.push(p); }));
+  (kids || []).forEach(r => parseMedia(r.media_url).forEach(u => { const p = storagePath(u, "media"); if (p && p.startsWith(sbUser.id + "/")) paths.push(p); }));
   await Promise.all([
     sb.from("likes").delete().in("post_id", ids).eq("user_id", sbUser.id),
     sb.from("reposts").delete().in("post_id", ids).eq("user_id", sbUser.id)
@@ -1551,7 +1553,8 @@ async function syncEdit(ed, text, origin, now) {
   if (!sbUser || !ed.remote || ed.ra || ed.ai) return true;
   const kept = origin.map((src, i) => (now.includes(src) ? (ed.media || [])[i] : null)).filter(Boolean);
   const added = now.filter(src => !origin.includes(src));
-  const up = added.length ? await uploadMedia(added) : [];
+  let up = [];
+  try { up = added.length ? await uploadMedia(added) : []; } catch (e) { up = null; }
   if (!up) { toast("Could not upload the photo. The edit was not saved"); return false; }
   const all = kept.concat(up);
   const { error } = await sb.from("posts").update({ body: text, media_url: all.length ? JSON.stringify(all) : null }).eq("id", ed.remote);
@@ -1623,7 +1626,7 @@ function threadV(c) {
   if (!p) { main.append(emptyState("smile", "This post is gone.")); return; }
   const anc = [];
   let q = p.parent ? byId(p.parent) : null;
-  while (q) { anc.unshift(q); q = q.parent ? byId(q.parent) : null; }
+  while (q && q !== p && anc.length < 60 && !anc.includes(q)) { anc.unshift(q); q = q.parent ? byId(q.parent) : null; }
   anc.forEach(a => main.append(postCard(a, { line: true, compact: true })));
   const mp = mainPost(p);
   main.append(mp);
@@ -1708,14 +1711,14 @@ function chatV() {
     if (hit) paintInbox(hit.v); else dmBox.append(loadingEl());
     let sig = hit ? JSON.stringify(hit.v) : "";
     const pull = () => dmInbox().then(convos => {
-      cacheWrite("inbox:" + sbUser.id, convos);
       refreshBadge();
       if (!dmBox.isConnected) return;
       const next = JSON.stringify(convos);
-      if (next !== sig) { sig = next; paintInbox(convos); }
+      if (next !== sig) { sig = next; cacheWrite("inbox:" + sbUser.id, convos); paintInbox(convos); }
     }, () => { if (!hit && dmBox.isConnected) dmBox.textContent = ""; });
     refreshChat = pull;
-    const iv = setInterval(() => { if (!document.hidden) pull(); }, 5000);
+    let busy = false;
+    const iv = setInterval(() => { if (!document.hidden && !busy) { busy = true; Promise.resolve(pull()).finally(() => { busy = false; }); } }, 5000);
     pageStop = () => clearInterval(iv);
     pull();
   }
@@ -2074,7 +2077,7 @@ async function restoreBackup(file) {
       if (!["tiny-posts", "nook"].includes(d.app)) throw new Error("x");
       (Array.isArray(d.posts) ? d.posts : []).forEach(p => { if (p && typeof p.id === "string" && !byId(p.id)) { S.posts.push({ id: p.id, text: String(p.text || ""), t: Number(p.t) || Date.now(), imgs: [], parent: typeof p.parent === "string" ? p.parent : null, liked: !!p.liked, reposted: false, saved: !!p.saved, pinned: !!p.pinned, edited: !!p.edited }); n++; } });
       (Array.isArray(d.chats) ? d.chats : []).forEach(c => { if (c && typeof c.id === "string" && !S.chats.some(x => x.id === c.id)) { S.chats.push({ id: c.id, name: String(c.name || "Notes"), t: Number(c.t) || Date.now(), msgs: (Array.isArray(c.msgs) ? c.msgs : []).filter(m => m && typeof m.id === "string").map(m => ({ id: m.id, text: String(m.text || ""), t: Number(m.t) || Date.now(), imgs: [] })) }); n++; } });
-      (Array.isArray(d.lists) ? d.lists : []).forEach(l => { if (l && typeof l.id === "string" && !S.lists.some(x => x.id === l.id)) { S.lists.push(l); n++; } });
+      (Array.isArray(d.lists) ? d.lists : []).forEach(l => { if (l && typeof l.id === "string" && Array.isArray(l.ids) && !S.lists.some(x => x.id === l.id)) { S.lists.push({ id: l.id, name: String(l.name || "List"), desc: String(l.desc || ""), ids: l.ids.filter(i => typeof i === "string") }); n++; } });
     } else {
       const files = await readZip(await file.arrayBuffer());
       const text = path => (files[path] ? new TextDecoder().decode(files[path]) : null);
@@ -2096,7 +2099,7 @@ async function restoreBackup(file) {
       const st = text("profile/settings.json");
       if (st) {
         const d = JSON.parse(st);
-        (d.lists || []).forEach(l => { if (!S.lists.some(x => x.id === l.id)) { S.lists.push(l); n++; } });
+        (d.lists || []).forEach(l => { if (l && Array.isArray(l.ids) && !S.lists.some(x => x.id === l.id)) { S.lists.push({ id: l.id, name: String(l.name || "List"), desc: String(l.desc || ""), ids: l.ids.filter(i => typeof i === "string") }); n++; } });
         if (d.profile) {
           const pr = d.profile;
           if (typeof pr.name === "string") S.profile.name = pr.name;
@@ -2198,7 +2201,7 @@ async function zAsk(chat, list, bubble, m) {
       else { setTimeout(step, 60); return; }
       b.classList.remove("typing");
       b.textContent = shown;
-      main.scrollTop = main.scrollHeight;
+      if (!zScrollQ) zScrollQ = requestAnimationFrame(() => { zScrollQ = 0; main.scrollTop = main.scrollHeight; });
       setTimeout(step, 10 + Math.random() * 3);
       return;
     }
@@ -3093,6 +3096,7 @@ function shrinkImg(src, max = 160) {
   if (!src) return Promise.resolve(null);
   return new Promise(res => {
     const im = new Image();
+    if (!/^data:/.test(src)) im.crossOrigin = "anonymous";
     im.onload = () => {
       const s = Math.min(1, max / Math.max(im.width, im.height));
       const c = document.createElement("canvas");
@@ -3159,7 +3163,13 @@ async function shareSaveStats(ids) {
   }));
   return out;
 }
-async function loadFeed() {
+let feedBusy = null, feedAgain = false;
+function loadFeed() {
+  if (feedBusy) { feedAgain = true; return feedBusy; }
+  feedBusy = loadFeedNow().finally(() => { feedBusy = null; if (feedAgain) { feedAgain = false; loadFeed().catch(() => {}); } });
+  return feedBusy;
+}
+async function loadFeedNow() {
   if (!sbUser || !S) return;
   const feedT0 = Date.now();
   // the list view leaves out photos stored inline in the row (old posts), so 300 rows never pull hundreds of MB; the newest few are fetched below
@@ -3336,9 +3346,11 @@ async function loadFeed() {
   if (inlLater.length) fillInlinePhotos(inlLater);
 }
 let inlineRun = 0;
+let zScrollQ = 0;
 // old posts keep their photo inside the row: those come one small group at a time so a phone never holds hundreds of MB at once
 async function fillInlinePhotos(ids) {
   const run = ++inlineRun;
+  let changed = false;
   for (let i = 0; i < ids.length && run === inlineRun; i += 4) {
     try {
       const { data, error } = await sb.from("posts").select("id, media_url").in("id", ids.slice(i, i + 4));
@@ -3346,16 +3358,17 @@ async function fillInlinePhotos(ids) {
       const m = new Map(data.map(r => [r.id, r.media_url]));
       let ch = false;
       S.posts.forEach(p => { if (p.remote && m.has(p.remote) && !(p.imgs && p.imgs.length)) { const im = parseMedia(m.get(p.remote)); if (im && im.length) { p.imgs = im; if (!p.ra) p.media = im; ch = true; } } });
-      if (ch) { persist(); if (stack.length === 1 && stack[0].r === "home") render(); }
+      if (ch) changed = true;
     } catch (e) {}
   }
+  if (changed) { persist(); if (stack.length === 1 && stack[0].r === "home") render(); }
 }
 function rAv(ra, size) {
   const seed = String((ra && (ra.name || ra.handle)) || "?");
   let hsh = 7;
   for (const c of seed) hsh = (hsh * 31 + c.charCodeAt(0)) >>> 0;
   const a = h("div", { class: "av", style: "background:hsl(" + (hsh % 360) + " 45% 42%)" }, seed.trim().charAt(0).toUpperCase() || "?");
-  if (ra && ra.avatar) { const im = picImg(ra.avatar); im.loading = "eager"; a.prepend(im); }
+  if (ra && ownMedia(ra.avatar)) { const im = picImg(ra.avatar); im.loading = "eager"; a.prepend(im); }
   // Zenith without a picture shows his own Z, not a letter
   else if (ra && ((ra.handle || "").toLowerCase() === "zenith" || (S && S.zen && S.zen.id && ra.id === S.zen.id))) { a.className = "av zenav"; a.style.background = ""; a.innerHTML = ZEN_SVG; }
   if (size) { a.style.width = size + "px"; a.style.height = size + "px"; a.style.fontSize = Math.round(size * 0.4) + "px"; }
@@ -3542,10 +3555,10 @@ function userV(cur) {
   };
   const paintAcc = acc => {
     av.querySelectorAll(":scope > img.pic").forEach(i => i.remove());
-    if (acc.avatar) av.prepend(picImg(acc.avatar));
+    if (ownMedia(acc.avatar)) av.prepend(picImg(acc.avatar));
     else if ((acc.username || "").toLowerCase() === "zenith") { av.classList.add("zenav"); av.style.background = ""; av.innerHTML = ZEN_SVG; }
     bn.textContent = "";
-    if (acc.banner_theme === "avatar" && acc.avatar) bn.append(mkImg(acc.avatar, "pic blur")); else if (acc.banner) bn.append(picImg(acc.banner));
+    if (acc.banner_theme === "avatar" && ownMedia(acc.avatar)) bn.append(mkImg(acc.avatar, "pic blur")); else if (ownMedia(acc.banner)) bn.append(picImg(acc.banner));
     pnEl.textContent = acc.display_name != null ? acc.display_name : (acc.username || who.name);
     if (pnEl.textContent) titleEl.textContent = pnEl.textContent;
     pnEl.hidden = !pnEl.textContent;
@@ -3610,7 +3623,7 @@ function userV(cur) {
     const { error } = on
       ? await sb.from("follows").insert({ follower_id: sbUser.id, followee_id: cur.id })
       : await sb.from("follows").delete().eq("follower_id", sbUser.id).eq("followee_id", cur.id);
-    if (error) { st.following = !on; counts.followers += on ? -1 : 1; paintFollow(); paintStat(); saveState(); toast("Could not update follow"); }
+    if (error && !(on && error.code === "23505")) { st.following = !on; counts.followers += on ? -1 : 1; paintFollow(); paintStat(); saveState(); toast("Could not update follow"); }
   };
   const toggleBlock = async () => {
     if (!st) return;
@@ -3648,7 +3661,10 @@ async function setBlocked(id, on) {
     ? await sb.from("blocks").insert({ blocker_id: sbUser.id, blocked_id: id })
     : await sb.from("blocks").delete().eq("blocker_id", sbUser.id).eq("blocked_id", id);
   if (error && !(on && error.code === "23505")) return false;
-  if (on) await sb.from("follows").delete().or("and(follower_id.eq." + sbUser.id + ",followee_id.eq." + id + "),and(follower_id.eq." + id + ",followee_id.eq." + sbUser.id + ")");
+  if (on) {
+    await sb.from("follows").delete().eq("follower_id", sbUser.id).eq("followee_id", id);
+    await sb.from("follows").delete().eq("follower_id", id).eq("followee_id", sbUser.id);
+  }
   loadFeed().catch(() => {});
   return true;
 }
@@ -3666,7 +3682,7 @@ function reportAccount(id) {
 // a moving profile photo cannot be shrunk to a picture, so it is stored as a file like the banner
 async function avatarValue(src) {
   if (!src) return null;
-  if (!/^data:image\/gif/.test(src)) return shrinkImg(src, 160);
+  if (!/^data:image\/gif/.test(src)) return (await shrinkImg(src, 160)) || undefined;
   if (!sbUser) return undefined;
   const blob = await (await fetch(src)).blob();
   const path = sbUser.id + "/avatar-" + Date.now() + ".gif";
@@ -3869,6 +3885,7 @@ async function openCropper(file, o) {
       action: "Done",
       body: [h("div", { class: "crop" }, cv), h("p", { class: "hint" }, "Drag to move, pinch to zoom")],
       onCancel: close => { close(); resolve(null); },
+      onBack: () => resolve(null),
       onAction: close => {
         // a moving picture is cut frame by frame later, so only the chosen area is handed back (in the pixels of the original)
         if (o.rect) { const l0 = cx - iw * s / 2, t0 = cy - ih * s / 2; close(); resolve({ x: (fl - l0) / s / k, y: (ft - t0) / s / k, w: fw / s / k, h: fh / s / k }); return; }
@@ -4584,8 +4601,8 @@ async function pushSync() {
     const reg = await swReady(5000);
     if (sub && sub.endpoint === saved) {
       // the server drops a push address that the phone no longer answers to: when this one is gone from the list, start a new one
-      const { data } = await sb.from("push_subs").select("endpoint").eq("endpoint", sub.endpoint).maybeSingle();
-      if (!data) { try { await sub.unsubscribe(); } catch (e) {} sub = null; }
+      const { data, error: qe } = await sb.from("push_subs").select("endpoint").eq("endpoint", sub.endpoint).maybeSingle();
+      if (!qe && !data) { try { await sub.unsubscribe(); } catch (e) {} sub = null; }
     }
     // permission is still allowed but the phone lost its push address (storage was cleared): make a new one
     if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToU8(VAPID_PUBLIC) });
@@ -4679,11 +4696,15 @@ async function acctList() {
     return out;
   } catch (e) { return []; }
 }
+// the saved account list is read, changed and written back, so these run one after another and never write back a spent token
+let listQ = Promise.resolve();
+const withList = fn => (listQ = listQ.then(fn, fn));
 async function rememberAccount(info) {
   if (!sbUser) return;
   const { data } = await sb.auth.getSession();
   const ss = data && data.session;
   if (!ss || ss.user.id !== sbUser.id) return;
+  await withList(async () => {
   const list = await acctList();
   const old = list.find(a => a.id === sbUser.id) || {};
   const av = info && typeof info.avatar === "string" && info.avatar.length < 400000 ? info.avatar : (info ? null : old.avatar || null);
@@ -4692,11 +4713,11 @@ async function rememberAccount(info) {
   const at = list.findIndex(a => a.id === sbUser.id);
   if (at >= 0) list[at] = entry; else list.push(entry);
   await acctPut("list", list);
+  });
 }
 const mainAccountId = list => ((list.find(a => a.main) || list[0]) || {}).id;
 async function forgetAccount(id, keepSnap) {
-  const list = await acctList();
-  await acctPut("list", list.filter(a => a.id !== id));
+  await withList(async () => { const list = await acctList(); await acctPut("list", list.filter(a => a.id !== id)); });
   if (!keepSnap) await acctDel("snap:" + id).catch(() => {});
 }
 async function saveSnap(id) { await acctPut("snap:" + id, JSON.stringify(await fullState())); }
@@ -4718,7 +4739,7 @@ async function enterAccount(entry) {
     const got = await Promise.race([rp, wait(12000).then(() => null)]);
     if (!got) {
       // a late answer still rotated the login, so the new one is kept or the saved one is spent
-      rp.then(async r => { if (r && r.data && r.data.session) await acctPut("list", (await acctList()).map(x => x.id === entry.id ? Object.assign({}, x, { rt: r.data.session.refresh_token }) : x)); }).catch(() => {});
+      rp.then(async r => { if (r && r.data && r.data.session) await withList(async () => acctPut("list", (await acctList()).map(x => x.id === entry.id ? Object.assign({}, x, { rt: r.data.session.refresh_token }) : x))); }).catch(() => {});
       enterFail = "offline"; return false;
     }
     const { data, error } = got;
@@ -4727,7 +4748,7 @@ async function enterAccount(entry) {
     if (error && !(error.status === 400 || error.status === 401 || error.status === 403)) { enterFail = "offline"; return false; }
     if (error || !data || !data.session) { enterFail = "login"; await forgetAccount(entry.id); return false; }
     // the login rotated, so the new one is saved at once
-    await acctPut("list", (await acctList()).map(x => x.id === entry.id ? Object.assign({}, x, { rt: data.session.refresh_token }) : x)).catch(() => {});
+    await withList(async () => acctPut("list", (await acctList()).map(x => x.id === entry.id ? Object.assign({}, x, { rt: data.session.refresh_token }) : x))).catch(() => {});
     try { sessionStorage.removeItem("nook-route"); } catch (e) {}
     await loadSnap(entry.id, entry);
     try { localStorage.setItem(LOCAL_UID, entry.id); } catch (e) {}
@@ -4853,8 +4874,7 @@ function newAccountModal() {
           const ku = await tmp.from("accounts").update({ public_key: rec.pub }).eq("id", id);
           if (kb.error || ku.error) keyFail = true;
         } catch (x) { keyFail = true; }
-        const list = await acctList();
-        await acctPut("list", list.filter(x => x.id !== id).concat({ id, rt: sr.body.session.refresh_token, username: u, name: n, avatar: null, main: false }));
+        await withList(async () => { const list = await acctList(); await acctPut("list", list.filter(x => x.id !== id).concat({ id, rt: sr.body.session.refresh_token, username: u, name: n, avatar: null, main: false })); });
         linkSavedAccounts(id, sr.body.session.access_token).catch(() => {});
         close();
         // the key is made again the first time this account is opened, so this is only a heads up
@@ -4903,8 +4923,7 @@ function addAccountModal() {
           if (u.user.id === sbUser.id) { say("That is the account you are in"); return; }
           const info = await infoForSession(r.session, u.user.id);
           if (!info || !info.username) { say("Could not load that account. Try again"); return; }
-          const list = await acctList();
-          await acctPut("list", list.filter(a => a.id !== info.id).concat({ id: info.id, rt: r.session.refresh_token, username: info.username, name: info.display_name || info.username, avatar: typeof info.avatar === "string" && info.avatar.length < 400000 ? info.avatar : null, main: false }));
+          await withList(async () => { const list = await acctList(); await acctPut("list", list.filter(a => a.id !== info.id).concat({ id: info.id, rt: r.session.refresh_token, username: info.username, name: info.display_name || info.username, avatar: typeof info.avatar === "string" && info.avatar.length < 400000 ? info.avatar : null, main: false })); });
           linkSavedAccounts(info.id, r.session.access_token).catch(() => {});
           m.close();
           toast("Account added");
@@ -4934,8 +4953,7 @@ function addAccountModal() {
         // the name, handle and picture are public, so they are read before the account is shown anywhere
         const info = await infoForSession(r.body.session, u.user.id);
         if (!info || !info.username) { say("Could not load that account. Try again"); return; }
-        const list = await acctList();
-        await acctPut("list", list.filter(a => a.id !== info.id).concat({ id: info.id, rt: r.body.session.refresh_token, username: info.username, name: info.display_name || info.username, avatar: typeof info.avatar === "string" && info.avatar.length < 400000 ? info.avatar : null, main: false }));
+        await withList(async () => { const list = await acctList(); await acctPut("list", list.filter(a => a.id !== info.id).concat({ id: info.id, rt: r.body.session.refresh_token, username: info.username, name: info.display_name || info.username, avatar: typeof info.avatar === "string" && info.avatar.length < 400000 ? info.avatar : null, main: false })); });
         linkSavedAccounts(info.id, r.body.session.access_token).catch(() => {});
         close();
         toast("Account added");
@@ -4975,7 +4993,7 @@ async function linkSavedAccounts(newId, newToken) {
       if (r.data && r.data.session) { tokens.push(r.data.session.access_token); rotated.set(a.id, r.data.session.refresh_token); }
     }));
     // written onto the list as it is now, so accounts added while this ran are not lost
-    if (rotated.size) await acctPut("list", (await acctList()).map(x => rotated.has(x.id) ? Object.assign({}, x, { rt: rotated.get(x.id) }) : x));
+    if (rotated.size) await withList(async () => acctPut("list", (await acctList()).map(x => rotated.has(x.id) ? Object.assign({}, x, { rt: rotated.get(x.id) }) : x)));
     await fetch(SB_URL + "/functions/v1/link-accounts", { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, authorization: "Bearer " + mine.access_token }, body: JSON.stringify({ tokens }) });
   } catch (e) {}
 }
@@ -4996,8 +5014,7 @@ function linkedLoginModal(x) {
         if (!r.session) { if (r.err) say(r.err); return; }
         const { data: u } = await sb.auth.getUser(r.session.access_token);
         if (!u || !u.user || u.user.id !== x.id) { say("That key belongs to a different account"); return; }
-        const list = await acctList();
-        await acctPut("list", list.filter(a => a.id !== x.id).concat({ id: x.id, rt: r.session.refresh_token, username: x.username, name: x.name, avatar: x.avatar, main: false }));
+        await withList(async () => { const list = await acctList(); await acctPut("list", list.filter(a => a.id !== x.id).concat({ id: x.id, rt: r.session.refresh_token, username: x.username, name: x.name, avatar: x.avatar, main: false })); });
         m.close(() => switchAccount(x.id));
       } finally { b.disabled = false; }
     } }, "Use Face ID or fingerprint") : null],
@@ -5011,8 +5028,7 @@ function linkedLoginModal(x) {
         if (r.body && r.body.error === "banned") { say("That account is banned"); return; }
         if (!r.ok) { say(r.body && r.body.error === "not_linked" ? "That account is not linked anymore" : signinMsg(r)); return; }
         if (!(r.body && r.body.session)) { say("Could not sign in. Try again"); return; }
-        const list = await acctList();
-        await acctPut("list", list.filter(a => a.id !== x.id).concat({ id: x.id, rt: r.body.session.refresh_token, username: x.username, name: x.name, avatar: x.avatar, main: false }));
+        await withList(async () => { const list = await acctList(); await acctPut("list", list.filter(a => a.id !== x.id).concat({ id: x.id, rt: r.body.session.refresh_token, username: x.username, name: x.name, avatar: x.avatar, main: false })); });
         close(() => switchAccount(x.id));
       } finally { m.act.disabled = false; }
     }
@@ -5032,7 +5048,7 @@ async function openAccounts() {
     const missing = [...linkedIds].filter(id => !all.some(a => a.id === id));
     if (missing.length) {
       const m = await Promise.race([cachedAccounts(missing), wait(1200).then(() => new Map())]);
-      others = missing.map(id => { const x = m.get(id) || {}; return { id, username: x.username || "", name: x.display_name || x.username || "", avatar: typeof x.avatar === "string" && x.avatar.length < 400000 ? x.avatar : null }; }).filter(x => x.username);
+      others = missing.map(id => { const x = m.get(id) || {}; return { id, username: x.username || "", name: x.display_name || x.username || "", avatar: ownMedia(x.avatar) && x.avatar.length < 400000 ? x.avatar : null }; }).filter(x => x.username);
     }
   } catch (e) {}
   // the pictures are loaded before the sheet opens, so no letter circle shows first
@@ -5301,6 +5317,7 @@ function dmSignedUrl(url) {
   if (!path) return Promise.reject(new Error("gone"));
   const hit = dmSigned.get(path);
   if (hit && hit.t > Date.now()) return hit.p;
+  dmSigned.delete(path);
   const e = { t: Date.now() + 3000000, p: Promise.resolve(sb.storage.from(DM_BUCKET).createSignedUrl(path, 3600)).then(r => { if (!r || r.error || !r.data) throw new Error("gone"); return r.data.signedUrl; }) };
   dmSigned.set(path, e);
   e.p.catch(() => { if (dmSigned.get(path) === e) dmSigned.delete(path); });
@@ -5373,7 +5390,7 @@ function cachedAccounts(ids) {
   // anything we have seen before shows at once, old ones are refreshed in the background
   if (stale.length) pull(stale).catch(() => {});
   if (!miss.length) return Promise.resolve(out);
-  return pull(miss);
+  return Promise.all(Array.from({ length: Math.ceil(miss.length / 80) }, (_, i) => pull(miss.slice(i * 80, i * 80 + 80)))).then(() => out);
 }
 function countsOf(id, paint) {
   const c0 = cacheRead("fc:" + id);
@@ -5483,7 +5500,7 @@ function authMsg(error) {
   if (c === "over_email_send_rate_limit" || c === "over_request_rate_limit" || (error && error.status === 429)) return "Too many tries. Wait a few minutes and try again";
   if (c === "signup_disabled") return "New accounts are closed for now";
   if (/network|fetch/i.test(m)) return "Could not reach Nook. Check your connection";
-  return /^[A-Z][^:]*$/.test(m) && m.length < 120 ? m : "Something went wrong. Try again";
+  return "Something went wrong. Try again";
 }
 function setpwMsg(r) {
   const e = r.body && r.body.error;
@@ -5502,7 +5519,7 @@ function signinMsg(r) {
   const e = r.body && r.body.error;
   if (r.ok) return "";
   if (e === "locked") return lockedMsg(r.body.until);
-  if (e === "no_account") return "No account uses this email. Check the spelling or make an account";
+  if (e === "no_account") return "Wrong email or password. You can tap Forgot password";
   if (e === "wrong_password") return "Wrong password for this email." + (r.body.left > 0 ? " " + r.body.left + (r.body.left === 1 ? " try" : " tries") + " left before a wait." : "") + " You can tap Forgot password";
   if (e === "bad_email") return "That email does not look right. Check for typos";
   if (e === "busy") return "Lots of people are signing in right now. Try again in a minute";
@@ -5612,7 +5629,7 @@ function refreshBadgeNow() {
     if (badgeRpc !== false) {
       const r = await Promise.resolve(sb.rpc("dm_inbox")).catch(() => ({ error: true }));
       if (!r.error) { badgeRpc = true; return { ids: (r.data || []).filter(x => x.unread > 0).map(x => x.other_id), error: null }; }
-      if (badgeRpc === undefined) badgeRpc = false;
+      if (badgeRpc === undefined && r.error && ["PGRST202", "42883"].includes(r.error.code)) badgeRpc = false;
     }
     const q = await sb.from("messages").select("sender_id").eq("recipient_id", sbUser.id).is("read_at", null).limit(500);
     return { ids: (q.data || []).map(x => x.sender_id), error: q.error };
@@ -5639,8 +5656,12 @@ function askNotifPerm() {
 }
 function alertMe(title, body, onTap) {
   if (document.hidden && "Notification" in window && Notification.permission === "granted") {
-    const n = new Notification(title, { body, icon: "icon-192.png", tag: "nook" });
-    n.onclick = () => { window.focus(); n.close(); if (onTap) onTap(); };
+    try {
+      const n = new Notification(title, { body, icon: "icon-192.png", tag: "nook" });
+      n.onclick = () => { window.focus(); n.close(); if (onTap) onTap(); };
+    } catch (e) {
+      navigator.serviceWorker.ready.then(r => r.showNotification(title, { body, icon: "icon-192.png", tag: "nook" })).catch(() => {});
+    }
   } else toast(title + ": " + body);
 }
 function markRead(ids) {
@@ -5687,6 +5708,7 @@ async function dmInbox() {
 const E2E_ALG = { name: "ECDH", namedCurve: "P-256" };
 const e2eMine = new Map();
 const e2eShared = new Map();
+const e2eAt = new Map();
 const e2eEnc = new Map();
 const toB64 = u8 => { let s = ""; u8.forEach(b => { s += String.fromCharCode(b); }); return btoa(s); };
 const fromB64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
@@ -5918,7 +5940,7 @@ async function unlockModal() {
 }
 async function waitForApprovalModal() {
   if (!sbUser) return;
-  let stop = false, linkId = null;
+  let stop = false, linkId = null, polls = 0;
   const msg = h("p", { class: "note", role: "alert" });
   const box = codeBox("...");
   const m = modal({
@@ -5939,7 +5961,7 @@ async function waitForApprovalModal() {
     box.textContent = await linkCode(reqPub);
     const until = Date.now() + LINK_MIN * 60000;
     while (!stop && Date.now() < until) {
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, document.visibilityState === "visible" ? Math.min(8000, 2000 + 250 * ++polls) : 15000));
       if (stop) return;
       const { data: row } = await sb.from("key_links").select("status, sender_pub, iv, ct").eq("id", linkId).maybeSingle();
       if (!row || row.status !== "approved") continue;
@@ -6160,7 +6182,8 @@ function keyGate(otherId) {
   if (keyUntrusted.has(otherId)) { setTimeout(() => keyChangedNotice(otherId), 100); throw new Error("Their security key changed. Confirm it first"); }
 }
 function sharedKey(otherId) {
-  if (!e2eShared.has(otherId)) {
+  if (!e2eShared.has(otherId) || Date.now() - (e2eAt.get(otherId) || 0) > 60000) {
+    e2eAt.set(otherId, Date.now());
     const p = (async () => {
       const mine = await myKeys();
       const { data } = await sb.from("accounts").select("public_key").eq("id", otherId).maybeSingle();
@@ -6408,7 +6431,7 @@ async function sendDm(otherId, text, srcs, dims) {
     if (error) throw error;
     return data;
   } catch (e) {
-    if (paths.length) sb.storage.from(DM_BUCKET).remove(paths).then(() => {}, () => {});
+    if (paths.length && e && e.code) sb.storage.from(DM_BUCKET).remove(paths).then(() => {}, () => {});
     throw e;
   }
 }
@@ -6959,7 +6982,7 @@ function dmV(c) {
       row.remove();
       if (!list.querySelector("[data-mid], .tmpm")) hint("No messages yet. Say hi.");
       // what was typed in the meantime is never overwritten
-      ta.value = ta.value.trim() ? ta.value : text;
+      ta.value = ta.value.trim() ? text + "\n" + ta.value : text;
       pend.push(...srcs);
       toast("Could not send. " + plainErr(e, "Try again"));
       refreshStatus();
@@ -7001,7 +7024,7 @@ function dmV(c) {
   document.addEventListener("visibilitychange", onVis);
   liveDm = {
     id: c.id,
-    fill: pre => { if (locked) return; ta.value = pre; sync(); ta.focus(); },
+    fill: pre => { if (locked) return; ta.value = ta.value.trim() ? ta.value.replace(/\s*$/, " ") + pre : pre; sync(); ta.focus(); },
     add: async m => { threadPush(c.id, m); await syncRows([m], {}); },
     drop: id => {
       const el = list.querySelector('[data-mid="' + String(id) + '"]');
@@ -7189,7 +7212,7 @@ function followListV(c, mode) {
   const load = () => {
     withTimeout(Promise.all([
       pageAll((f, t) => sb.from("follows").select(col).eq(keyCol, c.id).order(col).range(f, t)),
-      sb.from("blocks").select("blocker_id, blocked_id").or("blocker_id.eq." + sbUser.id + ",blocked_id.eq." + sbUser.id)
+      pageAll((f, t) => sb.from("blocks").select("blocker_id, blocked_id").or("blocker_id.eq." + sbUser.id + ",blocked_id.eq." + sbUser.id).order("blocker_id").order("blocked_id").range(f, t))
     ])).then(([a1, a2]) => {
       if (a1.error || a2.error) throw new Error("load");
       const hidden = new Set((a2.data || []).map(b => (b.blocker_id === sbUser.id ? b.blocked_id : b.blocker_id)));
@@ -7456,7 +7479,7 @@ async function maybeInstallPrompt() {
   layer.append(scrim, sh);
 }
 let rtBackoff = 2000, rtTimer = null;
-// deleted DMs arrive on a private channel only the two people in the chat can listen to; if that channel cannot be opened the old stream of every delete is used instead
+// deleted DMs arrive on a private channel only the two people in the chat can listen to; if it cannot be opened it is tried again later, with no unfiltered fallback
 let delChan = null, delFallback = null, delErrN = 0;
 function startDelChan() {
   if (!sbUser) return;
@@ -7473,11 +7496,6 @@ function startDelChan() {
       }
       if (st === "CHANNEL_ERROR" || st === "TIMED_OUT") {
         delErrN++;
-        if (!delFallback) {
-          delFallback = sb.channel("nook-del-" + me)
-            .on("postgres_changes", { event: "DELETE", schema: "public", table: "messages" }, onDeletedMsg)
-            .subscribe();
-        }
         // the private channel is tried again later in case it was only a passing failure
         setTimeout(() => { if (delChan === ch && delErrN > 0 && sbUser && sbUser.id === me) startDelChan(); }, Math.min(300000, 15000 * delErrN * delErrN));
       }
@@ -7665,9 +7683,8 @@ async function boot() {
   sbUser = sess && sess.session ? sess.session.user : slowLogin ? earlyUser : null;
   let ageHeld = false, ownAvatar = null;
   if (sbUser) {
-    const { data: ban } = await sb.from("bans").select("user_id").eq("user_id", sbUser.id).maybeSingle();
+    const [{ data: ban }, { data: acct, error: aerr }] = await Promise.all([sb.from("bans").select("user_id").eq("user_id", sbUser.id).maybeSingle(), sb.from("accounts").select("id, deactivated, username, avatar, display_name").eq("id", sbUser.id).maybeSingle()]);
     if (ban) { hist(true); showBanned(); return; }
-    const { data: acct, error: aerr } = await sb.from("accounts").select("id, deactivated, username, avatar, display_name").eq("id", sbUser.id).maybeSingle();
     if (acct) ownAvatar = acct.avatar || null;
     // if the check cannot be made the answer is "held": the age screen stays up until the server says otherwise
     if (acct) {
@@ -8042,7 +8059,7 @@ async function notesPush(ns, key) {
         if (x.m) {
           const h = noteImgSig(x.m), have = ns.pm[x.id];
           let media = have && have.h === h ? have.e : null;
-          if (!media) { media = []; for (const s0 of x.m.imgs || []) { const src = await imgReal(s0); if (/^data:/.test(src || "")) media.push(await notePicOut(key, src)); } }
+          if (!media) { media = []; for (const s0 of x.m.imgs || []) { const src = await imgReal(s0); if (!/^data:/.test(src || "")) throw new Error("photo not ready"); media.push(await notePicOut(key, src)); } }
           rows.push({ owner_id: sbUser.id, id: x.id, body: await noteSeal(key, { c: x.c.id, t: x.m.t, x: x.m.text || "", ...(x.m.rpost ? { rp: x.m.rpost } : {}), ...(x.m.zpost ? { zp: x.m.zpost } : {}) }, x.id), media, deleted: false });
           done.push({ x, pm: { h, e: media } });
         } else {

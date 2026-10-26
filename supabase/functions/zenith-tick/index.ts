@@ -29,6 +29,7 @@ async function generate(_password: string, system: string, history: unknown): Pr
     const call = (think: boolean) => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
       method: "POST",
       headers: { "content-type": "application/json", "x-goog-api-key": key },
+      signal: AbortSignal.timeout(25000),
       body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: history, generationConfig: { temperature: 1, maxOutputTokens: 220, ...(think ? { thinkingConfig: { thinkingLevel: "minimal" } } : {}) } }),
     });
     let r = await call(true);

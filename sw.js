@@ -10,13 +10,14 @@ self.addEventListener("message", e => { if (e.data === "skip") self.skipWaiting(
 async function handleShare(request) {
   const home = new URL("./index.html", self.registration.scope).href;
   // a share comes from the phone's share menu; a form sent by another website is ignored
-  if (request.headers.get("sec-fetch-site") === "cross-site") return Response.redirect(home, 303);
+  const site = request.headers.get("sec-fetch-site");
+  if (site !== "none" && site !== "same-origin") return Response.redirect(home, 303);
   let data = null;
   try {
     data = await request.formData();
     const c = await caches.open(SHARE_CACHE);
     await Promise.all((await c.keys()).map(k => c.delete(k)));
-    const files = data.getAll("media").filter(f => f && typeof f.arrayBuffer === "function" && /^image\/(jpeg|png|gif|webp|heic|heif|avif)$/.test(f.type || "") && f.size <= 10 * 1024 * 1024).slice(0, 10).filter((f, i, a) => a.slice(0, i + 1).reduce((n, x) => n + x.size, 0) <= 50 * 1024 * 1024);
+    const files = data.getAll("media").filter(f => f && typeof f.arrayBuffer === "function" && /^image\/(jpeg|png|gif|webp|heic|heif|avif)$/.test(f.type || "") && f.size <= 10 * 1024 * 1024).slice(0, 10).reduce((acc, f) => acc.reduce((n, x) => n + x.size, 0) + f.size <= 50 * 1024 * 1024 ? acc.concat([f]) : acc, []);
     await Promise.all(files.map((f, i) => c.put(new URL("share/" + i, self.registration.scope).href, new Response(f, { headers: { "Content-Type": f.type || "application/octet-stream", "X-Name": encodeURIComponent(f.name || "shared") } }))));
     const q = new URLSearchParams();
     ["title", "text", "url"].forEach(k => { const v = data.get(k); if (v) q.set(k, String(v)); });
@@ -47,7 +48,7 @@ self.addEventListener("fetch", e => {
     if (hit) return hit;
     try {
       const r = await fetch(e.request);
-      if (r.ok) c.put(e.request, r.clone()).catch(() => {});
+      if (r.ok && !url.search) c.put(e.request, r.clone()).catch(() => {});
       return r;
     } catch (err) {
       if (e.request.mode === "navigate") { const home = await c.match("index.html"); if (home) return home; }
@@ -69,6 +70,7 @@ async function messageText(d) {
       r.onerror = () => rej(r.error);
     });
     const rec = await new Promise((res, rej) => { const q = db.transaction("k").objectStore("k").get(d.uid); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+    db.close();
     if (!rec || !rec.priv) return "";
     const peer = await crypto.subtle.importKey("raw", b64(d.key), { name: "ECDH", namedCurve: "P-256" }, false, []);
     const aes = await crypto.subtle.deriveKey({ name: "ECDH", public: peer }, rec.priv, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
@@ -117,7 +119,7 @@ self.addEventListener("notificationclick", e => {
     const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     for (const w of wins) {
       if ("focus" in w) {
-        await w.focus();
+        await w.focus().catch(() => {});
         w.postMessage({ type: "open", open });
         return;
       }

@@ -162,6 +162,7 @@ async function ask(parts: unknown[], system = SYSTEM): Promise<Verdict> {
         const call = (think: boolean) => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
           method: "POST",
           headers: { "content-type": "application/json", "x-goog-api-key": key },
+          signal: AbortSignal.timeout(20000),
           body: JSON.stringify({ systemInstruction: { parts: [{ text: system + " Reply with the verdict only. When it is SAFE, reply with the single word SAFE and nothing else: no reason, no analysis, no bullet points. For any other verdict give the two lines." }] }, contents: [{ role: "user", parts }], generationConfig: { temperature: 0, maxOutputTokens: 2000, ...(think ? { thinkingConfig: { thinkingLevel: "low" } } : {}) } }),
         });
         r = await call(true);

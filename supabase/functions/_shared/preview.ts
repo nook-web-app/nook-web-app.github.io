@@ -33,9 +33,10 @@ async function checkUrl(u: string): Promise<URL | null> {
   if (/^[\d.]+$/.test(h) || h.startsWith("[") || h.includes(":")) return privateIp(h) ? null : x;
   try {
     const ips: string[] = [];
-    for (const t of ["A", "AAAA"] as const) {
-      try { ips.push(...(await Deno.resolveDns(h, t)) as string[]); } catch { /* no records of this type */ }
-    }
+    const found = await Promise.all((["A", "AAAA"] as const).map(async (t) => {
+      try { return (await Deno.resolveDns(h, t)) as string[]; } catch { return [] as string[]; /* no records of this type */ }
+    }));
+    for (const f of found) ips.push(...f);
     if (!ips.length || ips.some(privateIp)) return null;
   } catch { return null; }
   return x;

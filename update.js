@@ -53,7 +53,9 @@
   const check = async manual => {
     if (!reg) { if (manual) toast("Not available right now"); return; }
     let failed = false;
-    try { await Promise.race([reg.update(), new Promise((_, rej) => setTimeout(() => rej(new Error("slow")), 10000))]); } catch (e) { failed = true; }
+    let tm;
+    try { await Promise.race([reg.update(), new Promise((_, rej) => { tm = setTimeout(() => rej(new Error("slow")), 10000); })]); } catch (e) { failed = true; }
+    clearTimeout(tm);
     await new Promise(r => setTimeout(r, 1500));
     if (reg.waiting) { if (manual) ask(reg.waiting, true); return; }
     if (manual && failed && !reg.installing) { toast("Could not check. Check your connection and try again"); return; }

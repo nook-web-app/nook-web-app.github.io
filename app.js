@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.12.1";
+const APP_VERSION = "3.12.2";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1819,6 +1819,10 @@ function zAsk(chat, list, bubble, m) {
 const ZMOOD = "Sound natural and a little witty, like a friend, not like an assistant.";
 const ZSYS_POST = ZSYS + ZMOOD + " You are writing one original post for your own profile. Keep it under 35 words, around 20 on average. Plain text only. No hashtags and no emojis.";
 const ZSYS_REPLY = ZSYS + ZMOOD + " You are replying to a post. Keep it under 25 words, around 18 on average. Plain text only. No hashtags and no emojis. No asking user questions";
+// everything Zenith writes in public is PG-13, while the chats where the owner talks to him stay 18+
+const ZPUB = ZSYS.replace("your age rating is 18+", "your age rating is PG-13") + " Everyone can read this, so keep it PG-13: nothing sexual or crude, no strong swearing and no talk about drugs.";
+const ZSYS_POST_PUB = ZSYS_POST.replace(ZSYS, ZPUB);
+const ZSYS_REPLY_PUB = ZSYS_REPLY.replace(ZSYS, ZPUB);
 const ZSYS_LIKE = "Answer with only YES or NO. Answer YES only if you genuinely like this post.";
 const ZEN_SVG = '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="zgrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#14466f"/><stop offset="1" stop-color="#208bfe"/></linearGradient></defs><circle cx="50" cy="50" r="50" fill="url(#zgrad)"/><text x="50" y="52" text-anchor="middle" dominant-baseline="central" font-size="50" font-weight="700" fill="#ffffff" font-family="Inter,system-ui,sans-serif">Z</text></svg>';
 function zenAv(size) {
@@ -1924,7 +1928,7 @@ function zenDocs() {
   const out = new Map();
   out.set("state:main", { z: S.zen });
   // the instructions for his own posts go along, so the server writes in the same voice while the app is closed
-  out.set("state:prompt", { post: ZSYS_POST, reply: ZSYS_REPLY, tz: (Intl.DateTimeFormat().resolvedOptions() || {}).timeZone || "Asia/Muscat" });
+  out.set("state:prompt", { post: ZSYS_POST_PUB, reply: ZSYS_REPLY_PUB, tz: (Intl.DateTimeFormat().resolvedOptions() || {}).timeZone || "Asia/Muscat" });
   S.posts.forEach(p => {
     if (p.ai) { const rest = Object.assign({}, p); delete rest.imgs; out.set("post:" + p.id, rest); }
     else if (p.zenReplied || p.zenAnswered || p.zenLikeChecked || p.zenLike) out.set("flag:" + (p.remote || p.id), { local: p.id, remote: p.remote || null, zenReplied: !!p.zenReplied, zenAnswered: !!p.zenAnswered, zenLikeChecked: !!p.zenLikeChecked, zenLike: !!p.zenLike });

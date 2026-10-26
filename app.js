@@ -176,7 +176,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.19.5";
+const APP_VERSION = "3.19.6";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2123,13 +2123,13 @@ function settingsV() {
   main.append(sec("Appearance"));
   main.append(h("div", { class: "seg" }, [["system", "System"], ["dark", "Dark"], ["light", "Light"]].map(t => h("button", { class: S.ui.theme === t[0] ? "on" : "", onclick: e => { S.ui.theme = t[0]; applyTheme(); persist(); e.currentTarget.parentNode.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === e.currentTarget)); } }, t[1]))));
   main.append(sec("Account"));
-  const swRow = row(ic("userswap", 22), "Switch account", "Add or switch account", openAccounts);
-  main.append(h("div", { class: "group" }, row(avatar(36), "Edit profile", "@" + S.profile.handle, editProfile), swRow, row(ic("usercut", 22), "Sign out", "Log out of this device.", () => confirmSheet("Sign out of @" + S.profile.handle + " on this phone?", "Sign out", signOutNow))));
+  const swRow = row(ic("userswap", 22), "Switch account", "Add or switch", openAccounts);
+  main.append(h("div", { class: "group" }, row(avatar(36), "Edit profile", "@" + S.profile.handle, editProfile), swRow, row(ic("usercut", 22), "Sign out", "Log out here", () => confirmSheet("Sign out of @" + S.profile.handle + " on this phone?", "Sign out", signOutNow))));
   main.append(sec("Login"));
   const totpRow = row(ic("shield", 22), "Authenticator app", rowSubs.totp || "Checking...", async () => {
     if (totpOn === null) {
       toast("Checking...");
-      callFn("totp", { action: "status" }).then(r => { totpOn = r.ok ? !!r.body.enabled : null; const sub = totpRow.querySelector(".sub"); if (sub) sub.textContent = !r.ok ? "Could not check right now. Tap to retry." : totpOn ? "On" : "Off"; if (r.ok) rowSubs.totp = totpOn ? "On" : "Off"; });
+      callFn("totp", { action: "status" }).then(r => { totpOn = r.ok ? !!r.body.enabled : null; const sub = totpRow.querySelector(".sub"); if (sub) sub.textContent = !r.ok ? "Could not check. Tap to retry" : totpOn ? "On" : "Off"; if (r.ok) rowSubs.totp = totpOn ? "On" : "Off"; });
       return;
     }
     if (totpOn) sheet([{ icon: "close", label: "Turn off authenticator", danger: true, fn: authenticatorOff }], "Authenticator is on");
@@ -2138,9 +2138,9 @@ function settingsV() {
   callFn("totp", { action: "status" }).then(r => {
     totpOn = r.ok ? !!r.body.enabled : null;
     const sub = totpRow.querySelector(".sub");
-    if (sub) sub.textContent = !r.ok ? "Could not check right now." : totpOn ? "On" : "Off";
+    if (sub) sub.textContent = !r.ok ? "Could not check" : totpOn ? "On" : "Off";
     if (r.ok) rowSubs.totp = totpOn ? "On" : "Off";
-  }).catch(() => { const sub = totpRow.querySelector(".sub"); if (sub) sub.textContent = "Could not check right now."; });
+  }).catch(() => { const sub = totpRow.querySelector(".sub"); if (sub) sub.textContent = "Could not check"; });
   let keyState = rowSubs.keyState || null, keyRows = rowSubs.keyRows || [];
   const keyRow = row(ic("backup", 22), "Message key backup", rowSubs.key || "Checking...", () => {
     if (keyState === null) { toast("Checking..."); loadKeyState(); return; }
@@ -2168,13 +2168,13 @@ function settingsV() {
       keyState = !keyRows.length ? "off" : !loc || !keyRows.some(r => r.pub === loc.pub) ? "locked" : "on";
       const modes = keyRows.map(r => r.mode);
       rowSubs.keyState = keyState; rowSubs.keyRows = keyRows;
-      rowSubs.key = keyState === "locked" ? "Locked. Tap to unlock." : keyState === "off" ? "Off" : modes.includes("login") ? "On" : "On with a recovery password";
-      if (sub) sub.textContent = keyState === "locked" ? "Locked. Tap to unlock." : keyState === "off" ? "Off" : modes.includes("login") ? "On" : "On with a recovery password";
-    } catch (e) { if (sub) sub.textContent = "Could not check right now. Tap to retry."; }
+      rowSubs.key = keyState === "locked" ? "Locked. Tap to unlock" : keyState === "off" ? "Off" : modes.includes("login") ? "On" : "On, recovery password";
+      if (sub) sub.textContent = keyState === "locked" ? "Locked. Tap to unlock" : keyState === "off" ? "Off" : modes.includes("login") ? "On" : "On, recovery password";
+    } catch (e) { if (sub) sub.textContent = "Could not check. Tap to retry"; }
   };
   loadKeyState();
   let pkRows = null;
-  const pkRow = row(ic("lock", 22), "Face ID or fingerprint", pkOk() ? "Checking..." : "Not available on this phone.", async () => {
+  const pkRow = row(ic("lock", 22), "Face ID or fingerprint", pkOk() ? "Checking..." : "Not available here", async () => {
     if (!pkOk()) { toast("This phone cannot do that"); return; }
     if (!pkRows) { toast("Checking, try again in a moment"); return; }
     sheet([
@@ -2187,14 +2187,14 @@ function settingsV() {
   });
   if (pkOk()) Promise.resolve(sb.from("passkeys").select("id, name").order("created_at")).then(r => {
     const sub = pkRow.querySelector(".sub");
-    if (!r || r.error) { if (sub) sub.textContent = "Could not check right now."; return; }
+    if (!r || r.error) { if (sub) sub.textContent = "Could not check"; return; }
     pkRows = r.data || [];
-    if (sub) sub.textContent = pkRows.length ? "On for " + pkRows.length + (pkRows.length === 1 ? " phone" : " phones") + ". Tap to change." : "Off. Tap to sign in with your face or finger.";
-  }, () => { const sub = pkRow.querySelector(".sub"); if (sub) sub.textContent = "Could not check right now."; });
+    if (sub) sub.textContent = pkRows.length ? "On for " + pkRows.length + (pkRows.length === 1 ? " phone" : " phones") : "Off";
+  }, () => { const sub = pkRow.querySelector(".sub"); if (sub) sub.textContent = "Could not check"; });
   main.append(h("div", { class: "group" },
-    row(ic("pass", 22), "Change password", "Needs your current password.", () => changePassV()),
+    row(ic("pass", 22), "Change password", "Change it", () => changePassV()),
     pkRow,
-    row(ic("mail", 22), "Change email", "We send a link to the new address.", () => changeEmailV()),
+    row(ic("mail", 22), "Change email", "Change it", () => changeEmailV()),
     totpRow, keyRow));
   main.append(sec("Feed"));
   main.append(h("div", { class: "group" }, row(ic("list", 22), "Languages I read", langText(), langSheet)));
@@ -2211,18 +2211,18 @@ function settingsV() {
     const sub = pushRowEl.querySelector(".sub");
     if (!sub) return;
     const put = t => { sub.textContent = t; rowSubs.push = t; };
-    if (!pushOk()) { put("Not available here. On iPhone, add Nook to your home screen first."); return; }
-    if (Notification.permission === "denied") { put("Blocked in your phone settings"); return; }
+    if (!pushOk()) { put("Not available. On iPhone, add Nook to the home screen first"); return; }
+    if (Notification.permission === "denied") { put("Blocked in phone settings"); return; }
     const cur = await pushSub();
-    put(cur && Notification.permission === "granted" ? "On for this device. Tap to turn off." : "Off. Tap to get follows, replies and messages when the app is closed.");
+    put(cur && Notification.permission === "granted" ? "On" : "Off");
   };
   paintPush();
   main.append(h("div", { class: "group" }, pushRowEl));
   main.append(sec("Your account"));
   main.append(h("div", { class: "group" },
-    row(ic("close", 22), "Blocked accounts", "People you blocked.", () => go({ r: "blocked" })),
-    row(ic("eyeoff", 22), "Hidden chats", "Chats you hid.", () => go({ r: "hidden" })),
-    row(ic("sliders", 22), "Deactivate account", "Hidden until you sign in again", () => confirmSheet("Hide your account until you sign in again?", "Deactivate", async () => {
+    row(ic("close", 22), "Blocked accounts", "People you blocked", () => go({ r: "blocked" })),
+    row(ic("eyeoff", 22), "Hidden chats", "Chats you hid", () => go({ r: "hidden" })),
+    row(ic("sliders", 22), "Deactivate account", "Hide until you sign in", () => confirmSheet("Hide your account until you sign in again?", "Deactivate", async () => {
       const { error } = await sb.rpc("set_my_deactivated", { flag: true });
       if (error) { toast("Could not deactivate"); return; }
       await pushDetach().catch(() => {});
@@ -2230,11 +2230,11 @@ function settingsV() {
     }))));
   main.append(sec("Your data"));
   main.append(h("div", { class: "group" },
-    row(ic("copy", 22), "Download backup", "Posts, notes and media in a zip", () => downloadBackup()),
-    h("label", { class: "srow", style: "cursor:pointer;position:relative;overflow:hidden" }, ic("backup", 22), h("div", { class: "nm" }, h("b", {}, "Restore backup"), h("span", { class: "sub" }, "Add posts and notes from a backup file")),
+    row(ic("copy", 22), "Download backup", "Posts, notes and media", () => downloadBackup()),
+    h("label", { class: "srow", style: "cursor:pointer;position:relative;overflow:hidden" }, ic("backup", 22), h("div", { class: "nm" }, h("b", {}, "Restore backup"), h("span", { class: "sub" }, "From a backup file")),
       h("input", { type: "file", accept: ".zip,.json,application/zip,application/json", class: "vh", "aria-label": "Restore backup", onchange: e => { const f = e.target.files && e.target.files[0]; e.target.value = ""; if (f) restoreBackup(f); } }))));
   main.append(sec("Updates"));
-  main.append(h("div", { class: "group" }, row(ic("check", 22), "Check for updates", "You are on version " + APP_VERSION, () => {
+  main.append(h("div", { class: "group" }, row(ic("check", 22), "Check for updates", "Version " + APP_VERSION, () => {
     if (!window.nookCheckUpdate) { toast("Not available right now"); return; }
     if (window.nookPtr) window.nookPtr.spin();
     const done = () => { if (window.nookPtr) window.nookPtr.stop(); };
@@ -2243,10 +2243,10 @@ function settingsV() {
   })));
   main.append(sec("Legal"));
   main.append(h("div", { class: "group" },
-    row(ic("eyeoff", 22), "Privacy Policy", "What we keep and why.", () => go({ r: "privacy" })),
-    row(ic("check", 22), "Terms of Use", "The rules for using Nook.", () => go({ r: "terms" }))));
+    row(ic("eyeoff", 22), "Privacy Policy", "What we keep", () => go({ r: "privacy" })),
+    row(ic("check", 22), "Terms of Use", "The rules", () => go({ r: "terms" }))));
   main.append(sec("Danger zone"));
-  main.append(h("div", { class: "group" }, row(ic("trash", 22), "Delete account", "Kept for 30 days, then deleted for good", () => {
+  main.append(h("div", { class: "group" }, row(ic("trash", 22), "Delete account", "Gone after 30 days", () => {
     const ask = () => confirmLogin("Delete account", "Your account is hidden and kept for 30 days. Sign in any time in that period to get it back. After that it is deleted for good.", "Delete", async () => {
       await pushDetach().catch(() => {});
       const r = await callFn("delete-account");

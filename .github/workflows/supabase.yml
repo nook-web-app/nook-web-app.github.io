@@ -35,6 +35,9 @@ jobs:
         run: |
           base="$BEFORE"
           if [ -z "$base" ] || echo "$base" | grep -qE '^0+$' || ! git cat-file -e "$base" 2>/dev/null; then base=HEAD~1; fi
-          for f in $(git diff --name-only "$base" HEAD -- supabase/functions | cut -d/ -f3 | sort -u); do
+          list=$(git diff --name-only "$base" HEAD -- supabase/functions | cut -d/ -f3 | sort -u)
+          # shared code is not a function of its own: the functions that import it are deployed again
+          if echo "$list" | grep -qx '_shared'; then list=$(printf '%s\n%s\n' "$list" "preview zenith-tick" | tr ' ' '\n' | grep -vx '_shared' | sort -u); fi
+          for f in $list; do
             if [ -d "supabase/functions/$f" ]; then supabase functions deploy "$f" --project-ref "$PROJECT_REF" --use-api; fi
           done

@@ -186,7 +186,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.20.12";
+const APP_VERSION = "3.20.13";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2813,14 +2813,19 @@ async function loadFeed() {
   if (pq.error) pq = await sb.from("posts").select("id, user_id, body, created_at").order("created_at", { ascending: false }).limit(300);
   const posts = pq.data;
   if (!posts) { feedFail(); return; }
+  // photos already held from an earlier load are reused; the newest few missing ones are fetched now, the rest one small group at a time afterwards
+  const prevImgs = new Map(S.posts.filter(p => p.remote && p.imgs && p.imgs.length).map(p => [p.remote, p.imgs]));
+  const inlAll = posts.filter(p => p.media_inline && !prevImgs.has(p.id));
   try {
-    const inl = posts.filter(p => p.media_inline).slice(0, 12);
+    const inl = inlAll.slice(0, 12);
     if (inl.length) {
       const full = await sb.from("posts").select("id, media_url").in("id", inl.map(p => p.id));
       const m = new Map((full.data || []).map(r => [r.id, r.media_url]));
-      inl.forEach(p => { if (m.has(p.id)) p.media_url = m.get(p.id); });
+      inl.forEach(p => { if (m.has(p.id)) { p.media_url = m.get(p.id); p.media_inline = false; } });
     }
   } catch (e) {}
+  const inlLater = inlAll.filter(p => p.media_inline).map(p => p.id);
+  posts.forEach(p => { if (p.media_inline && prevImgs.has(p.id)) { p.media_inline = false; p._imgs = prevImgs.get(p.id); } });
   // what the people you follow reposted comes in too, even when the post itself is older than the newest 300
   let rpRows = [];
   try {
@@ -2927,7 +2932,7 @@ async function loadFeed() {
     const a = who.get(p.user_id) || { username: "user", avatar: null };
     return {
       id: "r" + p.id, remote: p.id, parent: p.parent_id ? (localByRemote.get(p.parent_id) || "r" + p.parent_id) : null,
-      text: p.body || "", t: Date.parse(p.created_at), imgs: parseMedia(p.media_url),
+      text: p.body || "", t: Date.parse(p.created_at), imgs: p._imgs || parseMedia(p.media_url),
       ra: { id: p.user_id, name: a.display_name == null ? a.username : a.display_name, handle: a.username, avatar: a.avatar || null },
       liked: liked.has(p.id), reposted: reposted.has(p.id), rpAt: rpTime.get(p.id) || 0, rpBy: rpBy(p.id), saved: savedMap.get(p.id) || !!(S.sv && S.sv[p.id]),
       lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, shc: shc.get(p.id) || 0, svc: svc.get(p.id) || 0, sharedByMe: shMine.has(p.id), rp: replyTally.get(p.id) || 0, pinned: false
@@ -2939,7 +2944,7 @@ async function loadFeed() {
   const backIds = new Set(mineBack.map(p => p.id));
   const back = mineBack.map(p => ({
     id: "m" + p.id, remote: p.id, parent: p.parent_id ? (localByRemote.get(p.parent_id) || (backIds.has(p.parent_id) ? "m" + p.parent_id : "r" + p.parent_id)) : null,
-    text: p.body || "", t: Date.parse(p.created_at), imgs: parseMedia(p.media_url), media: parseMedia(p.media_url),
+    text: p.body || "", t: Date.parse(p.created_at), imgs: p._imgs || parseMedia(p.media_url), media: p._imgs || parseMedia(p.media_url),
     liked: liked.has(p.id), reposted: reposted.has(p.id), saved: !!(S.sv && S.sv[p.id]), lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, shc: shc.get(p.id) || 0, svc: svc.get(p.id) || 0, sharedByMe: shMine.has(p.id), rp: replyTally.get(p.id) || 0,
     pinned: !!meRow && meRow.pinned_post_id === p.id
   }));
@@ -2970,6 +2975,22 @@ async function loadFeed() {
   try { await fillWanted(); } catch (e) {}
   persist();
   if (stack.length === 1 && stack[0].r === "home") render();
+  if (inlLater.length) fillInlinePhotos(inlLater);
+}
+let inlineRun = 0;
+// old posts keep their photo inside the row: those come one small group at a time so a phone never holds hundreds of MB at once
+async function fillInlinePhotos(ids) {
+  const run = ++inlineRun;
+  for (let i = 0; i < ids.length && run === inlineRun; i += 4) {
+    try {
+      const { data, error } = await sb.from("posts").select("id, media_url").in("id", ids.slice(i, i + 4));
+      if (error || !data || run !== inlineRun) continue;
+      const m = new Map(data.map(r => [r.id, r.media_url]));
+      let ch = false;
+      S.posts.forEach(p => { if (p.remote && m.has(p.remote) && !(p.imgs && p.imgs.length)) { const im = parseMedia(m.get(p.remote)); if (im && im.length) { p.imgs = im; if (!p.ra) p.media = im; ch = true; } } });
+      if (ch) { persist(); if (stack.length === 1 && stack[0].r === "home") render(); }
+    } catch (e) {}
+  }
 }
 function rAv(ra, size) {
   const seed = String((ra && (ra.name || ra.handle)) || "?");
@@ -4871,7 +4892,7 @@ function authV() {
         // the typed password opens the saved chat key on a new phone, and locks it for this account when none is saved yet; both run at once and never hold the sign in for long
         if (sd && sd.user) sbUser = sd.user;
         // an account that was deleted less than 30 days ago comes back here; the plain wake up runs after it for older setups
-        await Promise.race([Promise.all([Promise.resolve(sb.rpc("nook_restore_account")).then(a => { if (a && a.data === true) { try { sessionStorage.setItem("nook-welcome-back", "1"); } catch (x) {} } }).catch(() => {}).then(() => sb.rpc("set_my_deactivated", { flag: false })).catch(() => {}), sd && sd.user ? loginBackup(p).catch(() => {}) : null]), wait(10000)]);
+        await Promise.race([Promise.all([Promise.resolve(sb.rpc("nook_restore_account")).then(a => { if (a && a.data === true) { try { sessionStorage.setItem("nook-welcome-back", "1"); } catch (x) {} } }).catch(() => {}).then(() => sb.rpc("set_my_deactivated", { flag: false })).catch(() => {}), sd && sd.user ? loginBackup(p, { fast: true }).catch(() => {}) : null]), wait(10000)]);
       }
       location.reload();
     } finally { btn.disabled = false; }
@@ -5411,6 +5432,7 @@ async function loginBackup(pw, opt) {
     if (optedOut && !opt.enable) return "off";
     if (!mine.priv.extractable) return "legacy";
     if (login && login.pub === mine.pub && !opt.reseal) {
+      if (opt.fast && kbV2(login.iters)) return "saved";
       // already saved: only locked again when the saved copy no longer opens with this password, or is in the old weaker format
       try { await openKeyBackup(login, pw); if (kbV2(login.iters)) return "saved"; } catch (e) {}
     }
@@ -5566,7 +5588,7 @@ async function checkLinks() {
 function watchLinks() {
   if (linkTimer) return;
   // asks every 8 s at first, then every 24 s once nobody has asked for a while; coming back to the tab asks at once
-  const tick = () => { linkTimer = setTimeout(() => { checkLinks().finally(tick); }, linkIdle > 40 ? 24000 : 8000); };
+  const tick = () => { linkTimer = setTimeout(() => { checkLinks().finally(tick); }, linkIdle > 200 ? 60000 : linkIdle > 40 ? 24000 : 8000); };
   tick();
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { linkIdle = 0; checkLinks(); } });
   checkLinks();
@@ -6155,7 +6177,13 @@ function sendTyping(otherId, on) {
   if (!o) {
     o = { ch: sb.channel("tp-" + otherId, { config: { private: true } }), ready: false, last: 0, sentOn: false };
     typeOut.set(otherId, o);
-    o.ch.subscribe(st => { if (st === "SUBSCRIBED") o.ready = true; });
+    o.ch.subscribe(st => {
+      if (st === "SUBSCRIBED") o.ready = true;
+      // a channel this person may not join (not a chat partner, or the rule is missing) is dropped quietly and tried again later
+      else if (st === "CHANNEL_ERROR" || st === "TIMED_OUT" || st === "CLOSED") { o.ready = false; clearTimeout(o.idle); if (typeOut.get(otherId) === o) { typeOut.delete(otherId); try { sb.removeChannel(o.ch); } catch (e) {} } }
+    });
+    // only a handful of partner channels are open at once
+    if (typeOut.size > 8) { const old = typeOut.keys().next().value; const oo = typeOut.get(old); if (oo && oo !== o) { typeOut.delete(old); clearTimeout(oo.idle); try { sb.removeChannel(oo.ch); } catch (e) {} } }
   }
   // a channel nobody typed on for a while is closed, so partners do not pile up as open channels
   clearTimeout(o.idle);
@@ -6185,6 +6213,7 @@ function onTyping(from, on) {
   const nowT = Date.now();
   if (nowT - (typeSeen.get(from) || 0) < 400) return;
   typeSeen.set(from, nowT);
+  if (typeSeen.size > 300) typeSeen.delete(typeSeen.keys().next().value);
   if (dmMuteSet.has(from) || dmHideSet.has(from)) return;
   clearTimeout(typeIn.get(from));
   if (on === false) {
@@ -6922,9 +6951,13 @@ function onDeletedMsg(payload) {
   if (liveDm) liveDm.drop(id);
   // deletes of everybody's messages arrive here, so a burst is answered with one refresh
   clearTimeout(delMsgT);
-  delMsgT = setTimeout(() => { refreshBadge(); if (refreshChat) refreshChat(); }, 300);
+  // many deletes in a short time (everybody's arrive here) are answered more slowly, so a busy server does not make every phone refresh over and over
+  const nw = Date.now();
+  if (nw - delMsgWin > 3000) { delMsgWin = nw; delMsgN = 0; }
+  delMsgN++;
+  delMsgT = setTimeout(() => { refreshBadge(); if (refreshChat) refreshChat(); }, delMsgN > 5 ? 2500 : 300);
 }
-let delMsgT = 0;
+let delMsgT = 0, delMsgWin = 0, delMsgN = 0;
 // a post of yours was taken down by the AI check: flash the screen and say why
 const modShown = new Set();
 function dropLocalPosts(remoteIds) {
@@ -7346,7 +7379,7 @@ async function notePriv(ns, key, r) {
   const lid = r.id.slice(2), here = S.posts.find(x => x.id === lid);
   if (r.deleted) {
     if (here && !here.remote && ns.pushed[r.id] === privSig(here)) { S.posts = S.posts.filter(x => x !== here); ns.pushed[r.id] = "gone"; return true; }
-    if (!here) ns.pushed[r.id] = "gone";
+    if (!here) delete ns.pushed[r.id];
     return false;
   }
   // known on this phone but gone from it: the removal goes up, it is not brought back
@@ -7445,12 +7478,11 @@ async function noteTake(ns, key, r) {
       const c = S.chats.find(x => x.id === rid);
       if (c && isNoteChat(c) && (ns.pushed[r.id] === noteCSig(c))) { S.chats = S.chats.filter(x => x !== c); ns.pushed[r.id] = "gone"; if (noteKnown) noteKnown.delete("c:" + rid); return true; }
     } else {
-      for (const c of S.chats) {
-        const m = (c.msgs || []).find(x => x.id === rid);
-        if (m && isNoteChat(c) && ns.pushed[r.id] === noteMSig(m)) { c.msgs = c.msgs.filter(x => x !== m); ns.pushed[r.id] = "gone"; delete ns.pm[r.id]; if (noteKnown) noteKnown.delete("m:" + rid); return true; }
-      }
+      const f = noteFind(rid);
+      if (f && isNoteChat(f.c) && ns.pushed[r.id] === noteMSig(f.m)) { f.c.msgs = f.c.msgs.filter(x => x !== f.m); ns.pushed[r.id] = "gone"; delete ns.pm[r.id]; if (noteKnown) noteKnown.delete("m:" + rid); if (noteIdx) noteIdx.delete(rid); return true; }
     }
-    if (ns.pushed[r.id] !== "gone" && !noteHere(true, rid) && !noteHere(false, rid)) ns.pushed[r.id] = "gone";
+    // a removal this phone never had needs no marker: nothing here can come back from it
+    if (!noteHere(true, rid) && !noteHere(false, rid)) delete ns.pushed[r.id];
     return false;
   }
   // a note this phone already knew but no longer has was removed here: the removal goes up, it is not brought back
@@ -7469,7 +7501,8 @@ async function noteTake(ns, key, r) {
   if (!cid) return false;
   let c = S.chats.find(x => x.id === cid);
   if (c && !isNoteChat(c)) return false;
-  let m = c && (c.msgs || []).find(x => x.id === rid);
+  const fm = noteFind(rid);
+  let m = c && fm && fm.c === c ? fm.m : null;
   if (m && ns.pushed[r.id] !== noteMSig(m)) return false;
   const text = String(p.x || ""), t = Number(p.t) || Date.now();
   const media = Array.isArray(r.media) ? r.media : [];
@@ -7483,18 +7516,27 @@ async function noteTake(ns, key, r) {
   for (const md of media) { try { imgs.push(await notePicIn(key, md)); } catch (e) { if (!(e && e.message === "gone" && (noteFails.get(r.id) || 0) >= 3)) throw e; } }
   if (!c) { c = { id: cid, name: "Notes to self", msgs: [], t }; S.chats.push(c); if (noteKnown) noteKnown.add("c:" + cid); ns.pushed["c:" + cid] = noteCSig(c); }
   noteFails.delete(r.id);
-  if (!m) { m = { id: rid, text, t, imgs }; c.msgs.push(m); c.msgs.sort((a, b) => a.t - b.t); if (noteKnown) noteKnown.add("m:" + rid); } else { m.text = text; m.t = t; m.imgs = imgs; }
+  if (!m) { m = { id: rid, text, t, imgs }; c.msgs.push(m); c.msgs.sort((a, b) => a.t - b.t); if (noteKnown) noteKnown.add("m:" + rid); if (noteIdx) noteIdx.set(rid, { c, m }); } else { m.text = text; m.t = t; m.imgs = imgs; }
   if (rp) m.rpost = rp; else delete m.rpost;
   if (zp) m.zpost = zp; else delete m.zpost;
   ns.pushed[r.id] = noteMSig(m);
   ns.pm[r.id] = { h: noteImgSig(m), e: media };
   return true;
 }
+const noteBad = new Map();
+// during one pull every message is looked up by id in a map instead of scanning all chats for each row
+let noteIdx = null;
+function noteFind(rid) {
+  if (noteIdx) { const e = noteIdx.get(rid); return e || null; }
+  for (const c of S.chats) { const m = (c.msgs || []).find(x => x.id === rid); if (m) return { c, m }; }
+  return null;
+}
 async function notesPull(ns, key) {
-  let changed = false;
+  let changed = false, stuck = false, okRows = 0;
   ns.pullOk = false;
   noteKnown = new Set();
-  S.chats.forEach(c => { noteKnown.add("c:" + c.id); (c.msgs || []).forEach(m => noteKnown.add("m:" + m.id)); });
+  noteIdx = new Map();
+  S.chats.forEach(c => { noteKnown.add("c:" + c.id); (c.msgs || []).forEach(m => { noteKnown.add("m:" + m.id); noteIdx.set(m.id, { c, m }); }); });
   try {
   // a little overlap, so a row saved a moment before the last pull is never missed; what is already here is skipped
   const from = ns.cursor ? new Date(Date.parse(ns.cursor) - 300000).toISOString() : "1970-01-01T00:00:00Z";
@@ -7502,16 +7544,27 @@ async function notesPull(ns, key) {
     const { data, error } = await sb.from("notes_self").select("id, body, media, deleted, updated_at").gte("updated_at", from).order("updated_at", { ascending: true }).order("id", { ascending: true }).range(off, off + 499);
     if (error) throw error;
     for (const r of data || []) {
-      try { if (await noteTake(ns, key, r)) changed = true; } catch (e) { if (e && e.message === "gone") noteFails.set(r.id, (noteFails.get(r.id) || 0) + 1); return changed; }
+      try { if (await noteTake(ns, key, r)) changed = true; noteBad.delete(r.id); okRows++; }
+      catch (e) {
+        if (e && e.message === "gone") noteFails.set(r.id, (noteFails.get(r.id) || 0) + 1);
+        // a row that can never be read (damaged, or its photo is gone) is passed over after five rounds in a row; the cursor stays behind it so it is tried again later
+        const unreadable = e && (e.message === "gone" || e.name === "OperationError" || e.name === "SyntaxError");
+        const n = (noteBad.get(r.id) || 0) + 1;
+        noteBad.set(r.id, n);
+        if (!unreadable || n < 5) return changed;
+        stuck = true; continue;
+      }
       // a row that was sealed without its id is marked as not yet pushed, so the next push seals it again
       if (legacySeen.delete(r.id) && ns.pushed[r.id] && ns.pushed[r.id] !== "gone") ns.pushed[r.id] = "reseal";
-      if (!ns.cursor || r.updated_at > ns.cursor) ns.cursor = r.updated_at;
+      if (!stuck && (!ns.cursor || r.updated_at > ns.cursor)) ns.cursor = r.updated_at;
     }
     if (!data || data.length < 500) break;
   }
+  // rows passed over count only when the key opened others in this round, so a locked key never looks like a finished pull
+  if (stuck && !okRows) return changed;
   ns.pullOk = true;
   return changed;
-  } finally { noteKnown = null; }
+  } finally { noteKnown = null; noteIdx = null; }
 }
 async function notesPush(ns, key) {
   const exist = new Set();

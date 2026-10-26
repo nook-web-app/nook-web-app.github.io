@@ -37,3 +37,6 @@ verify_jwt = false
 
 [functions.focus]
 verify_jwt = false
+
+[functions.google-guard]
+verify_jwt = false

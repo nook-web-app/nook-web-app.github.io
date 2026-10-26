@@ -34,8 +34,43 @@ const HASH_ERR = /error_code=/.test(location.hash);
 let RECOVERY = false;
 // the app reads the sign in link of a reset email itself, so a stranger's link cannot silently sign somebody in
 const sb = window.supabase ? window.supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } }) : null;
+// Google only signs in to accounts that already exist, and it can be linked to one in Settings
+const OAUTH_KEY = "nook-oauth";
+async function googleGo(mode) {
+  try { localStorage.setItem(OAUTH_KEY, JSON.stringify({ mode, t: Date.now() })); } catch (e) {}
+  const opt = { provider: "google", options: { redirectTo: location.origin + location.pathname, skipBrowserRedirect: true } };
+  let r = null;
+  try { r = mode === "link" ? await sb.auth.linkIdentity(opt) : await sb.auth.signInWithOAuth(opt); } catch (e) {}
+  if (!r || r.error || !r.data || !r.data.url) { try { localStorage.removeItem(OAUTH_KEY); } catch (e) {} toast("Google sign in is not available right now"); return; }
+  location.assign(r.data.url);
+}
+async function finishGoogle(oa, raw) {
+  const p = new URLSearchParams(raw.replace(/^#/, ""));
+  history.replaceState(history.state, "", location.pathname + location.search);
+  const say = t => setTimeout(() => { try { toast(t); } catch (e) {} }, 1500);
+  const fail = oa.mode === "link" ? "Could not link Google. That Google account may already belong to another Nook account" : "Google sign in did not work. Try again";
+  if (!p.get("access_token") || !p.get("refresh_token")) { say(fail); return; }
+  const { data, error } = await sb.auth.setSession({ access_token: p.get("access_token"), refresh_token: p.get("refresh_token") });
+  if (error || !data || !data.user) { say(fail); return; }
+  if (oa.mode === "link") { say("Google linked"); return; }
+  const g = await callFn("google-guard").catch(() => ({ ok: false, body: {} }));
+  if (!g.ok || !g.body.ok) {
+    await sb.auth.signOut().catch(() => {});
+    try { sessionStorage.setItem("nook-notice", g.body && g.body.error === "no_account" ? "No Nook account uses that Google email. Make an account first, then link Google in Settings." : "Google sign in did not work. Try again"); } catch (e) {}
+    return;
+  }
+  // an account that was deactivated or deleted less than 30 days ago comes back, like with a password
+  sbUser = data.user;
+  try { await Promise.race([Promise.resolve(sb.rpc("nook_restore_account")).catch(() => {}).then(() => sb.rpc("set_my_deactivated", { flag: false })).catch(() => {}), new Promise(r => setTimeout(r, 6000))]); } catch (e) {}
+  sbUser = null;
+}
 async function takeHashLogin() {
   const raw = location.hash;
+  if (/access_token=|error_description=/.test(raw)) {
+    let oa = null;
+    try { oa = JSON.parse(localStorage.getItem(OAUTH_KEY) || "null"); localStorage.removeItem(OAUTH_KEY); } catch (e) {}
+    if (oa && Date.now() - oa.t < 15 * 60000 && (oa.mode === "in" || oa.mode === "link")) { await finishGoogle(oa, raw); return; }
+  }
   if (!/access_token=/.test(raw)) return;
   const p = new URLSearchParams(raw.replace(/^#/, ""));
   history.replaceState(history.state, "", location.pathname + location.search);
@@ -176,7 +211,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.17.1";
+const APP_VERSION = "3.18.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2173,8 +2208,27 @@ function settingsV() {
     } catch (e) { if (sub) sub.textContent = "Could not check right now. Tap to retry."; }
   };
   loadKeyState();
+  let gIds = null;
+  const googleRow = row(ic("mail", 22), "Google", "Checking...", async () => {
+    if (!gIds) { toast("Checking, try again in a moment"); return; }
+    const g = gIds.find(i => i.provider === "google");
+    if (!g) { googleGo("link"); return; }
+    if (gIds.length < 2) { toast("Google is your only way in, so it cannot be removed"); return; }
+    sheet([{ icon: "close", label: "Unlink Google", danger: true, fn: async () => {
+      const { error } = await sb.auth.unlinkIdentity(g);
+      if (error) { toast("Could not unlink Google"); return; }
+      toast("Google unlinked"); render();
+    } }, { label: "Cancel", cancel: true }], "Google is linked");
+  });
+  Promise.resolve(sb.auth.getUserIdentities()).then(r => {
+    const sub = googleRow.querySelector(".sub");
+    if (r && r.error) { if (sub) sub.textContent = "Could not check right now."; return; }
+    gIds = (r && r.data && r.data.identities) || [];
+    if (sub) sub.textContent = gIds.some(i => i.provider === "google") ? "Linked. You can sign in with Google." : "Link it to sign in with Google.";
+  }, () => { const sub = googleRow.querySelector(".sub"); if (sub) sub.textContent = "Could not check right now."; });
   main.append(h("div", { class: "group" },
     row(ic("pass", 22), "Change password", "Needs your current password.", () => changePassV()),
+    googleRow,
     row(ic("mail", 22), "Change email", "We send a link to the new address.", () => changeEmailV()),
     totpRow, keyRow));
   main.append(sec("Feed"));
@@ -4504,7 +4558,7 @@ function authV() {
   main.append(h("div", { class: "auth" },
     h("h1", {}, "Nook"),
     h("p", { class: "sub" }, up ? "Make your account" : "Sign in to continue"),
-    ...fields, agreeRow, msg, btn, forgot, flip, SIGNUP_OPEN ? null : h("p", { class: "note" }, "New accounts are closed for now"),
+    ...fields, agreeRow, msg, btn, up ? null : h("button", { class: "ghost", onclick: () => googleGo("in") }, "Continue with Google"), forgot, flip, SIGNUP_OPEN ? null : h("p", { class: "note" }, "New accounts are closed for now"),
     h("p", { class: "note" }, legalLink("terms", "Terms"), " · ", legalLink("privacy", "Privacy"))));
 }
 

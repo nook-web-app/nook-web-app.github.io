@@ -176,7 +176,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.16.2";
+const APP_VERSION = "3.17.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1364,7 +1364,8 @@ function chatV() {
   const dmBox = h("div");
   main.append(dmBox);
   const paintInbox = async convos => {
-    convos = convos.slice().sort((a, b) => (dmPinned(b.other) ? 1 : 0) - (dmPinned(a.other) ? 1 : 0));
+    await loadDmMutes();
+    convos = convos.filter(cv => !dmHideSet.has(cv.other)).sort((a, b) => (dmPinned(b.other) ? 1 : 0) - (dmPinned(a.other) ? 1 : 0));
     const bodies = await Promise.all(convos.map(cv => (cv.last ? openText(cv.other, cv.last.body).then(zUn) : "")));
     if (!dmBox.isConnected) return;
     dmBox.textContent = "";
@@ -2201,6 +2202,7 @@ function settingsV() {
   main.append(sec("Your account"));
   main.append(h("div", { class: "group" },
     row(ic("close", 22), "Blocked accounts", "People you blocked.", () => go({ r: "blocked" })),
+    row(ic("eyeoff", 22), "Hidden chats", "Chats you hid.", () => go({ r: "hidden" })),
     row(ic("sliders", 22), "Deactivate account", "Hidden until you sign in again", () => confirmSheet("Hide your account until you sign in again?", "Deactivate", async () => {
       const { error } = await sb.rpc("set_my_deactivated", { flag: true });
       if (error) { toast("Could not deactivate"); return; }
@@ -4745,9 +4747,9 @@ function refreshBadge() {
   });
   Promise.all([
     sb.from("messages").select("sender_id").eq("recipient_id", sbUser.id).is("read_at", null).limit(500),
-    Promise.resolve(sb.from("dm_mutes").select("target_id, until_at").eq("owner_id", sbUser.id)).catch(() => ({ data: null }))
+    Promise.resolve(sb.from("dm_mutes").select("target_id, until_at, hidden").eq("owner_id", sbUser.id)).catch(() => ({ data: null }))
   ]).then(([{ data }, mu]) => {
-    if (mu && mu.data) { dmMuteSet.clear(); mu.data.forEach(r => dmMuteSet.set(r.target_id, r.until_at ? Date.parse(r.until_at) : 0)); }
+    if (mu && mu.data) { dmMuteSet.clear(); dmHideSet.clear(); mu.data.forEach(r => { if (r.hidden) dmHideSet.add(r.target_id); else dmMuteSet.set(r.target_id, r.until_at ? Date.parse(r.until_at) : 0); }); }
     const n = new Set((data || []).map(x => x.sender_id).filter(id => !dmMuted(id))).size;
     if (n !== unreadPeople) { unreadPeople = n; buildNav(null); }
   });
@@ -5691,7 +5693,20 @@ function paintTyping(from, on) {
 }
 // people whose chat is muted: no alert and no number for them (the list comes with the unread check)
 const dmMuteSet = new Map();
-const dmMuted = id => { if (!dmMuteSet.has(id)) return false; const u = dmMuteSet.get(id); return !u || u > Date.now(); };
+const dmHideSet = new Set();
+const dmMuted = id => { if (dmHideSet.has(id)) return true; if (!dmMuteSet.has(id)) return false; const u = dmMuteSet.get(id); return !u || u > Date.now(); };
+let dmMuteAt = 0, dmMuteP = null;
+function loadDmMutes(force) {
+  if (!force && dmMuteP && Date.now() - dmMuteAt < 15000) return dmMuteP;
+  dmMuteAt = Date.now();
+  dmMuteP = Promise.resolve(sb.from("dm_mutes").select("target_id, until_at, hidden").eq("owner_id", sbUser.id)).then(r => {
+    if (r && r.data) {
+      dmMuteSet.clear(); dmHideSet.clear();
+      r.data.forEach(x => { if (x.hidden) dmHideSet.add(x.target_id); else dmMuteSet.set(x.target_id, x.until_at ? Date.parse(x.until_at) : 0); });
+    }
+  }, () => {});
+  return dmMuteP;
+}
 const dmPinned = id => (S.ui.dmPins || []).includes(id);
 async function dmMenu(cv, inChat) {
   let blocked = false;
@@ -5711,7 +5726,7 @@ async function dmMenu(cv, inChat) {
       const done = () => { refreshBadge(); if (!inChat) render(); };
       const setMute = async (ms, label) => {
         const until = ms ? new Date(Date.now() + ms).toISOString() : null;
-        const { error } = await sb.from("dm_mutes").upsert({ owner_id: sbUser.id, target_id: cv.other, until_at: until }, { onConflict: "owner_id,target_id" });
+        const { error } = await sb.from("dm_mutes").upsert({ owner_id: sbUser.id, target_id: cv.other, until_at: until, hidden: false }, { onConflict: "owner_id,target_id" });
         if (error) { toast("Could not update mute"); return; }
         dmMuteSet.set(cv.other, ms ? Date.now() + ms : 0);
         done(); toast("Messages muted " + label);
@@ -5731,6 +5746,14 @@ async function dmMenu(cv, inChat) {
         { icon: "bellOff", label: "For 1 week", fn: () => setMute(168 * H, "for 1 week") },
         { icon: "bellOff", label: "Until I turn it back on", fn: () => setMute(0, "until you turn it back on") },
         { label: "Cancel", cancel: true }], "Mute messages");
+    } },
+    { icon: "eyeoff", label: "Hide chat", fn: async () => {
+      const { error } = await sb.from("dm_mutes").upsert({ owner_id: sbUser.id, target_id: cv.other, until_at: null, hidden: true }, { onConflict: "owner_id,target_id" });
+      if (error) { toast("Could not hide chat"); return; }
+      dmHideSet.add(cv.other); dmMuteSet.delete(cv.other);
+      refreshBadge();
+      if (inChat) back(); else render();
+      toast("Chat hidden. Unhide it in Settings");
     } },
     { icon: "trash", label: "Delete chat", danger: true, fn: () => confirmSheet("Delete this chat for you? The other person keeps theirs.", "Delete chat", () => deleteChat(cv, inChat)) },
     { icon: "close", label: blocked ? "Unblock" : "Block", danger: !blocked, fn: async () => { toast((await setBlocked(cv.other, !blocked)) ? (blocked ? "Unblocked" : "Blocked") : "Could not update block"); } }
@@ -6056,6 +6079,41 @@ function dmV(c) {
   sync();
 }
 
+function hiddenChatsV() {
+  topEl.append(bar(backBtn(), ttl("Hidden chats")));
+  const list = h("div");
+  main.append(list);
+  list.append(loadingEl());
+  const showNone = () => { list.textContent = ""; list.append(emptyState("user", "You have no hidden chats.")); };
+  withTimeout(loadDmMutes(true)).then(() => {
+    const ids = [...dmHideSet];
+    return cachedAccounts(ids).then(m => {
+      list.textContent = "";
+      if (!ids.length) { showNone(); return; }
+      ids.forEach(id => {
+        const a = m.get(id) || { username: "user", display_name: null, avatar: null };
+        const nm = nickOf(id) || a.display_name || a.username;
+        const btn = h("button", { class: "ghost", onclick: e => {
+          e.stopPropagation();
+          btn.disabled = true;
+          sb.from("dm_mutes").delete().eq("owner_id", sbUser.id).eq("target_id", id).then(({ error: err }) => {
+            if (err) { btn.disabled = false; toast("Could not unhide"); return; }
+            dmHideSet.delete(id);
+            row.remove();
+            refreshBadge();
+            toast("Chat is back in your list");
+            if (!list.querySelector(".lrow")) showNone();
+          });
+        } }, "Unhide");
+        const row = h("div", { class: "lrow", onclick: () => openDm(id) },
+          rAv({ name: nm, avatar: a.avatar }, 48),
+          h("div", { class: "nm" }, h("b", {}, nm), h("span", { class: "sub" }, "@" + a.username)),
+          btn);
+        list.append(row);
+      });
+    });
+  }).catch(() => failBox(list, "Could not load hidden chats.", () => render()));
+}
 function blockedV() {
   topEl.append(bar(backBtn(), ttl("Blocked accounts")));
   const list = h("div");
@@ -6458,7 +6516,7 @@ function startRealtime() {
     .subscribe();
 }
 
-const VIEWS = { privacy: legalV, terms: legalV, auth: authV, user: userV, home: homeV, thread: threadV, profile: profileV, chat: chatV, conv: convV, saved: savedV, tag: tagV, lists: listsV, list: listV, settings: settingsV, zen: zenV, dm: dmV, notifs: notifsV, followers: c => followListV(c, "followers"), following: c => followListV(c, "following"), blocked: blockedV, banned: bannedV, age: ageV, search: searchV };
+const VIEWS = { privacy: legalV, terms: legalV, auth: authV, user: userV, home: homeV, thread: threadV, profile: profileV, chat: chatV, conv: convV, saved: savedV, tag: tagV, lists: listsV, list: listV, settings: settingsV, zen: zenV, dm: dmV, notifs: notifsV, followers: c => followListV(c, "followers"), following: c => followListV(c, "following"), blocked: blockedV, hidden: hiddenChatsV, banned: bannedV, age: ageV, search: searchV };
 let lastProfileTap = 0;
 // double tap on the profile button: the first one goes back to the account used before, taps in a row after that walk down the list
 async function quickSwitch() {

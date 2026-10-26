@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.12.6";
+const APP_VERSION = "3.13.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -462,8 +462,8 @@ function langSheet() {
   // tapping a language adds or removes it and the sheet stays open, so more than one can be picked
   const paint = b => [...b.parentElement.children].forEach((r, k) => r.classList.toggle("on", k === 0 ? !sel.size : sel.has(LANGS[k - 1][0])));
   const save = b => { S.ui.langs = sel.size ? [...sel] : null; changed = true; persist(); paint(b); };
-  const items = [{ label: "Automatic", keep: true, on: !sel.size, fn: b => { sel.clear(); save(b); } }];
-  LANGS.forEach(l => items.push({ label: l[1], keep: true, on: sel.has(l[0]), fn: b => { if (sel.has(l[0])) sel.delete(l[0]); else sel.add(l[0]); save(b); } }));
+  const items = [{ label: "Automatic", keep: true, left: true, on: !sel.size, fn: b => { sel.clear(); save(b); } }];
+  LANGS.forEach(l => items.push({ label: l[1], keep: true, left: true, on: sel.has(l[0]), fn: b => { if (sel.has(l[0])) sel.delete(l[0]); else sel.add(l[0]); save(b); } }));
   items.push({ label: "Done", cancel: true });
   sheet(items, "Languages I read (pick as many as you like)", () => { if (changed) render(); });
 }
@@ -565,7 +565,7 @@ function sheet(items, title, onDone) {
   const gone = () => { scrim.style.animationPlayState = sh.style.animationPlayState = ""; dismiss(scrim, sh); if (onDone) setTimeout(onDone, 0); };
   const closeS = trackLayer(gone, gone);
   // an item with keep stays open when tapped, so several can be chosen one after another
-  const row = i => h("button", { class: "si" + (i.danger ? " danger" : "") + (i.on ? " on" : "") + (i.icon || i.av ? "" : " plain"), onclick: e => { if (i.keep) i.fn(e.currentTarget); else close(i.fn ? () => i.fn() : undefined); } }, i.av ? h("span", { class: "sic" }, rAv(i.av, 32)) : i.icon ? h("span", { class: "sic" }, ic(i.icon, 20)) : null, h("span", {}, i.label), i.trail ? h("span", { class: "trail" }, i.trail) : null, i.keep ? h("span", { class: "trail ck" }, ic("check", 18)) : null);
+  const row = i => h("button", { class: "si" + (i.danger ? " danger" : "") + (i.on ? " on" : "") + (i.left ? " left" : i.icon || i.av ? "" : " plain"), onclick: e => { if (i.keep) i.fn(e.currentTarget); else close(i.fn ? () => i.fn() : undefined); } }, i.av ? h("span", { class: "sic" }, rAv(i.av, 32)) : i.icon ? h("span", { class: "sic" }, ic(i.icon, 20)) : null, h("span", {}, i.label), i.trail ? h("span", { class: "trail" }, i.trail) : null, i.keep ? h("span", { class: "trail ck" }, ic("check", 18)) : null);
   const grab = h("div", { class: "grab" }, h("i"));
   const sh = h("div", { class: "sheet", role: "dialog", "aria-label": title || "Options" }, grab, title ? h("div", { class: "st" }, title) : null,
     h("div", { class: "sg" }, items.filter(i => !i.cancel).map(row)),
@@ -1054,14 +1054,14 @@ function acts(p, big, nc) {
     ab("rl", "reply", n, false, () => openCompose({ parent: p.id }), "Reply"),
     ab("rp", "repost", p.rpc || 0, p.reposted, () => toggleRemoteRepost(p, big), "Repost"),
     ab("like", "heart", p.lc || 0, p.liked, () => toggleRemoteLike(p, big), "Like", true),
-    ab("bm", "bookmark", 0, p.saved, () => { p.saved = !p.saved; bump = p.id + "bm"; persist(); refresh(p, big); toast(p.saved ? "Saved" : "Removed from saved"); }, "Save", true),
+    ab("bm", "bookmark", 0, p.saved, () => { setSaved(p, !p.saved); bump = p.id + "bm"; persist(); refresh(p, big); toast(p.saved ? "Saved" : "Removed from saved"); }, "Save", true),
     ab("sh", "share", 0, false, () => sharePost(p), "Share post"),
     ab("mo", "dots", 0, false, () => sheet([...(typeof p.text === "string" && p.text ? [{ icon: "copy", label: "Copy post text", fn: () => copy(p.text || "") }] : []), { icon: "eyeoff", label: "Not interested", danger: true, fn: () => lessLikeThis(p) }, { icon: "flag", label: "Report post", danger: true, fn: () => reportPost(p) }]), "More"));
   return h("div", { class: "acts" + (big ? " big" : ""), "data-pid": p.id, "data-nc": nc ? "1" : null },
     ab("rl", "reply", n, false, () => openCompose({ parent: p.id }), "Reply"),
     ab("rp", "repost", p.ai ? 0 : p.rpc || 0, p.reposted, () => (p.remote ? toggleRemoteRepost(p, big) : (p.reposted = !p.reposted, p.rpAt = p.reposted ? Date.now() : 0, bump = p.id + "rp", persist(), refresh(p, big))), "Repost"),
     ab("like", "heart", p.ai ? (p.zenLike ? 1 : 0) : p.lc || 0, p.liked, () => (p.remote ? toggleRemoteLike(p, big) : (p.liked = !p.liked, bump = p.id + "like", persist(), refresh(p, big))), "Like", true),
-    ab("bm", "bookmark", 0, p.saved, () => { p.saved = !p.saved; bump = p.id + "bm"; persist(); refresh(p, big); toast(p.saved ? "Saved" : "Removed from saved"); }, "Save", true),
+    ab("bm", "bookmark", 0, p.saved, () => { setSaved(p, !p.saved); bump = p.id + "bm"; persist(); refresh(p, big); toast(p.saved ? "Saved" : "Removed from saved"); }, "Save", true),
     ab("sh", "share", 0, false, () => sharePost(p), "Share post"),
     ab("mo", "dots", 0, false, () => postSheet(p), "More"));
 }
@@ -2668,7 +2668,7 @@ async function loadFeed() {
       id: "r" + p.id, remote: p.id, parent: p.parent_id ? (localByRemote.get(p.parent_id) || "r" + p.parent_id) : null,
       text: p.body || "", t: Date.parse(p.created_at), imgs: parseMedia(p.media_url),
       ra: { id: p.user_id, name: a.display_name == null ? a.username : a.display_name, handle: a.username, avatar: a.avatar || null },
-      liked: liked.has(p.id), reposted: reposted.has(p.id), rpAt: rpTime.get(p.id) || 0, rpBy: rpBy(p.id), saved: savedMap.get(p.id) || false,
+      liked: liked.has(p.id), reposted: reposted.has(p.id), rpAt: rpTime.get(p.id) || 0, rpBy: rpBy(p.id), saved: savedMap.get(p.id) || !!(S.sv && S.sv[p.id]),
       lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, rp: replyTally.get(p.id) || 0, pinned: false
     };
   });
@@ -2679,7 +2679,7 @@ async function loadFeed() {
   const back = mineBack.map(p => ({
     id: "m" + p.id, remote: p.id, parent: p.parent_id ? (localByRemote.get(p.parent_id) || (backIds.has(p.parent_id) ? "m" + p.parent_id : "r" + p.parent_id)) : null,
     text: p.body || "", t: Date.parse(p.created_at), imgs: parseMedia(p.media_url), media: parseMedia(p.media_url),
-    liked: liked.has(p.id), reposted: reposted.has(p.id), saved: false, lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, rp: replyTally.get(p.id) || 0,
+    liked: liked.has(p.id), reposted: reposted.has(p.id), saved: !!(S.sv && S.sv[p.id]), lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, rp: replyTally.get(p.id) || 0,
     pinned: !!meRow && meRow.pinned_post_id === p.id
   }));
   // what this person saved or liked stays, even when the post is older than the newest 300
@@ -2703,6 +2703,8 @@ async function loadFeed() {
       S.posts = S.posts.filter(p => !gone.has(p.id));
     }
   }
+  // what was saved or put in a list on another phone, and is older than the newest 300 posts, is fetched now
+  try { await fillWanted(); } catch (e) {}
   persist();
   if (stack.length === 1 && stack[0].r === "home") render();
 }
@@ -2750,37 +2752,46 @@ async function toggleRemoteRepostNow(p, big) {
     : await sb.from("reposts").delete().eq("user_id", sbUser.id).eq("post_id", p.remote);
   if (error && !(on && error.code === "23505")) { p.reposted = !on; p.rpc = Math.max(0, (p.rpc || 0) + (on ? -1 : 1)); persist(); refresh(p, big); toast("Could not update repost"); }
 }
-// the feed only holds the newest posts of everybody, so when a profile opens the person's own newest posts are fetched too
-async function loadUserPosts(id) {
-  if (!sbUser) return false;
-  const { data: rows, error } = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url").eq("user_id", id).order("created_at", { ascending: false }).limit(80);
-  if (error || !rows || !rows.length) return false;
+// posts fetched by id or by author become part of the phone's posts the same way the feed makes them
+async function mapRemotePosts(rows) {
   const have = new Set(S.posts.filter(p => p.remote).map(p => p.remote));
-  const fresh = rows.filter(r => !have.has(r.id));
-  if (!fresh.length) return false;
-  const ids = fresh.map(r => r.id);
+  const fresh = (rows || []).filter(r => !have.has(r.id));
+  if (!fresh.length) return 0;
+  const ids = fresh.map(r => r.id), authors = [...new Set(fresh.map(r => r.user_id).filter(u => u !== sbUser.id))];
   const [lk, rp, myLk, myRp, kidsQ, who] = await Promise.all([
     sb.from("likes").select("post_id").in("post_id", ids),
     sb.from("reposts").select("post_id").in("post_id", ids),
     sb.from("likes").select("post_id").eq("user_id", sbUser.id).in("post_id", ids),
     sb.from("reposts").select("post_id").eq("user_id", sbUser.id).in("post_id", ids),
     sb.from("posts").select("parent_id").in("parent_id", ids),
-    cachedAccounts([id])
+    authors.length ? cachedAccounts(authors) : new Map()
   ]);
-  const a = who.get(id);
-  if (!a) return false;
   const tally = (q, k) => { const m = new Map(); ((q && q.data) || []).forEach(r => m.set(r[k], (m.get(r[k]) || 0) + 1)); return m; };
   const lc = tally(lk, "post_id"), rc = tally(rp, "post_id"), kc = tally(kidsQ, "parent_id");
   const mineL = new Set(((myLk && myLk.data) || []).map(r => r.post_id)), mineR = new Set(((myRp && myRp.data) || []).map(r => r.post_id));
   const localByRemote = new Map(S.posts.filter(p => p.remote && !p.ra).map(p => [p.remote, p.id]));
-  fresh.forEach(p => S.posts.push({
-    id: "r" + p.id, remote: p.id, parent: p.parent_id ? (localByRemote.get(p.parent_id) || "r" + p.parent_id) : null,
-    text: p.body || "", t: Date.parse(p.created_at), imgs: parseMedia(p.media_url),
-    ra: { id, name: a.display_name == null ? a.username : a.display_name, handle: a.username, avatar: a.avatar || null },
-    liked: mineL.has(p.id), reposted: mineR.has(p.id), saved: false, lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, rp: kc.get(p.id) || 0, pinned: false
-  }));
-  persist();
-  return true;
+  let n = 0;
+  fresh.forEach(p => {
+    const mine = p.user_id === sbUser.id, a = who.get(p.user_id);
+    if (!mine && !a) return;
+    const base = {
+      remote: p.id, parent: p.parent_id ? (localByRemote.get(p.parent_id) || (mine ? "m" : "r") + p.parent_id) : null,
+      text: p.body || "", t: Date.parse(p.created_at), imgs: parseMedia(p.media_url),
+      liked: mineL.has(p.id), reposted: mineR.has(p.id), saved: !!(S.sv && S.sv[p.id]), lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, rp: kc.get(p.id) || 0, pinned: false
+    };
+    if (mine) S.posts.push(Object.assign(base, { id: "m" + p.id, media: base.imgs }));
+    else S.posts.push(Object.assign(base, { id: "r" + p.id, ra: { id: p.user_id, name: a.display_name == null ? a.username : a.display_name, handle: a.username, avatar: a.avatar || null } }));
+    n++;
+  });
+  if (n) persist();
+  return n;
+}
+// the feed only holds the newest posts of everybody, so when a profile opens the person's own newest posts are fetched too
+async function loadUserPosts(id) {
+  if (!sbUser) return false;
+  const { data: rows, error } = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url").eq("user_id", id).order("created_at", { ascending: false }).limit(80);
+  if (error || !rows || !rows.length) return false;
+  return (await mapRemotePosts(rows)) > 0;
 }
 function userV(cur) {
   const found = S.posts.find(p => p.ra && p.ra.id === cur.id);
@@ -6536,6 +6547,77 @@ function noteState() {
   if (!n || n.uid !== sbUser.id) S.notesSync = { uid: sbUser.id, cursor: "", pushed: {}, pm: {} };
   return S.notesSync;
 }
+// ---- the rest of what lives on the phone: settings, saved posts and lists, sealed the same way ----
+const REMOTE_ID = /^[0-9a-f-]{36}$/i;
+function setSaved(p, on) {
+  p.saved = on;
+  if (!p.remote) return;
+  S.sv = S.sv || {};
+  if (on) S.sv[p.remote] = 1; else delete S.sv[p.remote];
+}
+function idToRemote(id) {
+  const p = byId(id);
+  if (p && p.remote) return p.remote;
+  const m = /^[rm]([0-9a-f-]{36})$/i.exec(String(id));
+  return m ? m[1] : null;
+}
+const remoteToId = r => { const p = S.posts.find(x => x.remote === r); return p ? p.id : "r" + r; };
+const xDocs = () => ({
+  "x:ui": { theme: S.ui.theme || "system", homeTab: S.ui.homeTab || "latest", profTab: S.ui.profTab || "posts", langs: S.ui.langs || null, less: S.ui.less || null, hidden: S.ui.hidden || [] },
+  "x:saved": { ids: Object.keys(S.sv || {}).sort() },
+  "x:lists": { lists: S.lists.map(l => ({ id: l.id, name: l.name, desc: l.desc || "", rids: l.ids.map(idToRemote).filter(Boolean) })) }
+});
+const xSig = d => srcHash(JSON.stringify(d));
+function xApply(id, p, first) {
+  if (id === "x:ui") {
+    if (typeof p.theme === "string") S.ui.theme = p.theme;
+    if (typeof p.homeTab === "string") S.ui.homeTab = p.homeTab;
+    if (typeof p.profTab === "string") S.ui.profTab = p.profTab;
+    S.ui.langs = Array.isArray(p.langs) ? p.langs.map(String).slice(0, 60) : null;
+    if (p.less && typeof p.less === "object") S.ui.less = { a: p.less.a || {}, w: p.less.w || {} };
+    if (Array.isArray(p.hidden)) S.ui.hidden = p.hidden.map(String).slice(-300);
+    applyTheme();
+  } else if (id === "x:saved") {
+    const next = {};
+    (Array.isArray(p.ids) ? p.ids : []).forEach(x => { if (typeof x === "string" && REMOTE_ID.test(x)) next[x] = 1; });
+    // the first time this phone meets the server copy, what was saved here stays too
+    if (first) Object.keys(S.sv || {}).forEach(x => { next[x] = 1; });
+    S.sv = next;
+    S.posts.forEach(q => { if (q.remote) q.saved = !!next[q.remote]; });
+  } else if (id === "x:lists") {
+    const incoming = (Array.isArray(p.lists) ? p.lists : []).filter(l => l && typeof l.id === "string").map(l => ({ id: l.id, name: String(l.name || "").slice(0, 80), desc: String(l.desc || "").slice(0, 300), ids: (Array.isArray(l.rids) ? l.rids : []).filter(x => typeof x === "string" && REMOTE_ID.test(x)).map(remoteToId) }));
+    if (first) incoming.forEach(l => { const ex = S.lists.find(x => x.id === l.id); if (!ex) S.lists.push(l); else l.ids.forEach(i => { if (!ex.ids.includes(i)) ex.ids.push(i); }); });
+    else S.lists = incoming;
+  }
+}
+async function noteExtra(ns, key, r) {
+  if (r.deleted || !xDocs()[r.id]) return false;
+  const known = ns.pushed[r.id], cur = xDocs()[r.id];
+  // changed on this phone since the last sync: this phone wins and the change goes up
+  if (known && known !== xSig(cur)) return false;
+  const p = await noteOpen(key, r.body);
+  if (JSON.stringify(p) === JSON.stringify(cur)) { ns.pushed[r.id] = xSig(cur); return false; }
+  xApply(r.id, p, !known);
+  ns.pushed[r.id] = xSig(xDocs()[r.id]);
+  ns.extra = true;
+  return true;
+}
+// saved posts and list entries that are not among the newest posts are fetched, and the flags follow the posts that are here
+async function fillWanted() {
+  if (!sbUser || !S) return false;
+  const want = new Set(Object.keys(S.sv || {}));
+  S.lists.forEach(l => l.ids.forEach(i => { const r = idToRemote(i); if (r) want.add(r); }));
+  const have = new Set(S.posts.filter(p => p.remote).map(p => p.remote));
+  const miss = [...want].filter(r => !have.has(r)).slice(0, 100);
+  let changed = false;
+  if (miss.length) {
+    const { data } = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url").in("id", miss);
+    changed = (await mapRemotePosts(data || [])) > 0;
+  }
+  S.posts.forEach(p => { if (p.remote && S.sv && S.sv[p.remote] && !p.saved) { p.saved = true; changed = true; } });
+  S.lists.forEach(l => { l.ids = l.ids.map(i => { const r = idToRemote(i); return r ? remoteToId(r) : i; }); });
+  return changed;
+}
 const blobToData = b => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(b); });
 async function noteOpen(key, raw) {
   const parts = String(raw).slice(5).split(".");
@@ -6565,6 +6647,7 @@ async function notePicOut(key, src) {
 const notePath = md => { const m = /\/object\/public\/dm-media\/([^?#]+)/.exec(md && md.url || ""); return m ? decodeURIComponent(m[1]) : null; };
 // takes one row from the server into the notes on this phone; true when something changed
 async function noteTake(ns, key, r) {
+  if (r.id.startsWith("x:")) return noteExtra(ns, key, r);
   const isChat = r.id.startsWith("c:"), rid = r.id.slice(2);
   if (r.deleted) {
     if (isChat) {
@@ -6616,6 +6699,7 @@ async function noteTake(ns, key, r) {
 }
 async function notesPull(ns, key) {
   let changed = false;
+  ns.pullOk = false;
   // a little overlap, so a row saved a moment before the last pull is never missed; what is already here is skipped
   const from = ns.cursor ? new Date(Date.parse(ns.cursor) - 300000).toISOString() : "1970-01-01T00:00:00Z";
   for (let off = 0; off < 40000; off += 500) {
@@ -6627,6 +6711,7 @@ async function notesPull(ns, key) {
     }
     if (!data || data.length < 500) break;
   }
+  ns.pullOk = true;
   return changed;
 }
 async function notesPush(ns, key) {
@@ -6670,6 +6755,19 @@ async function notesPush(ns, key) {
     if (error) throw error;
     part.forEach(id => { const o = ns.pm[id]; if (o) o.e.forEach(md => { const pth = notePath(md); if (pth) stale.push(pth); }); ns.pushed[id] = "gone"; delete ns.pm[id]; });
   }
+  // settings, saved posts and lists go up only after the server copy has been read, so a fresh phone never wipes them
+  if (ns.pullOk) {
+    const xd = xDocs(), xrows = [];
+    for (const id of Object.keys(xd)) {
+      const sig = xSig(xd[id]);
+      if (ns.pushed[id] !== sig) xrows.push({ id, sig, row: { owner_id: sbUser.id, id, body: await noteSeal(key, xd[id]), media: [], deleted: false } });
+    }
+    if (xrows.length) {
+      const { error } = await sb.from("notes_self").upsert(xrows.map(x => x.row), { onConflict: "owner_id,id" });
+      if (error) throw error;
+      xrows.forEach(x => { ns.pushed[x.id] = x.sig; });
+    }
+  }
   if (stale.length) sb.storage.from(DM_BUCKET).remove(stale).then(() => {}, () => {});
 }
 function notesRefreshUI() {
@@ -6679,6 +6777,12 @@ function notesRefreshUI() {
   if (a && /^(TEXTAREA|INPUT)$/.test(a.tagName)) return;
   if (cur.r === "chat" || cur.r === "conv") render();
 }
+function extrasRefreshUI() {
+  if (layer.childElementCount) return;
+  const a = document.activeElement;
+  if (a && /^(TEXTAREA|INPUT)$/.test(a.tagName)) return;
+  render();
+}
 async function notesSync() {
   if (!notesOn || !sbUser || !S || !crypto.subtle || e2eLocked) return;
   if (notesBusy) { notesAgain = true; return; }
@@ -6687,10 +6791,12 @@ async function notesSync() {
     await ensureE2E();
     const key = await sharedKey(sbUser.id);
     const ns = noteState();
+    if (!S.sv) { S.sv = {}; S.posts.forEach(p => { if (p.saved && p.remote) S.sv[p.remote] = 1; }); }
     const changed = await notesPull(ns, key);
+    if (ns.extra) { ns.extra = false; try { await fillWanted(); } catch (e) {} }
     await notesPush(ns, key);
     notesQuiet = true; persist(); notesQuiet = false;
-    if (changed) notesRefreshUI();
+    if (changed) { if (stack[stack.length - 1].r === "chat" || stack[stack.length - 1].r === "conv") notesRefreshUI(); else extrasRefreshUI(); }
   } catch (e) { notesQuiet = false; } finally { notesBusy = false; if (notesAgain) { notesAgain = false; setTimeout(notesSync, 1500); } }
 }
 function notesStart() {

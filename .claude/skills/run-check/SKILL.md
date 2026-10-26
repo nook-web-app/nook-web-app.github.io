@@ -12,19 +12,25 @@ A full pass over the whole repo: audit every line, fix what is real, prove it wi
 1. Findings file: `<scratchpad>/findings.md`, emptied at the start. One line per finding: `TYPE|file:line|short description|exact fix`, TYPE is BUG, SEC or PERF.
 2. Keep a running count: agents launched, findings by type, fixes by type.
 
-## 1. Audit (read only)
+## 1. Audit (read only): three groups
 
-Split the code into slices of about 330 lines: `app.js` (about 8000 lines), `style.css`, `sw.js update.js guard.js supabase.js index.html manifest.webmanifest`, each edge function group under `supabase/functions/`, `supabase_setup.sql`, the other `*.sql` files, `supabase/migrations/`, `supabase/config.toml` and `.github/workflows/`. Launch one `code-auditor` agent per slice, in the background.
+Three specialist groups audit the same code, so each one goes deep on one topic:
+
+- `bug-auditor` (haiku): bugs
+- `security-auditor` (haiku): security issues
+- `perf-auditor` (haiku): performance issues
+
+Split the code into slices of about 700 lines: `app.js` (about 8000 lines), `style.css`, `sw.js update.js guard.js supabase.js index.html manifest.webmanifest`, each edge function group under `supabase/functions/`, `supabase_setup.sql`, the other `*.sql` files, `supabase/migrations/`, `supabase/config.toml` and `.github/workflows/`. Launch every group on every slice, in the background (about 14 slices x 3 groups = about 42 agents).
 
 - At most 20 subagents run at once. Launch 20, then the rest as slots free up.
-- Each auditor reads the findings file and greps it before reporting, so nothing is reported twice.
+- Each auditor greps the findings file before reporting, so nothing is reported twice, including across groups.
 - Auditors never edit repo files.
 
-## 2. Fix
+## 2. Fix: three groups, one after another
 
-One `code-fixer` agent per file group, never two agents editing the same file at once. Order: SQL and migrations first (new idempotent guarded migration, never edit applied ones), then edge functions, then `app.js`, `style.css`, `sw.js`.
+`security-fixer`, then `bug-fixer`, then `perf-fixer` (sonnet). Groups run one after another because they touch the same files; inside a group use one fixer per file group (SQL and migrations, edge functions, `app.js`, `style.css`/`sw.js`), never two agents editing the same file at once.
 
-- Fixes are minimal and match the surrounding style.
+- Fixes are minimal and match the surrounding style. New SQL goes in one new idempotent guarded migration, never edit applied ones.
 - Anything needing a dashboard setting or a secret is listed for the user, not faked.
 - Fixers log every fix and skip to `<scratchpad>/fixed*.md` as `TYPE|file:line|change` or `SKIP|file:line|reason`.
 

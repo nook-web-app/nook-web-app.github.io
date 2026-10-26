@@ -175,7 +175,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.16.0";
+const APP_VERSION = "3.16.1";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -3019,9 +3019,9 @@ function userV(cur) {
   moreBtn.onclick = () => {
     if (!st) return;
     sheet([
-      { icon: "close", label: st.blocked ? "Unblock" : "Block", danger: !st.blocked, fn: toggleBlock },
       { icon: "eyeoff", label: st.muted ? "Unmute account" : "Mute account", fn: toggleMute },
       { icon: "flag", label: "Report account", danger: true, fn: () => reportAccount(cur.id) },
+      { icon: "close", label: st.blocked ? "Unblock" : "Block", danger: !st.blocked, fn: toggleBlock },
       { label: "Cancel", cancel: true }], "@" + (st.acc && st.acc.username || who.handle));
   };
 }
@@ -4742,8 +4742,12 @@ function refreshBadge() {
     unreadN = a.count || 0;
     paintBell();
   });
-  sb.from("messages").select("sender_id").eq("recipient_id", sbUser.id).is("read_at", null).limit(500).then(({ data }) => {
-    const n = new Set((data || []).map(x => x.sender_id)).size;
+  Promise.all([
+    sb.from("messages").select("sender_id").eq("recipient_id", sbUser.id).is("read_at", null).limit(500),
+    Promise.resolve(sb.from("dm_mutes").select("target_id").eq("owner_id", sbUser.id)).catch(() => ({ data: null }))
+  ]).then(([{ data }, mu]) => {
+    if (mu && mu.data) { dmMuteSet.clear(); mu.data.forEach(r => dmMuteSet.add(r.target_id)); }
+    const n = new Set((data || []).map(x => x.sender_id).filter(id => !dmMuted(id))).size;
     if (n !== unreadPeople) { unreadPeople = n; buildNav(null); }
   });
 }
@@ -5684,9 +5688,13 @@ function paintTyping(from, on) {
     }
   });
 }
+// people whose chat is muted: no alert and no number for them (the list comes with the unread check)
+const dmMuteSet = new Set();
+const dmMuted = id => dmMuteSet.has(id);
 const dmPinned = id => (S.ui.dmPins || []).includes(id);
 async function dmMenu(cv, inChat) {
   let blocked = false;
+  const muted = dmMuted(cv.other);
   try { const r = await withTimeout(Promise.resolve(sb.from("blocks").select("blocked_id").eq("blocker_id", sbUser.id).eq("blocked_id", cv.other).maybeSingle()), 3000); blocked = !!(r && r.data); } catch (e) {}
   const pinned = dmPinned(cv.other);
   sheet([
@@ -5698,8 +5706,17 @@ async function dmMenu(cv, inChat) {
       toast(pinned ? "Unpinned" : "Pinned to the top");
     } },
     { icon: "edit", label: "Nickname", fn: () => nicknameModal(cv) },
-    { icon: "close", label: blocked ? "Unblock" : "Block", danger: !blocked, fn: async () => { toast((await setBlocked(cv.other, !blocked)) ? (blocked ? "Unblocked" : "Blocked") : "Could not update block"); } },
-    { icon: "trash", label: "Delete chat", danger: true, fn: () => confirmSheet("Delete this chat for you? The other person keeps theirs.", "Delete chat", () => deleteChat(cv, inChat)) }
+    { icon: "eyeoff", label: muted ? "Unmute messages" : "Mute messages", fn: async () => {
+      const { error } = muted
+        ? await sb.from("dm_mutes").delete().eq("owner_id", sbUser.id).eq("target_id", cv.other)
+        : await sb.from("dm_mutes").insert({ owner_id: sbUser.id, target_id: cv.other });
+      if (error && !(!muted && error.code === "23505")) { toast("Could not update mute"); return; }
+      if (muted) dmMuteSet.delete(cv.other); else dmMuteSet.add(cv.other);
+      refreshBadge(); if (!inChat) render();
+      toast(muted ? "Messages unmuted" : "Messages muted. No alerts from this chat");
+    } },
+    { icon: "trash", label: "Delete chat", danger: true, fn: () => confirmSheet("Delete this chat for you? The other person keeps theirs.", "Delete chat", () => deleteChat(cv, inChat)) },
+    { icon: "close", label: blocked ? "Unblock" : "Block", danger: !blocked, fn: async () => { toast((await setBlocked(cv.other, !blocked)) ? (blocked ? "Unblocked" : "Blocked") : "Could not update block"); } }
   ], nickOf(cv.other) || cv.name);
 }
 function nicknameModal(cv) {
@@ -6156,7 +6173,7 @@ function dmRow(cv, body) {
     rAv({ name: cv.name, avatar: cv.avatar }, 48),
     h("div", { class: "nm" }, h("b", {}, nickOf(cv.other) || cv.name, dmPinned(cv.other) ? h("span", { style: "margin-left:6px;opacity:.6;display:inline-flex;vertical-align:middle" }, ic("pin", 13)) : null), sub),
     last ? h("span", { class: "time" }, ago(Date.parse(last.created_at))) : null,
-    cv.unread ? h("span", { class: "nbadge" }, String(cv.unread)) : null);
+    cv.unread && !dmMuted(cv.other) ? h("span", { class: "nbadge" }, String(cv.unread)) : null);
 }
 function dmGist(text, media, mine) {
   const list = media || [];

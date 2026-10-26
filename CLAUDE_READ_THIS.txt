@@ -14,6 +14,9 @@ how to write updates here
 - the only extra allowed is a ! after the version, like "## 3.0.8 !", for an update that people must install right away (privacy or security fixes). It installs at once and cannot be skipped.
 - an update with the same first two numbers as the one people have (a patch like 3.0.7 to 3.0.8) installs quietly in the background without asking. A new minor or major version asks first.
 -->
+## 3.20.2
+- fixed: No blue edges on blurred banners
+
 ## 3.20.1
 - fixed: Deactivating keeps everything on your phone, and it all comes back when you sign in again
 

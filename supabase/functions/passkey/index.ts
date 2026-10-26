@@ -56,11 +56,12 @@ Deno.serve(async (req) => {
       if (!ch) return json({ error: "expired" }, 400);
       const { data: pk } = await admin.from("passkeys").select("id, user_id, credential_id, public_key, counter, transports").eq("credential_id", resp.id).maybeSingle();
       if (!pk) return json({ error: "unknown_key" }, 404);
+      let why = "";
       const v = await verifyAuthenticationResponse({
         response: resp, expectedChallenge: challengeOf(resp), expectedOrigin: ORIGIN, expectedRPID: RP_ID, requireUserVerification: true,
         credential: { id: pk.credential_id, publicKey: toU8(pk.public_key), counter: Number(pk.counter), transports: pk.transports || undefined },
-      }).catch(() => null);
-      if (!v || !v.verified) return json({ error: "failed" }, 401);
+      }).catch((e) => { why = String((e as Error).message || e).slice(0, 140); return null; });
+      if (!v || !v.verified) return json({ error: "failed", detail: why || "not verified" }, 401);
       await admin.from("passkeys").update({ counter: v.authenticationInfo.newCounter }).eq("id", pk.id);
       const ban = await admin.from("bans").select("user_id").eq("user_id", pk.user_id).maybeSingle();
       if (ban.data) return json({ error: "banned" }, 403);

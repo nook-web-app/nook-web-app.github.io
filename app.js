@@ -176,7 +176,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.19.2";
+const APP_VERSION = "3.19.3";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -4481,6 +4481,7 @@ function authV() {
   if (!SIGNUP_OPEN) authMode = "in";
   const up = authMode === "up";
   navEl.hidden = true;
+  passkeyWarm();
   const msg = h("p", { class: "note", role: "alert" });
   try { const nt = sessionStorage.getItem("nook-notice"); if (nt) { msg.textContent = nt; sessionStorage.removeItem("nook-notice"); } } catch (e) {}
   const email = h("input", { class: "in", type: "email", placeholder: "Email", autocomplete: "email", "aria-label": "Email", "data-pm": "1" });
@@ -4804,7 +4805,7 @@ const pkOk = () => !!(window.PublicKeyCredential && navigator.credentials && nav
 const pkBuf = s => { const b = atob(String(s).replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(String(s).length / 4) * 4, "=")); return Uint8Array.from(b, c => c.charCodeAt(0)).buffer; };
 const pkStr = buf => toB64(new Uint8Array(buf)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const pkName = () => { const u = navigator.userAgent || ""; return (/iPhone/.test(u) ? "iPhone" : /iPad/.test(u) ? "iPad" : /Android/.test(u) ? "Android phone" : "This device") + " " + new Date().toLocaleDateString([], { month: "short", day: "numeric" }); };
-const pkMsg = (e, d) => e === "server" && d ? "Could not sign in (" + d + ")" : e === "banned" ? "That account is banned" : e === "busy" ? "Too many tries. Wait a minute" : e === "unknown_key" ? "This phone's key is not saved on any account. Sign in with your password and set it up again" : "Could not sign in with that. Try again";
+const pkMsg = (e, d) => (e === "server" || e === "failed") && d ? "Could not sign in (" + d + ")" : e === "banned" ? "That account is banned" : e === "busy" ? "Too many tries. Wait a minute" : e === "unknown_key" ? "This phone's key is not saved on any account. Sign in with your password and set it up again" : "Could not sign in with that. Try again";
 async function passkeyAdd() {
   if (!pkOk()) { toast("This phone cannot do that"); return false; }
   const r = await callFn("passkey", { action: "reg-start" });
@@ -4826,9 +4827,18 @@ async function passkeyAdd() {
   return true;
 }
 // asks the phone for the face or fingerprint; answers with a session, or a short text that says what went wrong ("" when the person just cancelled)
+// the challenge is fetched while the sign in page is still showing, so the phone's own window opens at once
+let pkPre = null;
+function passkeyWarm() {
+  if (!pkOk() || (pkPre && Date.now() - pkPre.t < 3 * 60000)) return;
+  pkPre = { t: Date.now(), p: callFn("passkey", { action: "auth-start" }) };
+}
 async function passkeyAsk() {
   if (!pkOk()) return { err: "This phone cannot do that" };
-  const s = await callFn("passkey", { action: "auth-start" });
+  const warm = pkPre && Date.now() - pkPre.t < 4 * 60000 ? pkPre.p : null;
+  pkPre = null;
+  let s = warm ? await warm.catch(() => null) : null;
+  if (!s || !s.ok) s = await callFn("passkey", { action: "auth-start" });
   if (!s.ok) return { err: pkMsg(s.body && s.body.error, s.body && s.body.detail) };
   let cred = null;
   try { cred = await navigator.credentials.get({ publicKey: { challenge: pkBuf(s.body.challenge), rpId: s.body.rpId, timeout: 60000, userVerification: "required", allowCredentials: [] } }); }

@@ -38,6 +38,21 @@ async function keep(challenge: string, purpose: string, user: string | null, ip:
   // before the ip column exists the insert is refused; store the row without it
   if (ins.error) await admin.from("passkey_challenges").insert({ challenge, purpose, user_id: user });
 }
+// a challenge made by the phone itself (32 bytes, the time in bytes 16 to 23): accepted when it is fresh and was never used before.
+// Nothing has to be asked from this server before the phone's own window opens, so the window comes up at once.
+async function claimFresh(challenge: string, ip: string | null): Promise<boolean> {
+  let b: Uint8Array;
+  try { b = toU8(challenge); } catch { return false; }
+  if (b.length !== 32) return false;
+  const age = Date.now() - new DataView(b.buffer, b.byteOffset, 32).getFloat64(16);
+  if (!(age > -60000 && age < 5 * 60000)) return false;
+  if (Math.random() < 0.1) await admin.from("passkey_challenges").delete().lt("created_at", new Date(Date.now() - 10 * 60000).toISOString());
+  const ins = await admin.from("passkey_challenges").insert({ challenge, purpose: "auth", user_id: null, ip });
+  if (!ins.error) return true;
+  if (ins.error.code === "23505") return false;
+  // before the ip column exists the insert is refused; store the row without it
+  return !(await admin.from("passkey_challenges").insert({ challenge, purpose: "auth", user_id: null })).error;
+}
 // a challenge works once, for the right purpose, and only for a few minutes
 async function take(challenge: string, purpose: string): Promise<{ user_id: string | null } | null> {
   if (!challenge) return null;
@@ -52,6 +67,8 @@ Deno.serve(async (req) => {
   try { body = await req.json(); } catch { return json({ error: "bad_request" }, 400); }
   if (!body || typeof body !== "object") return json({ error: "bad_request" }, 400);
   try {
+    // wakes this function up while the sign in page is open, so the real sign in does not wait for a cold start
+    if (body.action === "ping") return json({ ok: true });
     if (body.action === "auth-start") {
       // a flood of sign in tries is slowed down
       const since = new Date(Date.now() - 60000).toISOString();
@@ -70,9 +87,13 @@ Deno.serve(async (req) => {
     if (body.action === "auth-finish") {
       const resp = body.response;
       if (!resp || typeof resp.id !== "string") return json({ error: "bad_request" }, 400);
-      const ch = await take(challengeOf(resp), "auth");
-      if (!ch) return json({ error: "expired" }, 400);
-      const { data: pk } = await admin.from("passkeys").select("id, user_id, credential_id, public_key, counter, transports").eq("credential_id", resp.id).maybeSingle();
+      const chal = challengeOf(resp);
+      const [fresh, pkq] = await Promise.all([
+        claimFresh(chal, await ipTag(req)),
+        admin.from("passkeys").select("id, user_id, credential_id, public_key, counter, transports").eq("credential_id", resp.id).maybeSingle(),
+      ]);
+      if (!fresh) return json({ error: "expired" }, 400);
+      const pk = pkq.data;
       if (!pk) return json({ error: "unknown_key" }, 404);
       let why = "";
       const v = await verifyAuthenticationResponse({
@@ -89,8 +110,11 @@ Deno.serve(async (req) => {
       const u = ur.data;
       if (!u || !u.user || !u.user.email) return json({ error: "failed" }, 401);
       // marks this sign in as made by a passkey, so signin never mistakes the session for a password reset link
-      await admin.auth.admin.updateUserById(pk.user_id, { app_metadata: { ...(u.user.app_metadata || {}), pk_at: Math.floor(Date.now() / 1000) } }).catch(() => {});
-      const link = await admin.auth.admin.generateLink({ type: "magiclink", email: u.user.email });
+      // (the marker and the link are made at the same time; the session is only made after both)
+      const [, link] = await Promise.all([
+        admin.auth.admin.updateUserById(pk.user_id, { app_metadata: { ...(u.user.app_metadata || {}), pk_at: Math.floor(Date.now() / 1000) } }).catch(() => {}),
+        admin.auth.admin.generateLink({ type: "magiclink", email: u.user.email }),
+      ]);
       const hashed = link.data && link.data.properties ? link.data.properties.hashed_token : "";
       if (link.error || !hashed) { console.error("link", link.error ? link.error.message : "no token"); return json({ error: "server" }, 500); }
       // the newer name for a magic link is "email"; the old one is tried when it is refused

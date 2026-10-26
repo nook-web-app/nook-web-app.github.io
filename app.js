@@ -247,7 +247,7 @@ function mkImg(src, cls, on) {
 }
 const picImg = src => mkImg(src, "pic");
 
-const APP_VERSION = "3.20.17";
+const APP_VERSION = "3.21.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2678,7 +2678,7 @@ function settingsV() {
   };
   loadKeyState();
   let pkRows = null;
-  const pkRow = row(ic("lock", 22), "Face ID or fingerprint", pkOk() ? "Checking..." : "Not available here", async () => {
+  const pkRow = row(ic("lock", 22), pkLabel(), pkOk() ? "Checking..." : "Not available here", async () => {
     if (!pkOk()) { toast("This phone cannot do that"); return; }
     if (!pkRows) { toast("Checking, try again in a moment"); Promise.resolve(sb.from("passkeys").select("id, name").order("created_at")).then(r => { if (r && !r.error) { pkRows = r.data || []; const sb2 = pkRow.querySelector(".sub"); if (sb2) sb2.textContent = pkRows.length ? "On" : "Off"; } }, () => {}); return; }
     sheet([
@@ -2687,7 +2687,7 @@ function settingsV() {
         const { error } = await sb.from("passkeys").delete().eq("id", k.id);
         toast(error ? "Could not remove it" : "Removed"); if (!error) render();
       } })),
-      { label: "Cancel", cancel: true }], "Face ID or fingerprint");
+      { label: "Cancel", cancel: true }], pkLabel());
   });
   if (pkOk()) Promise.resolve(sb.from("passkeys").select("id, name").order("created_at")).then(r => {
     const sub = pkRow.querySelector(".sub");
@@ -2697,9 +2697,8 @@ function settingsV() {
   }, () => { const sub = pkRow.querySelector(".sub"); if (sub) sub.textContent = "Couldn't check"; });
   main.append(h("div", { class: "group" },
     row(ic("pass", 22), "Change password", "Update your password", () => changePassV()),
-    pkRow,
     row(ic("mail", 22), "Change email", "Update your email", () => changeEmailV()),
-    totpRow, keyRow));
+    totpRow, keyRow, pkRow));
   main.append(sec("Feed"));
   main.append(h("div", { class: "group" }, row(ic("list", 22), "Languages I read", langText(), langSheet)));
   main.append(sec("Notifications"));
@@ -4910,7 +4909,7 @@ function addAccountModal() {
           toast("Account added");
           setTimeout(openAccounts, 350);
         } finally { b.disabled = false; }
-      } }, "Sign in with Face ID or fingerprint") : null,
+      } }, "Sign in with " + pkLabel()) : null,
       h("button", { class: "tbtn", onclick: () => recoverModal(email.value.trim()) }, "Forgot password?"),
       h("button", { class: "ghost", onclick: () => m.close(newAccountModal) }, "Make an account"))],
     onAction: close => add(close)
@@ -5000,7 +4999,7 @@ function linkedLoginModal(x) {
         await acctPut("list", list.filter(a => a.id !== x.id).concat({ id: x.id, rt: r.session.refresh_token, username: x.username, name: x.name, avatar: x.avatar, main: false }));
         m.close(() => switchAccount(x.id));
       } finally { b.disabled = false; }
-    } }, "Use Face ID or fingerprint") : null],
+    } }, "Use " + pkLabel()) : null],
     onAction: async close => {
       msg.textContent = "";
       if (!pw.input.value) { say("Enter the password"); return; }
@@ -5278,10 +5277,10 @@ function authV() {
         if (error || !sd || !sd.user) { msg.textContent = "Could not sign in. Try again"; return; }
         sbUser = sd.user;
         // an account that was deactivated or deleted less than 30 days ago comes back, like with a password
-        await Promise.race([Promise.resolve(sb.rpc("nook_restore_account")).catch(() => {}).then(() => sb.rpc("set_my_deactivated", { flag: false })).catch(() => {}), new Promise(r2 => setTimeout(r2, 8000))]);
+        await Promise.race([Promise.all([Promise.resolve(sb.rpc("nook_restore_account")).catch(() => {}), Promise.resolve(sb.rpc("set_my_deactivated", { flag: false })).catch(() => {})]), new Promise(r2 => setTimeout(r2, 8000))]);
         location.reload();
       } finally { b.disabled = false; }
-    } }, "Sign in with Face ID or fingerprint"), forgot, flip, SIGNUP_OPEN ? null : h("p", { class: "note" }, "New accounts are closed for now"),
+    } }, "Sign in with " + pkLabel()), forgot, flip, SIGNUP_OPEN ? null : h("p", { class: "note" }, "New accounts are closed for now"),
     h("p", { class: "note" }, legalLink("terms", "Terms"), " · ", legalLink("privacy", "Privacy"))));
 }
 
@@ -5546,6 +5545,8 @@ async function callFn(name, body, token) {
 // ---- Face ID and fingerprint sign in (passkeys): the phone keeps the private key, the server only checks its signature ----
 // the account id is inside the signed login ticket; the server already checked it, so no extra request is made
 const jwtUser = t => { try { const j = JSON.parse(atob(String(t).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))); return j && j.sub ? { id: j.sub } : null; } catch (e) { return null; } };
+// iPhones ask for the face, Android phones for the fingerprint
+const pkLabel = () => { const u = navigator.userAgent || ""; return /iPhone|iPad|iPod/.test(u) ? "Face ID" : /Android/.test(u) ? "Fingerprint" : "Fingerprint or Face ID"; };
 const pkOk = () => !!(window.PublicKeyCredential && navigator.credentials && navigator.credentials.create);
 const pkBuf = s => { const b = atob(String(s).replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(String(s).length / 4) * 4, "=")); return Uint8Array.from(b, c => c.charCodeAt(0)).buffer; };
 const pkStr = buf => toB64(new Uint8Array(buf)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -5572,21 +5573,24 @@ async function passkeyAdd() {
   return true;
 }
 // asks the phone for the face or fingerprint; answers with a session, or a short text that says what went wrong ("" when the person just cancelled)
-// the challenge is fetched while the sign in page is still showing, so the phone's own window opens at once
-let pkPre = null;
+// nothing is asked from the server before the phone's own window opens: the challenge is made here (random bytes and the time),
+// the server only accepts a fresh one, once. The sign in page also wakes the server up in the background.
+let pkWarmAt = 0;
 function passkeyWarm() {
-  if (!pkOk() || (pkPre && Date.now() - pkPre.t < 3 * 60000)) return;
-  pkPre = { t: Date.now(), p: callFn("passkey", { action: "auth-start" }) };
+  if (!pkOk() || Date.now() - pkWarmAt < 2 * 60000) return;
+  pkWarmAt = Date.now();
+  callFn("passkey", { action: "ping" }).catch(() => {});
+}
+function pkChallenge() {
+  const b = crypto.getRandomValues(new Uint8Array(32));
+  new DataView(b.buffer).setFloat64(16, Date.now());
+  return b.buffer;
 }
 async function passkeyAsk() {
   if (!pkOk()) return { err: "This phone cannot do that" };
-  const warm = pkPre && Date.now() - pkPre.t < 4 * 60000 ? pkPre.p : null;
-  pkPre = null;
-  let s = warm ? await warm.catch(() => null) : null;
-  if (!s || !s.ok) s = await callFn("passkey", { action: "auth-start" });
-  if (!s.ok) return { err: pkMsg(s.body && s.body.error, s.body && s.body.detail) };
+  const s = { body: { rpId: location.hostname } };
   let cred = null;
-  try { cred = await navigator.credentials.get({ publicKey: { challenge: pkBuf(s.body.challenge), rpId: s.body.rpId, timeout: 60000, userVerification: "required", allowCredentials: [] } }); }
+  try { cred = await navigator.credentials.get({ publicKey: { challenge: pkChallenge(), rpId: s.body.rpId, timeout: 60000, userVerification: "required", allowCredentials: [] } }); }
   catch (e) { return { err: e && e.name === "NotAllowedError" ? "" : "Could not use the face or fingerprint here" }; }
   if (!cred) return { err: "" };
   const a = cred.response;

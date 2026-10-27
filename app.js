@@ -249,7 +249,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.12";
+const APP_VERSION = "3.22.13";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2721,7 +2721,7 @@ function settingsV() {
     if (!pkOk()) { toast("This phone cannot do that"); return; }
     if (!pkRows) { toast("Checking, try again in a moment"); Promise.resolve(sb.from("passkeys").select("id, name").order("created_at")).then(r => { if (r && !r.error) { pkRows = r.data || []; const sb2 = pkRow.querySelector(".sub"); if (sb2) sb2.textContent = pkRows.length ? "On" : "Off"; } }, () => {}); return; }
     sheet([
-      ...(pkRows.length ? [] : [{ icon: "check", label: "Add this phone", fn: async () => { if (await passkeyAdd()) { toast("Saved. You can sign in with it now"); render(); } } }]),
+      ...(pkRows.length ? [] : [{ label: "Add this phone", fn: async () => { if (await passkeyAdd()) { toast("Saved. You can sign in with it now"); render(); } } }]),
       ...pkRows.map(k => ({ icon: "close", label: pkRows.length > 1 ? "Remove " + (k.name || "key") : "Remove", danger: true, fn: async () => {
         const { error } = await sb.from("passkeys").delete().eq("id", k.id);
         toast(error ? "Could not remove it" : "Removed"); if (!error) render();
@@ -4456,11 +4456,11 @@ function authenticatorSetup() {
     });
     m.act.disabled = true;
     const askPw = note => {
-      const pw = h("input", { class: "in", type: "password", autocomplete: "current-password", placeholder: "Your password", "aria-label": "Your password", maxlength: "200" });
+      const pw = h("input", { class: "in", type: "password", autocomplete: "current-password", placeholder: "Your password", "aria-label": "Your password", maxlength: "200", enterkeyhint: "go" });
       const go = () => { if (!pw.value) return; begin(pw.value); };
       pw.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); go(); } });
       box.textContent = "";
-      box.append(h("p", { class: "note" }, note || "Type your password to start."), pw, h("button", { class: "ghost", type: "button", onclick: go }, "Continue"));
+      box.append(h("p", { class: "note" }, note || "Type your password to start."), pw);
       setTimeout(() => { try { pw.focus(); } catch (e) {} }, 50);
     };
     const begin = pw => {

@@ -41,7 +41,14 @@ function sbFetch(input, init) {
   const f = (...a) => fetch(...a);
   try {
     const method = ((init && init.method) || (input && input.method) || "GET").toUpperCase();
-    if (method !== "GET" && method !== "HEAD") { sbInflight.clear(); return f(input, init); }
+    if (method !== "GET" && method !== "HEAD") {
+      // cleared when the write starts and again when it ends, so a read that began while it ran cannot be joined by one that starts after it
+      sbInflight.clear();
+      const r = f(input, init);
+      const done = () => sbInflight.clear();
+      r.then(done, done);
+      return r;
+    }
     if (typeof input !== "string" || !init || init.signal || init.body) return f(input, init);
     const hd = init.headers instanceof Headers ? [...init.headers.entries()] : Object.entries(init.headers || {});
     const key = method + " " + input + " " + JSON.stringify(hd.map(([k, v]) => [String(k).toLowerCase(), v]).sort());
@@ -305,8 +312,10 @@ function bigHash(v) {
     let a = 0x811c9dc5, b = 0x5bd1e995;
     for (let i = 0; i < v.length; i++) { const c = v.charCodeAt(i); a = Math.imul(a ^ c, 16777619); b = (Math.imul(b ^ c, 0x01000193) + i) | 0; }
     h = (a >>> 0).toString(36) + "." + (b >>> 0).toString(36);
-    if (bigMemo.size >= 64) bigMemo.delete(bigMemo.keys().next().value);
-    bigMemo.set(v, h);
+    if (v.length < 400000) {
+      if (bigMemo.size >= 64) bigMemo.delete(bigMemo.keys().next().value);
+      bigMemo.set(v, h);
+    }
   }
   return h;
 }
@@ -473,7 +482,7 @@ function arBackfill() {
 async function fullState() {
   const res = async a => (Array.isArray(a) && a.some(isImgId) ? imgList(a) : a);
   const out = { ...S, posts: [], chats: [] };
-  for (const p of S.posts) out.posts.push(p && p.imgs ? { ...p, imgs: await res(p.imgs) } : p);
+  for (const p of S.posts) if (!(p && p._prov)) out.posts.push(p && p.imgs ? { ...p, imgs: await res(p.imgs) } : p);
   for (const c of S.chats) { const msgs = []; for (const m of c.msgs || []) msgs.push(m && m.imgs ? { ...m, imgs: await res(m.imgs) } : m); out.chats.push({ ...c, msgs }); }
   return out;
 }
@@ -624,7 +633,7 @@ async function doFlush() {
         flushMemo.set(key, { snap: jsnap(src), sig: sg, ids, pairs });
       };
       const pids = [], cids = [];
-      S.posts.forEach(p => { if (!p || typeof p.id !== "string") return; pids.push(p.id); recMemo("p:" + p.id, p, tr => ({ ...p, imgs: (p.imgs || []).map(tr) })); });
+      S.posts.forEach(p => { if (!p || p._prov || typeof p.id !== "string") return; pids.push(p.id); recMemo("p:" + p.id, p, tr => ({ ...p, imgs: (p.imgs || []).map(tr) })); });
       S.chats.forEach(c => { if (!c || typeof c.id !== "string") return; cids.push(c.id); recMemo("c:" + c.id, c, tr => ({ ...c, msgs: (c.msgs || []).map(m => ({ ...m, imgs: (m.imgs || []).map(tr) })) })); });
       const profile = { ...S.profile, avatar: idFor(S.profile.avatar), banner: idFor(S.profile.banner) };
       const dels = Array.from(idbSig.keys()).filter(k => !seenKeys.has(k));
@@ -3432,6 +3441,8 @@ function withExtra(p0, ids0, ids, ask, table) {
   });
 }
 let feedPre = null;
+// a prefetch that will not be used (ban, age screen, sign out) is marked dead, so it also stops before it saves anybody's profile on this phone
+const dropPre = () => { if (feedPre) feedPre.dead = true; feedPre = null; };
 function feedPrefetch() {
   if (feedPre || !sbUser || !sb) return;
   const f = feedFetchStart();
@@ -3460,8 +3471,10 @@ function feedFetchStart() {
     if (!pq || !pq.data) return null;
     const [bo, bi, mu] = await Promise.all([f.blocksOut, f.blocksIn, f.mutes]);
     if (!bo || !bi || !mu || bo.error || bi.error || mu.error) return null;
+    if (f.dead) return null;
     const hid = new Set([...(bo.data || []).map(x => x.blocked_id), ...(bi.data || []).map(x => x.blocker_id), ...(mu.data || []).map(x => x.muted_id)]);
     const shownP = pq.data.filter(p => !hid.has(p.user_id));
+    if (f.dead) return null;
     const who0 = await cachedAccounts([...new Set(shownP.filter(p => p.user_id !== uid).map(p => p.user_id))]);
     return { shownP, who0 };
   })();
@@ -6631,7 +6644,7 @@ function flushPub() {
   for (let i = 0; i < all.length; i += 80) {
     const ids = all.slice(i, i + 80);
     const done = (rows, err) => ids.forEach(id => {
-      const row = rows ? rows.find(x => x.id === id) : null;
+      const row = rows ? rows.find(x => String(x.id).toLowerCase() === String(id).toLowerCase()) : null;
       waits.get(id).forEach(([res, rej]) => { if (err) rej(err); else res({ data: row ? { public_key: row.public_key } : null }); });
     });
     // a single person is asked exactly as before
@@ -8261,7 +8274,7 @@ async function boot() {
     try { verified = localStorage.getItem(okKey) === "1"; } catch (e) {}
     const ageP = verified ? null : Promise.resolve(sb.rpc("my_age_verified")).catch(e => ({ error: e }));
     const [{ data: ban }, { data: acct, error: aerr }] = await Promise.all([sb.from("bans").select("user_id").eq("user_id", sbUser.id).maybeSingle(), sb.from("accounts").select("id, deactivated, username, avatar, display_name").eq("id", sbUser.id).maybeSingle()]);
-    if (ban) { feedPre = null; hist(true); showBanned(); return; }
+    if (ban) { dropPre(); hist(true); showBanned(); return; }
     if (acct) ownAvatar = acct.avatar || null;
     // if the check cannot be made the answer is "held": the age screen stays up until the server says otherwise
     if (acct) {
@@ -8277,8 +8290,8 @@ async function boot() {
     let ageKnown = false;
     if (aerr) { try { ageKnown = localStorage.getItem("nook-age-ok:" + sbUser.id) === "1"; } catch (e) {} }
     ageHeld = !!(acct && acct.age_hold) || (!!aerr && !acct && !ageKnown);
-    if (ageHeld) feedPre = null;
-    if (!aerr && (!acct || acct.deactivated)) { try { sessionStorage.setItem("nook-notice", acct ? "That account is deactivated. Sign in again to bring it back." : "Your account could not be loaded. Sign in again."); } catch (e) {} await sb.auth.signOut({ scope: "local" }).catch(() => {}); sbUser = null; }
+    if (ageHeld) dropPre();
+    if (!aerr && (!acct || acct.deactivated)) { try { sessionStorage.setItem("nook-notice", acct ? "That account is deactivated. Sign in again to bring it back." : "Your account could not be loaded. Sign in again."); } catch (e) {} dropPre(); await sb.auth.signOut({ scope: "local" }).catch(() => {}); sbUser = null; }
     else if (sbUser && await foreignLocalData(acct)) {
       // an account that was deactivated here comes back with everything it had on this phone
       let raw = null;
@@ -8520,7 +8533,8 @@ function noteAhead(key, rows, from) {
     noteMemo.set(r.id, { raw: r.body, key, pr: noteOpenNow(key, r.body, r.id) });
   }
 }
-const yieldMain = () => (typeof scheduler !== "undefined" && scheduler.yield ? scheduler.yield() : new Promise(r => setTimeout(r, 0)));
+// a page in the background has its timers slowed to a crawl, so it does not wait for them
+const yieldMain = () => (document.hidden ? Promise.resolve() : typeof scheduler !== "undefined" && scheduler.yield ? scheduler.yield() : new Promise(r => setTimeout(r, 0)));
 // whether a chat holds a message of Zenith, remembered per chat during a pull and only looked at again for messages added since
 const noteAiMemo = new Map();
 function noteIsChat(c) {

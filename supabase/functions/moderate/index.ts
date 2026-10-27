@@ -453,12 +453,13 @@ Deno.serve(async (req) => {
       const { data: waits } = ids.length ? await admin.from("mod_retry").select("post_id, tries, next_at").in("post_id", ids) : { data: [] };
       const wait = new Map((waits || []).map((w) => [w.post_id as string, w as { tries: number; next_at: string }]));
       const todo = ids.filter((id) => !wait.has(id) || Date.parse(wait.get(id)!.next_at) <= Date.now()).slice(0, PER_SWEEP).map((id) => ({ id }));
+      // the wait is written before the check starts: a check that hangs or is cut off by the runtime still leaves its wait behind
       const again = async (id: string) => {
-        await als.run(fresh(), () => run(id));
-        const { data: left } = await admin.from("posts").select("id").eq("id", id).or("mod_status.eq.pending,text_pending.eq.true").maybeSingle();
-        if (!left) { await admin.from("mod_retry").delete().eq("post_id", id); return; }
         const tries = (wait.get(id)?.tries || 0) + 1;
         await admin.from("mod_retry").upsert({ post_id: id, tries, next_at: new Date(Date.now() + Math.min(2 ** (tries - 1), 30) * 60000).toISOString() }, { onConflict: "post_id" });
+        await als.run(fresh(), () => run(id));
+        const { data: left } = await admin.from("posts").select("id").eq("id", id).or("mod_status.eq.pending,text_pending.eq.true").maybeSingle();
+        if (!left) await admin.from("mod_retry").delete().eq("post_id", id);
       };
       for (let i = 0; i < todo.length; i += AT_ONCE) await Promise.all(todo.slice(i, i + AT_ONCE).map((r) => again(r.id)));
       const { data: accs } = await admin.from("accounts").select("id").or("avatar_mod.eq.pending,banner_mod.eq.pending,text_pending.eq.true").limit(PER_SWEEP);

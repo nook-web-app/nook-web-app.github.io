@@ -3667,7 +3667,7 @@ async function loadFeedNow(pre) {
     };
   });
   // my posts that only the server has (made on another device, or lost from this one) come back
-  const known = new Set(S.posts.filter(p => p.remote && !p.ra).map(p => p.remote));
+  const known = new Set(S.posts.filter(p => p.remote && !p.ra && !p._prov).map(p => p.remote));
   const mineBack = shown.filter(p => p.user_id === sbUser.id && !known.has(p.id) && !pend.has(p.id));
   const backIds = new Set(mineBack.map(p => p.id));
   const back = mineBack.map(p => ({
@@ -3739,7 +3739,8 @@ const busyTaps = new Set();
 const tapAt = new Map();
 function noteTap(p, k) { if (!p.remote) return; const e = tapAt.get(p.remote) || {}; e.t = Date.now(); e[k] = k === "l" ? { v: p.liked, c: p.lc || 0 } : { v: p.reposted, c: p.rpc || 0 }; tapAt.set(p.remote, e); if (tapAt.size > 200) tapAt.delete(tapAt.keys().next().value); }
 async function toggleRemoteLike(p, big) {
-  if (!sbUser || busyTaps.has("l" + p.id)) return;
+  // a post drawn early (before its counts have arrived) cannot be liked yet: the full list replaces it a moment later
+  if (!sbUser || p._prov || busyTaps.has("l" + p.id)) return;
   busyTaps.add("l" + p.id);
   try { await toggleRemoteLikeNow(p, big); } finally { busyTaps.delete("l" + p.id); }
 }
@@ -3759,7 +3760,7 @@ async function toggleRemoteLikeNow(p, big) {
   }
 }
 async function toggleRemoteRepost(p, big) {
-  if (!sbUser || busyTaps.has("r" + p.id)) return;
+  if (!sbUser || p._prov || busyTaps.has("r" + p.id)) return;
   busyTaps.add("r" + p.id);
   try { await toggleRemoteRepostNow(p, big); } finally { busyTaps.delete("r" + p.id); }
 }

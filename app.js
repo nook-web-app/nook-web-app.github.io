@@ -34,7 +34,28 @@ const SB_KEY = "sb_publishable_BzsW9TXvMRjUQf5BZj3pLg_197wdNpq";
 const HASH_ERR = /error_code=/.test(location.hash);
 let RECOVERY = false;
 // the app reads the sign in link of a reset email itself, so a stranger's link cannot silently sign somebody in
-const sb = window.supabase ? window.supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } }) : null;
+// identical reads that are asked for at the same moment (boot starts several parts of the app that each need the same row) share one network call.
+// Only GET and HEAD join, only while the first one is still in flight, and any write clears the list, so a read that starts after a write never gets an older answer.
+const sbInflight = new Map();
+function sbFetch(input, init) {
+  const f = (...a) => fetch(...a);
+  try {
+    const method = ((init && init.method) || (input && input.method) || "GET").toUpperCase();
+    if (method !== "GET" && method !== "HEAD") { sbInflight.clear(); return f(input, init); }
+    if (typeof input !== "string" || !init || init.signal || init.body) return f(input, init);
+    const hd = init.headers instanceof Headers ? [...init.headers.entries()] : Object.entries(init.headers || {});
+    const key = method + " " + input + " " + JSON.stringify(hd.map(([k, v]) => [String(k).toLowerCase(), v]).sort());
+    let p = sbInflight.get(key);
+    if (!p) {
+      p = f(input, init);
+      sbInflight.set(key, p);
+      const drop = () => { if (sbInflight.get(key) === p) sbInflight.delete(key); };
+      p.then(drop, drop);
+    }
+    return p.then(r => r.clone());
+  } catch (e) { return f(input, init); }
+}
+const sb = window.supabase ? window.supabase.createClient(SB_URL, SB_KEY, { global: { fetch: sbFetch }, auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } }) : null;
 function resetNonceGet() {
   try {
     const o = JSON.parse(localStorage.getItem("nook-reset-nonce") || "null");
@@ -127,19 +148,27 @@ const P = {
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5"/>'
 };
 
+// [E3] each icon (name, size, fill) is built once and every use is a deep copy of it: the same svg as before, without
+// building and parsing it again; a home feed of thousands of posts draws six icons on every card
+const icTpl = new Map();
 function ic(n, s, fill) {
-  const v = document.createElementNS(NS, "svg");
-  v.setAttribute("viewBox", "0 0 24 24");
-  v.setAttribute("width", s || 22);
-  v.setAttribute("height", s || 22);
-  v.setAttribute("fill", fill ? "currentColor" : "none");
-  v.setAttribute("stroke", "currentColor");
-  v.setAttribute("stroke-width", "2");
-  v.setAttribute("stroke-linecap", "round");
-  v.setAttribute("stroke-linejoin", "round");
-  v.setAttribute("aria-hidden", "true");
-  v.innerHTML = P[n];
-  return v;
+  const key = n + "|" + (s || 22) + "|" + (fill ? 1 : 0);
+  let v = icTpl.get(key);
+  if (!v) {
+    v = document.createElementNS(NS, "svg");
+    v.setAttribute("viewBox", "0 0 24 24");
+    v.setAttribute("width", s || 22);
+    v.setAttribute("height", s || 22);
+    v.setAttribute("fill", fill ? "currentColor" : "none");
+    v.setAttribute("stroke", "currentColor");
+    v.setAttribute("stroke-width", "2");
+    v.setAttribute("stroke-linecap", "round");
+    v.setAttribute("stroke-linejoin", "round");
+    v.setAttribute("aria-hidden", "true");
+    v.innerHTML = P[n];
+    icTpl.set(key, v);
+  }
+  return v.cloneNode(true);
 }
 function add(e, k) {
   for (const c of k) {
@@ -255,7 +284,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.27";
+const APP_VERSION = "3.22.28";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -267,13 +296,27 @@ class ZenSeen extends Map {
   clear() { zenHashes.clear(); return super.clear(); }
 }
 const zenSeen = new ZenSeen();
+// long strings (avatar data urls, about 80 KB, copied into every post of the same author) are hashed once per distinct content:
+// the Map lookup uses the engine's native string hash, so repeated copies cost far less than the character loop
+const bigMemo = new Map();
+function bigHash(v) {
+  let h = bigMemo.get(v);
+  if (h === undefined) {
+    let a = 0x811c9dc5, b = 0x5bd1e995;
+    for (let i = 0; i < v.length; i++) { const c = v.charCodeAt(i); a = Math.imul(a ^ c, 16777619); b = (Math.imul(b ^ c, 0x01000193) + i) | 0; }
+    h = (a >>> 0).toString(36) + "." + (b >>> 0).toString(36);
+    if (bigMemo.size >= 64) bigMemo.delete(bigMemo.keys().next().value);
+    bigMemo.set(v, h);
+  }
+  return h;
+}
 function zenHash(o) {
   let a = 0x811c9dc5, b = 0x5bd1e995, n = 0;
   const mix = str => { for (let i = 0; i < str.length; i++) { const c = str.charCodeAt(i); a = Math.imul(a ^ c, 16777619); b = (Math.imul(b ^ c, 0x01000193) + i) | 0; } n += str.length; };
   const walk = v => {
     if (v === null || v === undefined) { mix("n"); return; }
     const t = typeof v;
-    if (t === "string") { mix("s" + v.length + ":"); mix(v); }
+    if (t === "string") { if (v.length > 2048) mix("L" + v.length + ":" + bigHash(v)); else { mix("s" + v.length + ":"); mix(v); } }
     else if (t === "number" || t === "boolean") mix("p" + v);
     else if (Array.isArray(v)) { mix("["); v.forEach(walk); mix("]"); }
     else if (t === "object") { mix("{"); for (const k in v) { if (v[k] === undefined) continue; mix(k + "="); walk(v[k]); } mix("}"); }
@@ -492,6 +535,12 @@ function idbSaveNow(d, meta, fresh, drop, puts, dels, dropLegacy) {
     t.onabort = () => rej(t.error);
   });
 }
+// [E6] a draft is only kept on this phone: it is in neither the notes copy nor the Zenith copy, so typing it does not arm their syncs
+// (each keystroke re-armed zenSync 2.5 s and notesSync 3 s ahead, and the pull/push they run lands right after the last key)
+function persistDraft() {
+  clearTimeout(timer);
+  timer = setTimeout(flush, 250);
+}
 function persist() {
   clearTimeout(timer);
   timer = setTimeout(flush, 250);
@@ -502,6 +551,30 @@ function flush() {
   chain = chain.then(doFlush).catch(() => {});
   return chain;
 }
+// [E2] a record whose content is the same as at the last save is not walked and hashed again.
+// jsnap keeps a private copy of what a record looked like, jsame compares the live data against it (a property compare, no strings built);
+// the compare sees exactly the kind of change the hash sees (plain values, lists and objects), so nothing that was saved before is skipped
+function jsnap(v) {
+  if (v === null || typeof v !== "object") return v;
+  if (Array.isArray(v)) { const a = new Array(v.length); for (let i = 0; i < v.length; i++) a[i] = jsnap(v[i]); return a; }
+  const o = {};
+  for (const k in v) o[k] = jsnap(v[k]);
+  return o;
+}
+function jsame(a, b) {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return a !== a && b !== b;
+  const ar = Array.isArray(a);
+  if (ar !== Array.isArray(b)) return false;
+  if (ar) { if (a.length !== b.length) return false; for (let i = 0; i < a.length; i++) if (!jsame(a[i], b[i])) return false; return true; }
+  let n = 0;
+  for (const k in b) { n++; if (!(k in a) || !jsame(a[k], b[k])) return false; }
+  let m = 0;
+  for (const k in a) m++;
+  return n === m;
+}
+const flushMemo = new Map();
+let metaMemo = null;
 let hashMemo = new Map();
 function srcHash(src) {
   let a = 0x811c9dc5, b = 0x5bd1e995;
@@ -532,16 +605,37 @@ async function doFlush() {
         seenKeys.add(key);
         const sg = zenHash(r);
         if (idbSig.get(key) !== sg) { puts.push([key, r]); sigs.set(key, sg); }
+        return sg;
+      };
+      // [E2] src is the live post or chat, build makes the record to save from it (with its pictures turned into ids).
+      // When src is unchanged since the last save and that save is what the database holds, the record is neither built nor hashed:
+      // the pictures it used are counted as used and the picture-hash memo keeps its entries.
+      const recMemo = (key, src, build) => {
+        const m = flushMemo.get(key);
+        if (m && idbSig.get(key) === m.sig && jsame(m.snap, src)) {
+          seenKeys.add(key);
+          m.ids.forEach(id => used.add(id));
+          m.pairs.forEach(([a, id]) => memo.set(a, id));
+          return;
+        }
+        const ids = [], pairs = [];
+        const track = a => { const id = idFor(a); if (id) { ids.push(id); if (!isImgId(a)) pairs.push([a, id]); } return id; };
+        const sg = rec(key, build(track));
+        flushMemo.set(key, { snap: jsnap(src), sig: sg, ids, pairs });
       };
       const pids = [], cids = [];
-      S.posts.forEach(p => { if (!p || typeof p.id !== "string") return; pids.push(p.id); rec("p:" + p.id, { ...p, imgs: (p.imgs || []).map(idFor) }); });
-      S.chats.forEach(c => { if (!c || typeof c.id !== "string") return; cids.push(c.id); rec("c:" + c.id, { ...c, msgs: (c.msgs || []).map(m => ({ ...m, imgs: (m.imgs || []).map(idFor) })) }); });
+      S.posts.forEach(p => { if (!p || typeof p.id !== "string") return; pids.push(p.id); recMemo("p:" + p.id, p, tr => ({ ...p, imgs: (p.imgs || []).map(tr) })); });
+      S.chats.forEach(c => { if (!c || typeof c.id !== "string") return; cids.push(c.id); recMemo("c:" + c.id, c, tr => ({ ...c, msgs: (c.msgs || []).map(m => ({ ...m, imgs: (m.imgs || []).map(tr) })) })); });
       const profile = { ...S.profile, avatar: idFor(S.profile.avatar), banner: idFor(S.profile.banner) };
       const dels = Array.from(idbSig.keys()).filter(k => !seenKeys.has(k));
       const drop = Array.from(knownIds).filter(id => !used.has(id));
+      flushMemo.forEach((_, k) => { if (!seenKeys.has(k)) flushMemo.delete(k); });
       const rest = { ...S, profile, split: 2, pids, cids };
       delete rest.posts; delete rest.chats;
-      const msig = zenHash(rest);
+      // [E2] the settings part (it holds the sync bookkeeping of every note, thousands of entries) is compared, not hashed, when it did not change
+      let msig;
+      if (metaMemo && jsame(metaMemo.snap, rest)) msig = metaMemo.sig;
+      else { msig = zenHash(rest); metaMemo = { snap: jsnap(rest), sig: msig }; }
       const metaOut = msig !== idbMetaSig || idbLegacy || puts.length || dels.length ? rest : null;
       if (metaOut || puts.length || dels.length || fresh.size || drop.length || idbLegacy) {
         await idbSave(db, metaOut, Array.from(fresh), drop, puts, dels, idbLegacy);
@@ -606,9 +700,24 @@ function applyTheme() {
   else r.setAttribute("data-theme", S.ui.theme);
   syncBar();
 }
+// --bg of each look is read once (the read forces a full style pass) and remembered; a look not seen yet is read in the next frame, the very first one at once
+const barBg = new Map();
+let barQ = 0;
+const barKey = () => { const t = S && S.ui && S.ui.theme; return t === "dark" || t === "light" ? t : window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; };
+function barRead() {
+  const m = document.querySelector('meta[name="theme-color"]');
+  if (!m) return;
+  const v = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+  barBg.set(barKey(), v);
+  m.setAttribute("content", v);
+}
 function syncBar() {
   const m = document.querySelector('meta[name="theme-color"]');
-  if (m) m.setAttribute("content", getComputedStyle(document.documentElement).getPropertyValue("--bg").trim());
+  if (!m) return;
+  const k = barKey();
+  if (barBg.has(k)) m.setAttribute("content", barBg.get(k));
+  else if (!barBg.size) barRead();
+  else if (!barQ) barQ = requestAnimationFrame(() => { barQ = 0; if (!barBg.has(barKey())) barRead(); else syncBar(); });
 }
 if (window.matchMedia) {
   const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -1509,11 +1618,35 @@ function swipeReply(el, onSwipe) {
   }, { passive: true });
   el.addEventListener("click", e => { if (swiped) { e.stopImmediatePropagation(); e.preventDefault(); swiped = false; } }, true);
 }
+// [E3] a long list is drawn in slices: the first screenful at once, the rest in short slices of the main thread after it, appended in order
+// behind the last card, so the page ends up the same but never blocks for seconds (2500 cards took 3.6 s in one piece at 4x CPU).
+// The slices stop by themselves when the list is taken off the page (another screen was drawn).
+const POST_FIRST = 12, POST_SLICE_MS = 8;
 function postList(arr, opt) {
   opt = opt || {};
   if (!arr.length) return opt.empty;
   const f = document.createDocumentFragment();
-  arr.forEach(p => f.append(postCard(p, opt)));
+  const n = arr.length > POST_FIRST + 24 ? POST_FIRST : arr.length;
+  for (let i = 0; i < n; i++) f.append(postCard(arr[i], opt));
+  if (n < arr.length) {
+    let last = f.lastChild, i = n;
+    // postCard reads these two while the page is being drawn; they are put back around each slice
+    const fr = fresh, bp = bump;
+    let waits = 0;
+    const slice = () => {
+      // a list that is not on the page yet (a caller that attaches it a little later) is waited for, a few times; one taken off is dropped
+      if (!last.isConnected) { if (++waits <= 20) setTimeout(slice, 250); return; }
+      const sf = fresh, sb = bump, g = document.createDocumentFragment(), t0 = performance.now();
+      fresh = fr; bump = bp;
+      try { do g.append(postCard(arr[i++], opt)); while (i < arr.length && performance.now() - t0 < POST_SLICE_MS); }
+      finally { fresh = sf; bump = sb; }
+      const e = g.lastChild;
+      last.after(g);
+      last = e;
+      if (i < arr.length) setTimeout(slice, 0);
+    };
+    setTimeout(slice, 0);
+  }
   return f;
 }
 
@@ -1805,8 +1938,8 @@ function chatV() {
       if (next !== sig) { sig = next; cacheWrite("inbox:" + sbUser.id, convos); paintInbox(convos); }
     }, () => { if (!hit && dmBox.isConnected) { dmBox.textContent = ""; inboxN = 0; showEmpty(); } });
     refreshChat = pull;
-    let busy = false;
-    const iv = setInterval(() => { if (!document.hidden && !busy) { busy = true; Promise.resolve(pull()).finally(() => { busy = false; }); } }, 5000);
+    let busy = false, polledAt = Date.now();
+    const iv = setInterval(() => { if (!document.hidden && !busy && Date.now() - polledAt >= pollGap() - 500) { polledAt = Date.now(); busy = true; Promise.resolve(pull()).finally(() => { busy = false; }); } }, 5000);
     pageStop = () => clearInterval(iv);
     pull();
   }
@@ -1880,7 +2013,7 @@ function convV(c) {
   const strip = h("div", { class: "cpend", hidden: true });
   const ta = h("textarea", { rows: 1, placeholder: "Message", "aria-label": "Message", enterkeyhint: "send", autocomplete: "off" });
   ta.value = chat.draft || "";
-  fillReply = pre => { ta.value = pre; chat.draft = pre; persist(); sync(); ta.focus(); };
+  fillReply = pre => { ta.value = pre; chat.draft = pre; persistDraft(); sync(); ta.focus(); };
   const send = h("button", { class: "pri", "aria-label": "Send", disabled: true }, ic("send", 20));
   const sync = () => {
     send.disabled = jobs.length > 0 || (!ta.value.trim() && !pend.length);
@@ -1917,9 +2050,9 @@ function convV(c) {
   });
   const zpop = h("button", { class: "zpop", type: "button" }, zenAv(34), h("span", {}, h("b", {}, "Zenith AI")));
   zpop.addEventListener("pointerdown", e => e.preventDefault());
-  zpop.addEventListener("click", () => { ta.value = ta.value.replace(/@\w*$/, "@zenith "); zpop.classList.remove("on"); chat.draft = ta.value; persist(); sync(); ta.focus(); });
+  zpop.addEventListener("click", () => { ta.value = ta.value.replace(/@\w*$/, "@zenith "); zpop.classList.remove("on"); chat.draft = ta.value; persistDraft(); sync(); ta.focus(); });
   const dock = h("div", { class: "cdock" }, zpop, strip, h("div", { class: "cin" }, att, ta, send));
-  ta.addEventListener("input", () => { chat.draft = ta.value; persist(); zpop.classList.toggle("on", zOn() && /@\w*$/.test(ta.value)); });
+  ta.addEventListener("input", () => { chat.draft = ta.value; persistDraft(); zpop.classList.toggle("on", zOn() && /@\w*$/.test(ta.value)); });
   sync();
   send.addEventListener("pointerdown", e => e.preventDefault());
   ta.addEventListener("keydown", e => {
@@ -2318,10 +2451,15 @@ const ZSYS_POST_PUB = ZSYS_POST.replace(ZSYS, ZPUB);
 const ZSYS_REPLY_PUB = ZSYS_REPLY.replace(ZSYS, ZPUB);
 const ZSYS_LIKE = "Answer with only YES or NO. Answer YES only if you genuinely like this post.";
 const ZEN_SVG = '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="zgrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#14466f"/><stop offset="1" stop-color="#208bfe"/></linearGradient></defs><circle cx="50" cy="50" r="50" fill="url(#zgrad)"/><text x="50" y="52" text-anchor="middle" dominant-baseline="central" font-size="50" font-weight="700" fill="#ffffff" font-family="Inter,system-ui,sans-serif">Z</text></svg>';
+// [E3] the Z badge is parsed once and copied
+let zenAvTpl = null;
 function zenAv(size) {
   const a = h("div", { class: "av zenav" });
   if (S && S.zen && S.zen.pfp) { const im = h("img", { alt: "", decoding: "async" }); im.src = S.zen.pfp; a.append(im); }
-  else a.innerHTML = ZEN_SVG;
+  else {
+    if (!zenAvTpl) { zenAvTpl = document.createElement("div"); zenAvTpl.innerHTML = ZEN_SVG; }
+    zenAvTpl.childNodes.forEach(n => a.append(n.cloneNode(true)));
+  }
   if (size) { a.style.width = size + "px"; a.style.height = size + "px"; }
   return a;
 }
@@ -2457,14 +2595,25 @@ async function zenChatMedia(d) {
   }
   return msgs;
 }
+// [E3] a document that is the same as at the last look keeps its hash (compared against a private copy, see jsame), so a sync that
+// changed nothing no longer walks and hashes thousands of posts
+const zenDocMemo = new Map();
+function zenDocHash(key, data) {
+  const m = zenDocMemo.get(key);
+  if (m && jsame(m.snap, data)) return m.hh;
+  const hh = zenHash(data);
+  zenDocMemo.set(key, { snap: jsnap(data), hh });
+  return hh;
+}
 async function zenSync() {
   if (!zenSyncOn || zenBusySync || !sbUser || !S || !isOwner()) return;
   zenBusySync = true;
   try {
     const now = zenDocs();
     const up = [], del = [];
+    zenDocMemo.forEach((_, k) => { if (!now.has(k)) zenDocMemo.delete(k); });
     now.forEach((data, key) => {
-      const hh = zenHash(data);
+      const hh = zenDocHash(key, data);
       if (zenHashes.get(key) === hh && zenSeen.has(key)) return;
       const j = zenJson(data);
       if (zenSeen.get(key) !== j) up.push({ key, data, j, hh }); else zenHashes.set(key, hh);
@@ -3265,37 +3414,131 @@ async function shareSaveStats(ids) {
   return out;
 }
 let feedBusy = null, feedAgain = false;
+// The reads that do not depend on each other start together (and, on a phone that was signed in before, while the ban and age checks are still running);
+// nothing from them is shown before those checks have passed, because loadFeed is only called after them.
+// the answer for the first ids was asked for early; only the ids added since (reposted posts older than the newest 300) are asked for now
+function withExtra(p0, ids0, ids, ask, table) {
+  const extra = ids.slice(ids0.length);
+  if (!extra.length) return p0;
+  return Promise.all([p0, ask(table, extra)]).then(([a, b]) => {
+    if (a && a.sh instanceof Map) {
+      b.sh.forEach((v, k) => a.sh.set(k, v)); b.sv.forEach((v, k) => a.sv.set(k, v));
+      b.myShared.forEach(k => a.myShared.add(k)); b.mySaved.forEach(k => a.mySaved.add(k));
+      return a;
+    }
+    if (!a || a.error) return a;
+    if (!b || b.error) return b;
+    return { data: a.data.concat(b.data), error: null };
+  });
+}
+let feedPre = null;
+function feedPrefetch() {
+  if (feedPre || !sbUser || !sb) return;
+  const f = feedFetchStart();
+  feedPre = f;
+  // a prefetch that is never used (ban, age screen, sign out) must not leave an unhandled error behind
+  Object.values(f).forEach(v => { if (v && v.catch) v.catch(() => {}); });
+}
+function feedFetchStart() {
+  const uid = sbUser.id, f = { t: Date.now(), uid };
+  f.posts = (async () => {
+    let pq = await sb.from("posts_feed").select("id, user_id, body, created_at, parent_id, media_url, media_inline").order("created_at", { ascending: false }).limit(300);
+    if (pq.error) pq = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url").order("created_at", { ascending: false }).limit(300);
+    if (pq.error) pq = await sb.from("posts").select("id, user_id, body, created_at").order("created_at", { ascending: false }).limit(300);
+    return pq;
+  })();
+  f.follows = pageAll((a, b) => sb.from("follows").select("followee_id").eq("follower_id", uid).order("followee_id").range(a, b));
+  f.myLikes = pageAll((a, b) => sb.from("likes").select("post_id").eq("user_id", uid).order("post_id").range(a, b));
+  f.myReposts = pageAll((a, b) => sb.from("reposts").select("post_id, created_at").eq("user_id", uid).order("post_id").range(a, b));
+  f.blocksOut = pageAll((a, b) => sb.from("blocks").select("blocked_id").eq("blocker_id", uid).order("blocked_id").range(a, b));
+  f.blocksIn = pageAll((a, b) => sb.from("blocks").select("blocker_id").eq("blocked_id", uid).order("blocker_id").range(a, b));
+  f.mutes = pageAll((a, b) => sb.from("mutes").select("muted_id").eq("muter_id", uid).order("muted_id").range(a, b));
+  f.meRow = sb.from("accounts").select(ACC_COLS).eq("id", uid).maybeSingle();
+  // the profiles of the authors are asked for as soon as the posts and the block lists are in, so they are ready when the checks have passed
+  f.prov = (async () => {
+    const pq = await f.posts;
+    if (!pq || !pq.data) return null;
+    const [bo, bi, mu] = await Promise.all([f.blocksOut, f.blocksIn, f.mutes]);
+    if (!bo || !bi || !mu || bo.error || bi.error || mu.error) return null;
+    const hid = new Set([...(bo.data || []).map(x => x.blocked_id), ...(bi.data || []).map(x => x.blocker_id), ...(mu.data || []).map(x => x.muted_id)]);
+    const shownP = pq.data.filter(p => !hid.has(p.user_id));
+    const who0 = await cachedAccounts([...new Set(shownP.filter(p => p.user_id !== uid).map(p => p.user_id))]);
+    return { shownP, who0 };
+  })();
+  return f;
+}
 function loadFeed() {
   if (feedBusy) { feedAgain = true; return feedBusy; }
-  feedBusy = loadFeedNow().finally(() => { feedBusy = null; if (feedAgain) { feedAgain = false; loadFeed().catch(() => {}); } });
+  const pre = feedPre && feedPre.uid === (sbUser && sbUser.id) && Date.now() - feedPre.t < 20000 ? feedPre : null;
+  feedPre = null;
+  feedBusy = loadFeedNow(pre).finally(() => {
+    // whatever happened above, a screen that was drawn ahead of the counts never stays in the saved state
+    if (S && S.posts.some(p => p._prov)) { S.posts = S.posts.filter(p => !p._prov); rankCache.clear(); if (stack.length === 1 && stack[0].r === "home") render(); }
+    feedBusy = null; if (feedAgain) { feedAgain = false; loadFeed().catch(() => {}); } });
   return feedBusy;
 }
-async function loadFeedNow() {
+async function loadFeedNow(pre) {
   if (!sbUser || !S) return;
-  const feedT0 = Date.now();
+  // taps made after the first read started are newer than the rows, even when the read began before this function was called
+  const feedT0 = pre ? pre.t : Date.now();
   // the list view leaves out photos stored inline in the row (old posts), so 300 rows never pull hundreds of MB; the newest few are fetched below
-  let pq = await sb.from("posts_feed").select("id, user_id, body, created_at, parent_id, media_url, media_inline").order("created_at", { ascending: false }).limit(300);
-  if (pq.error) pq = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url").order("created_at", { ascending: false }).limit(300);
-  if (pq.error) pq = await sb.from("posts").select("id, user_id, body, created_at").order("created_at", { ascending: false }).limit(300);
+  const f = pre || feedFetchStart();
+  const pq = await f.posts;
   const posts = pq.data;
   if (!posts) { feedFail(); return; }
+  // the counts and the reposts of the people followed only need the ids, so they start now, beside the profiles of the authors
+  const ids0 = posts.map(p => p.id);
+  const likeRowsP = rowsFor("likes", ids0), repostRowsP = rowsFor("reposts", ids0), statsP = shareSaveStats(ids0);
+  [likeRowsP, repostRowsP, statsP].forEach(v => v.catch(() => {}));
+  // a phone with nothing from the server yet draws the posts as soon as the posts, the block lists and the profiles of the authors are in;
+  // likes, reposts and counts follow below, and the end state is the same
+  let provisional = null;
+  if (!S.posts.some(p => p.remote)) {
+    try {
+      const pv = await f.prov;
+      if (pv) {
+        const { who0 } = pv;
+        // only the newest posts are drawn ahead (building all 300 takes about 300 ms on a phone); the full list replaces them a moment later
+        const shownP = pv.shownP.slice(0, 40);
+        if (!who0.failed && !S.posts.some(p => p.remote) && stack.length === 1 && stack[0].r === "home") {
+          const rt = new Map();
+          shownP.filter(p => p.parent_id).forEach(p => rt.set(p.parent_id, (rt.get(p.parent_id) || 0) + 1));
+          const ids = new Set(shownP.map(p => p.id));
+          const mk = p => ({ remote: p.id, text: p.body || "", t: Date.parse(p.created_at), imgs: p._imgs || parseMedia(p.media_url), liked: false, reposted: false, rpAt: 0, saved: !!(S.sv && S.sv[p.id]), lc: 0, rpc: 0, shc: 0, svc: 0, sharedByMe: false, rp: rt.get(p.id) || 0, _prov: true });
+          const par = p => (p.parent_id ? (ids.has(p.parent_id) ? p.parent_id : null) : null);
+          const mine = shownP.filter(p => p.user_id === sbUser.id && !(S.pendDel || []).includes(p.id)).map(p => Object.assign(mk(p), { id: "m" + p.id, parent: par(p) ? "m" + p.parent_id : p.parent_id ? "r" + p.parent_id : null, media: p._imgs || parseMedia(p.media_url), pinned: false }));
+          const others0 = shownP.filter(p => p.user_id !== sbUser.id && who0.get(p.user_id)).map(p => {
+            const a = who0.get(p.user_id);
+            return Object.assign(mk(p), { id: "r" + p.id, parent: p.parent_id ? "r" + p.parent_id : null, ra: { id: p.user_id, name: a.display_name == null ? a.username : a.display_name, handle: a.username, avatar: a.avatar || null }, rpBy: null, pinned: false });
+          });
+          provisional = mine.concat(others0);
+          S.posts = S.posts.concat(provisional);
+          render();
+        }
+      }
+    } catch (e) { provisional = null; }
+  }
+  // the order of the screen is kept for as long as the posts stay the same, so the order worked out without the likes must not be kept
+  const dropProv = () => { if (provisional) { S.posts = S.posts.filter(p => !p._prov); provisional = null; rankCache.clear(); } };
   // photos already held from an earlier load are reused; the newest few missing ones are fetched now, the rest one small group at a time afterwards
-  const prevImgs = new Map(S.posts.filter(p => p.remote && p.imgs && p.imgs.length).map(p => [p.remote, p.imgs]));
+  const prevImgs = new Map(S.posts.filter(p => !p._prov && p.remote && p.imgs && p.imgs.length).map(p => [p.remote, p.imgs]));
   const inlAll = posts.filter(p => p.media_inline && !prevImgs.has(p.id));
-  try {
-    const inl = inlAll.slice(0, 12);
-    if (inl.length) {
-      const full = await sb.from("posts").select("id, media_url").in("id", inl.map(p => p.id));
-      const m = new Map((full.data || []).map(r => [r.id, r.media_url]));
-      inl.forEach(p => { if (m.has(p.id)) { p.media_url = m.get(p.id); p.media_inline = false; } });
-    }
-  } catch (e) {}
-  const inlLater = inlAll.filter(p => p.media_inline).map(p => p.id);
+  // the newest few photos load while the follows and reposts below are being read
+  const inlP = (async () => {
+    try {
+      const inl = inlAll.slice(0, 12);
+      if (inl.length) {
+        const full = await sb.from("posts").select("id, media_url").in("id", inl.map(p => p.id));
+        const m = new Map((full.data || []).map(r => [r.id, r.media_url]));
+        inl.forEach(p => { if (m.has(p.id)) { p.media_url = m.get(p.id); p.media_inline = false; } });
+      }
+    } catch (e) {}
+  })();
   posts.forEach(p => { if (p.media_inline && prevImgs.has(p.id)) { p.media_inline = false; p._imgs = prevImgs.get(p.id); } });
   // what the people you follow reposted comes in too, even when the post itself is older than the newest 300
   let rpRows = [], rpFailed = false;
   try {
-    const fq = await pageAll((a, b) => sb.from("follows").select("followee_id").eq("follower_id", sbUser.id).order("followee_id").range(a, b));
+    const fq = await f.follows;
     if (fq.error) throw fq.error;
     const fids = (fq.data || []).map(r => r.followee_id);
     if (fids.length) {
@@ -3315,23 +3558,26 @@ async function loadFeedNow() {
       }
     }
   } catch (e) { rpRows = []; rpFailed = true; }
+  await inlP;
+  const inlLater = inlAll.filter(p => p.media_inline).map(p => p.id);
   const pend = new Set(S.pendDel || []);
   if (S.pendDel && S.pendDel.length) { try { await deleteRemote(S.pendDel.map(r => ({ remote: r }))); } catch (e) {} }
   const ids = posts.map(p => p.id);
   const feedRes = await Promise.all([
-    pageAll((a, b) => sb.from("likes").select("post_id").eq("user_id", sbUser.id).order("post_id").range(a, b)),
-    pageAll((a, b) => sb.from("reposts").select("post_id, created_at").eq("user_id", sbUser.id).order("post_id").range(a, b)),
-    pageAll((a, b) => sb.from("blocks").select("blocked_id").eq("blocker_id", sbUser.id).order("blocked_id").range(a, b)),
-    pageAll((a, b) => sb.from("blocks").select("blocker_id").eq("blocked_id", sbUser.id).order("blocker_id").range(a, b)),
-    rowsFor("likes", ids),
-    rowsFor("reposts", ids),
-    shareSaveStats(ids),
-    sb.from("accounts").select(ACC_COLS).eq("id", sbUser.id).maybeSingle(),
-    pageAll((a, b) => sb.from("follows").select("followee_id").eq("follower_id", sbUser.id).order("followee_id").range(a, b)),
-    pageAll((a, b) => sb.from("mutes").select("muted_id").eq("muter_id", sbUser.id).order("muted_id").range(a, b))
+    f.myLikes,
+    f.myReposts,
+    f.blocksOut,
+    f.blocksIn,
+    withExtra(likeRowsP, ids0, ids, rowsFor, "likes"),
+    withExtra(repostRowsP, ids0, ids, rowsFor, "reposts"),
+    withExtra(statsP, ids0, ids, (_, x) => shareSaveStats(x)),
+    f.meRow,
+    f.follows,
+    f.mutes
   ]);
   // a failed answer is not an empty one: nothing is changed (a blocked or muted person must not come back, and counts must not fall short, because a call failed)
-  if (rpFailed || [0, 1, 2, 3, 4, 5, 9].some(i => !feedRes[i] || feedRes[i].error)) { feedFail(); return; }
+  if (rpFailed || [0, 1, 2, 3, 4, 5, 9].some(i => !feedRes[i] || feedRes[i].error)) { dropProv(); feedFail(); return; }
+  dropProv();
   feedStatus = "ok"; feedTries = 0;
   const [{ data: myLikes }, { data: myReposts }, { data: blocksOut }, { data: blocksIn }, { data: likeRows }, { data: repostRows }, shareStats, { data: meRow }, { data: myFollows }, { data: myMutes }] = feedRes;
   if (myFollows) { followSet = new Set(myFollows.map(r => r.followee_id)); cacheWrite("follows:" + sbUser.id, [...followSet]); }
@@ -3443,7 +3689,8 @@ async function loadFeedNow() {
   // what was saved or put in a list on another phone, and is older than the newest 300 posts, is fetched now
   try { await fillWanted(); } catch (e) {}
   persist();
-  if (stack.length === 1 && stack[0].r === "home") render();
+  // when the answer left everything the home screen shows as it was (the usual case on a phone that already had the posts), the screen is not built a second time
+  if (stack.length === 1 && stack[0].r === "home" && !(homeSig && homeSig === homeSigNow())) render();
   if (inlLater.length) fillInlinePhotos(inlLater);
 }
 let inlineRun = 0;
@@ -5572,7 +5819,8 @@ function loadSocial(force) {
     const ck = cacheRead("clears:" + sbUser.id);
     if (ck && ck.v) Object.keys(ck.v).forEach(k => clearMap.set(k, ck.v[k]));
   }
-  if (socialP && !(force && Date.now() - socialAt > 15000)) return socialP;
+  // [E4] a forced reload is at most every 30 s (was 15 s): the chat list and every open-chat pull ask with force, nicknames and clears rarely change
+  if (socialP && !(force && Date.now() - socialAt > 30000)) return socialP;
   socialAt = Date.now();
   socialP = Promise.all([
     sb.from("nicknames").select("target_id, nickname").eq("owner_id", sbUser.id),
@@ -5748,21 +5996,33 @@ async function passkeyAsk() {
   if (!f.ok || !f.body.session) return { err: pkMsg(f.body && f.body.error, f.body && f.body.detail), banned: !!(f.body && f.body.error === "banned") };
   return { session: f.body.session };
 }
-let badgeT = 0;
-function refreshBadge() {
+let badgeT = 0, badgeForce = false;
+// [E4] the bell count and the mute list are only asked for again when something said they changed (force: a new notification arrived,
+// the notifications were read, the app came back to the front) or after 30 s; the unread chats always come from the (shared) inbox call.
+// The chat list used to ask for all three every 5 s.
+function refreshBadge(force) {
   clearTimeout(badgeT);
+  if (force) badgeForce = true;
   badgeT = setTimeout(refreshBadgeNow, 400);
 }
+let badgeNotifAt = 0, badgeMuteAt = 0;
 function refreshBadgeNow() {
   if (!sbUser) return;
-  sb.from("notifications").select("id", { count: "exact", head: true }).eq("user_id", sbUser.id).neq("kind", "message").is("read_at", null).then(a => {
-    unreadN = a.count || 0;
-    paintBell();
-  });
+  const force = badgeForce; badgeForce = false;
+  const nowT = Date.now();
+  if (force || nowT - badgeNotifAt > 30000) {
+    badgeNotifAt = nowT;
+    sb.from("notifications").select("id", { count: "exact", head: true }).eq("user_id", sbUser.id).neq("kind", "message").is("read_at", null).then(a => {
+      unreadN = a.count || 0;
+      paintBell();
+    });
+  }
+  const askMutes = force || nowT - badgeMuteAt > 30000;
+  if (askMutes) badgeMuteAt = nowT;
   // the server counts the unread chats itself (dm_inbox); an older server without it is asked the old way, with at most 500 rows
   const unreadQ = async () => {
     if (badgeRpc !== false) {
-      const r = await Promise.resolve(sb.rpc("dm_inbox")).catch(() => ({ error: true }));
+      const r = await inboxRpc().catch(() => ({ error: true }));
       if (!r.error) { badgeRpc = true; return { ids: (r.data || []).filter(x => x.unread > 0).map(x => x.other_id), error: null }; }
       if (badgeRpc === undefined && r.error && ["PGRST202", "42883"].includes(r.error.code)) badgeRpc = false;
     }
@@ -5771,7 +6031,7 @@ function refreshBadgeNow() {
   };
   Promise.all([
     unreadQ(),
-    Promise.resolve(sb.from("dm_mutes").select("target_id, until_at, hidden").eq("owner_id", sbUser.id)).catch(() => ({ data: null }))
+    askMutes ? Promise.resolve(sb.from("dm_mutes").select("target_id, until_at, hidden").eq("owner_id", sbUser.id)).catch(() => ({ data: null })) : { data: null }
   ]).then(([{ ids, error }, mu]) => {
     if (error) return;
     if (mu && mu.data) { dmMuteSet.clear(); dmHideSet.clear(); mu.data.forEach(r => { if (r.hidden) dmHideSet.add(r.target_id); else dmMuteSet.set(r.target_id, r.until_at ? Date.parse(r.until_at) : 0); }); }
@@ -5801,9 +6061,32 @@ function alertMe(title, body, onTap) {
 }
 function markRead(ids) {
   if (!ids.length || !sbUser) return;
-  sb.from("messages").update({ read_at: new Date().toISOString() }).in("id", ids).eq("recipient_id", sbUser.id).then(() => refreshBadge());
+  sb.from("messages").update({ read_at: new Date().toISOString() }).in("id", ids).eq("recipient_id", sbUser.id).then(() => { inboxStale(); refreshBadge(true); });
 }
-async function dmThread(otherId) {
+// [E5] callers that ask for the same chat while the first answer is still on its way share that one request;
+// a caller that needs the very latest rows (after a failed send) passes fresh
+const threadRuns = new Map();
+function dmThread(otherId, fresh) {
+  if (!fresh && threadRuns.has(otherId)) return threadRuns.get(otherId);
+  const p = dmThreadNow(otherId);
+  threadRuns.set(otherId, p);
+  const clear = () => { if (threadRuns.get(otherId) === p) threadRuns.delete(otherId); };
+  p.then(clear, clear);
+  return p;
+}
+// [E5] the same for the inbox call: refreshBadge, the chat list and the boot warm-up all ask for it within moments of each other.
+// An answer is shared while it is on its way and for 1.5 s after, unless something that changes it happened in between (inboxStale)
+let inboxGen = 0, inboxRun = null;
+const inboxStale = () => { inboxGen++; };
+function inboxRpc() {
+  const r0 = inboxRun;
+  if (r0 && r0.gen === inboxGen && (!r0.done || Date.now() - r0.done < 1500)) return r0.p;
+  const run = { gen: inboxGen, done: 0, p: null };
+  run.p = Promise.resolve(sb.rpc("dm_inbox")).then(r => { run.done = Date.now(); if (r && r.error && inboxRun === run) inboxRun = null; return r; }, e => { if (inboxRun === run) inboxRun = null; throw e; });
+  inboxRun = run;
+  return run.p;
+}
+async function dmThreadNow(otherId) {
   // the id goes into a filter string, so it must look like an id
   if (!/^[0-9a-f-]{36}$/i.test(String(otherId))) throw new Error("bad id");
   // the nicknames and clears load beside the messages, not before them
@@ -5814,6 +6097,18 @@ async function dmThread(otherId) {
   // the newest 300 are kept, oldest first
   return (data || []).reverse().filter(m => visibleMsg(m, otherId));
 }
+// [E4] the open chat's 5 s poll asks only for the rows after the newest id this phone has (one small request, usually empty).
+// Nothing on screen shows whether a sent message was read (a bubble is redrawn only when its text or pictures change, see dmSig),
+// so read marks are not polled. Removals and new nicknames/clears are caught by the full pull, which still runs when the chat opens,
+// when the app comes back to the front and at least once a minute (a removal normally arrives at once on the delete channel).
+async function dmThreadAfter(otherId, afterId) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(otherId))) throw new Error("bad id");
+  const { data, error } = await sb.from("messages").select("id, sender_id, recipient_id, body, media, created_at, read_at")
+    .or("and(sender_id.eq." + sbUser.id + ",recipient_id.eq." + otherId + "),and(sender_id.eq." + otherId + ",recipient_id.eq." + sbUser.id + ")")
+    .gt("id", afterId).order("id", { ascending: true }).limit(300);
+  if (error) throw error;
+  return (data || []).filter(m => visibleMsg(m, otherId));
+}
 async function warmInbox() {
   const convos = await dmInbox();
   cacheWrite("inbox:" + sbUser.id, convos);
@@ -5821,7 +6116,7 @@ async function warmInbox() {
 }
 async function dmInbox() {
   // the server answers with the last message and the unread count of every chat, however long the history is; nicknames and clears load beside it
-  const [, { data, error }] = await Promise.all([loadSocial(true), sb.rpc("dm_inbox")]);
+  const [, { data, error }] = await Promise.all([loadSocial(true), inboxRpc()]);
   // a failed load keeps what is on the screen and in the cache
   if (error) throw error;
   const convos = new Map();
@@ -5845,7 +6140,8 @@ const e2eShared = new Map();
 const e2eAt = new Map();
 const e2eEnc = new Map();
 const toB64 = u8 => { let s = ""; u8.forEach(b => { s += String.fromCharCode(b); }); return btoa(s); };
-const fromB64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+// [E2] the browser's own decoder where it has one (Chrome 140+, Safari 18.2+); the fallback gives the same bytes without a callback per byte
+const fromB64 = s => { if (Uint8Array.fromBase64) return Uint8Array.fromBase64(s); const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; };
 function keyDb() {
   return new Promise((res, rej) => {
     const r = indexedDB.open("nook-keys", 1);
@@ -6139,7 +6435,8 @@ function watchLinks() {
   const tick = () => {
     clearTimeout(linkTimer); linkTimer = 0;
     if (document.visibilityState !== "visible") return;
-    linkTimer = setTimeout(() => { linkTimer = 0; checkLinks().finally(tick); }, linkIdle > 200 ? 60000 : linkIdle > 40 ? 24000 : 8000);
+    // [E4] 8 s for the first dozen empty answers (about 100 s), then 20 s, then 60 s; was 8 s for the first 40 (5 minutes). Coming back to the app still asks at once.
+    linkTimer = setTimeout(() => { linkTimer = 0; checkLinks().finally(tick); }, linkIdle > 200 ? 60000 : linkIdle > 12 ? 20000 : 8000);
   };
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { linkIdle = 0; checkLinks().finally(tick); } else { clearTimeout(linkTimer); linkTimer = 0; } });
   checkLinks().finally(tick);
@@ -6315,12 +6612,39 @@ function keyChangedNotice(otherId) {
 function keyGate(otherId) {
   if (keyUntrusted.has(otherId)) { setTimeout(() => keyChangedNotice(otherId), 100); throw new Error("Their security key changed. Confirm it first"); }
 }
+// [E5] the public key of a person is still asked from the server every time a key is worked out (the pinned-key check below is unchanged),
+// but the people asked for within the same few milliseconds share one request (id in (...)) instead of one request each
+const pubWait = new Map();
+let pubTimer = 0;
+function peerPublicKey(otherId) {
+  return new Promise((res, rej) => {
+    const w = pubWait.get(otherId);
+    if (w) w.push([res, rej]); else pubWait.set(otherId, [[res, rej]]);
+    if (!pubTimer) pubTimer = setTimeout(flushPub, 12);
+  });
+}
+function flushPub() {
+  pubTimer = 0;
+  const all = [...pubWait.keys()];
+  const waits = new Map(pubWait);
+  pubWait.clear();
+  for (let i = 0; i < all.length; i += 80) {
+    const ids = all.slice(i, i + 80);
+    const done = (rows, err) => ids.forEach(id => {
+      const row = rows ? rows.find(x => x.id === id) : null;
+      waits.get(id).forEach(([res, rej]) => { if (err) rej(err); else res({ data: row ? { public_key: row.public_key } : null }); });
+    });
+    // a single person is asked exactly as before
+    const q = ids.length === 1 ? sb.from("accounts").select("id, public_key").eq("id", ids[0]) : sb.from("accounts").select("id, public_key").in("id", ids);
+    Promise.resolve(q).then(r => done((r && r.data) || [], null), e => done(null, e));
+  }
+}
 function sharedKey(otherId) {
   if (!e2eShared.has(otherId) || Date.now() - (e2eAt.get(otherId) || 0) > 60000) {
     e2eAt.set(otherId, Date.now());
     const p = (async () => {
       const mine = await myKeys();
-      const { data } = await sb.from("accounts").select("public_key").eq("id", otherId).maybeSingle();
+      const { data } = await peerPublicKey(otherId);
       if (!data || !data.public_key) throw new Error("they need to open nook once first");
       // the first key seen from a person is remembered; a different one later is shown, never silent
       const pinName = "nook-pin:" + sbUser.id + ":" + otherId;
@@ -6586,6 +6910,7 @@ async function sendDm(otherId, text, srcs, dims) {
     const body = text ? await sealText(otherId, text) : "";
     const { data, error } = await sb.from("messages").insert({ sender_id: sbUser.id, recipient_id: otherId, body, media }).select("id, sender_id, recipient_id, body, media, created_at, read_at").single();
     if (error) throw error;
+    inboxStale(); threadRuns.delete(otherId);
     return data;
   } catch (e) {
     if (paths.length && e && e.code) sb.storage.from(DM_BUCKET).remove(paths).then(() => {}, () => {});
@@ -6711,6 +7036,14 @@ function dmRowMenu(row, mine, otherId) {
   if (mine && m.id != null) items.push({ icon: "trash", label: "Delete message", danger: true, fn: () => confirmSheet("Delete this message?", "Delete", () => deleteDm(m, row, otherId)) });
   if (items.length) sheet(items);
 }
+// [E1] one date formatter for every bubble: toLocaleString builds a new formatter on each call, which was about a third of the time per bubble
+let bubbleFmt = null;
+function bubbleTime(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return d.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+  if (!bubbleFmt) bubbleFmt = new Intl.DateTimeFormat([], { dateStyle: "medium", timeStyle: "short" });
+  return bubbleFmt.format(d);
+}
 function dmBubble(m, mine, otherId) {
   const row = h("div", { class: "mrow" + (mine ? "" : " them") });
   row._other = otherId;
@@ -6729,7 +7062,7 @@ function dmBubble(m, mine, otherId) {
     if (link) row.append(linkCard(link, true));
     if (body) row.append(h("div", { class: "bub" }, msg.ai ? h("span", { class: "zin" }, "zenith ") : null, rich(body)));
     row.classList.toggle("zdm", !!msg.ai);
-    row.append(h("div", { class: "mmeta" }, h("div", { class: "mmi" }, h("span", {}, new Date(msg.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })), msg.plain ? h("span", { class: "unenc", style: "margin-left:6px;color:#c0392b" }, "Not encrypted") : null)));
+    row.append(h("div", { class: "mmeta" }, h("div", { class: "mmi" }, h("span", {}, bubbleTime(msg.created_at)), msg.plain ? h("span", { class: "unenc", style: "margin-left:6px;color:#c0392b" }, "Not encrypted") : null)));
     row.classList.toggle("open", wasOpen);
   };
   fill(m);
@@ -6924,7 +7257,7 @@ async function deleteChat(cv, inChat) {
   // only this person's view is cleared: the messages stay for the other person
   const { error } = await sb.rpc("clear_chat", { p_other: cv.other });
   if (error) { toast("Could not delete chat"); return; }
-  socialAt = 0;
+  socialAt = 0; inboxStale(); threadRuns.clear();
   await loadSocial(true);
   try { localStorage.removeItem(CACHE_PFX + "thread:" + sbUser.id + ":" + cv.other); } catch (e) {}
   keptDel(cv.other);
@@ -7005,7 +7338,10 @@ function dmV(c) {
     lockNote.hidden = !reason;
     sync();
   };
-  const refreshStatus = () => dmStatus(c.id).then(st => { if (liveDm && liveDm.id === c.id) applyLock(dmLockText(st)); }).catch(() => {});
+  // [E4] the follow and block check (four requests) runs when the chat opens, when the app comes back to the front (at most every 10 s),
+  // after a failed send, and otherwise at most once a minute
+  let statusAt = 0;
+  const refreshStatus = () => { statusAt = Date.now(); return dmStatus(c.id).then(st => { if (liveDm && liveDm.id === c.id) applyLock(dmLockText(st)); }).catch(() => {}); };
 
   // typing dots sit in a slot that always exists and grows smoothly, so the chat never jumps
   tEl = h("div", { class: "trow" }, h("div", { class: "tin" }, h("div", { class: "mrow them" }, h("div", { class: "bub typing" }, h("i"), h("i"), h("i")))));
@@ -7045,21 +7381,33 @@ function dmV(c) {
     const opened = await openRows(fresh.concat(changed), c.id);
     const near = nearEnd();
     let added = false;
+    // [E1] the typing dots are put away once per batch, before the first bubble goes in, instead of once per incoming bubble:
+    // typing() reads the scroll size, and a read right after an insert forces a full layout for every one of 300 bubbles
+    let dotsAway = false;
+    let swept = false;
+    // [E1] ids on screen are listed once, instead of one selector search through the whole list per row (300 x 300 checks)
+    const onScreen = new Set();
+    list.querySelectorAll("[data-mid]").forEach(el => onScreen.add(el.dataset.mid));
     opened.forEach(m => {
       const key = String(m.id);
       if (have.has(key)) { have.get(key).refill(m); return; }
-      if (list.querySelector('[data-mid="' + key + '"]')) return;
+      if (onScreen.has(key)) return;
       const mine = m.sender_id === me;
       const row = dmBubble(m, mine, c.id);
       if (!mine && !o.initial) {
         row.classList.add("new");
-        // the typing dots go away at once so nothing slides when the message lands
-        tEl.classList.add("snap");
-        typing(false);
-        requestAnimationFrame(() => requestAnimationFrame(() => tEl.classList.remove("snap")));
+        if (!dotsAway) {
+          dotsAway = true;
+          // the typing dots go away at once so nothing slides when the message lands
+          tEl.classList.add("snap");
+          typing(false);
+          requestAnimationFrame(() => requestAnimationFrame(() => tEl.classList.remove("snap")));
+        }
       }
-      list.querySelectorAll(".empty").forEach(e => e.remove());
+      // [E1] the empty-state sweep runs once per batch, not once per bubble
+      if (!swept) { swept = true; list.querySelectorAll(".empty").forEach(e => e.remove()); }
       list.insertBefore(row, tEl);
+      onScreen.add(key);
       added = true;
     });
     if (!list.querySelector("[data-mid], .tmpm")) hint("No messages yet. Say hi.");
@@ -7131,7 +7479,7 @@ function dmV(c) {
       // the answer may have been lost after the server saved the message: the chat is checked before the text is given back, so it is never sent twice
       if (!srcs.length) {
         try {
-          const rows = await withTimeout(dmThread(c.id), 6000);
+          const rows = await withTimeout(dmThread(c.id, true), 6000);
           const recent = rows.filter(m => m.sender_id === me && Date.now() - Date.parse(m.created_at) < 120000 && !list.querySelector('[data-mid="' + m.id + '"]'));
           for (const m of recent.reverse()) { if ((await openText(c.id, m.body)) === text) { landed(m); busy = false; draw(); return; } }
         } catch (x) {}
@@ -7166,24 +7514,42 @@ function dmV(c) {
   });
 
   const tkey = "thread:" + me + ":" + c.id;
+  // [E4] the rows of the last full pull (raw, newest 300), kept so the small polls can be merged into them
+  let known = [], fullAt = 0;
   const pull = () => dmThread(c.id).then(rows => {
     if (!liveDm || liveDm.id !== c.id) return;
+    known = rows; fullAt = Date.now();
     cacheWrite(tkey, rows.slice(-100));
     return syncRows(rows, { prune: true });
   });
+  const pullNew = async () => {
+    const after = known.reduce((a, r) => Math.max(a, Number(r.id) || 0), 0);
+    const nw = await dmThreadAfter(c.id, after);
+    if (!liveDm || liveDm.id !== c.id) return;
+    const have = new Set(known.map(r => r.id));
+    const add = nw.filter(r => !have.has(r.id));
+    if (!add.length) return;
+    known = known.concat(add).slice(-300);
+    cacheWrite(tkey, known.slice(-100));
+    return syncRows(add, {});
+  };
   let pulling = false;
+  let polledAt = 0;
   const poll = setInterval(() => {
     if (busy || pulling || document.hidden || !liveDm || liveDm.id !== c.id) return;
+    if (Date.now() - polledAt < pollGap() - 500) return;
+    polledAt = Date.now();
     pulling = true;
-    pull().catch(() => {}).finally(() => { pulling = false; });
-    refreshStatus();
+    const small = fullAt && Date.now() - fullAt < 60000;
+    (small ? pullNew().catch(() => pull()) : pull()).catch(() => {}).finally(() => { pulling = false; });
+    if (Date.now() - statusAt > 60000) refreshStatus();
   }, 5000);
-  const onVis = () => { if (document.visibilityState === "visible" && liveDm && liveDm.id === c.id) { pull().catch(() => {}); refreshStatus(); } };
+  const onVis = () => { if (document.visibilityState === "visible" && liveDm && liveDm.id === c.id) { pull().catch(() => {}); if (Date.now() - statusAt > 10000) refreshStatus(); } };
   document.addEventListener("visibilitychange", onVis);
   liveDm = {
     id: c.id,
     fill: pre => { if (locked) return; ta.value = ta.value.trim() ? ta.value.replace(/\s*$/, " ") + pre : pre; sync(); ta.focus(); },
-    add: async m => { threadPush(c.id, m); await syncRows([m], {}); },
+    add: async m => { threadPush(c.id, m); if (!known.some(r => r.id === m.id)) known.push(m); await syncRows([m], {}); },
     drop: id => {
       const el = list.querySelector('[data-mid="' + String(id) + '"]');
       const after = () => { if (!list.querySelector("[data-mid], .tmpm")) hint("No messages yet. Say hi."); };
@@ -7502,10 +7868,11 @@ async function notifsV() {
       async () => { const { error } = await sb.from("notifications").delete().eq("id", n.id); if (error) { toast("Could not delete"); return false; } return true; },
       checkEmpty));
   });
-  sb.from("notifications").update({ read_at: new Date().toISOString() }).eq("user_id", sbUser.id).neq("kind", "message").is("read_at", null).then(() => refreshBadge());
+  sb.from("notifications").update({ read_at: new Date().toISOString() }).eq("user_id", sbUser.id).neq("kind", "message").is("read_at", null).then(() => refreshBadge(true));
 }
 function onIncomingMsg(payload) {
   const m = payload.new;
+  inboxStale(); threadRuns.delete(m.sender_id);
   refreshBadge();
   if (refreshChat) refreshChat();
   if (liveDm && liveDm.id === m.sender_id) { liveDm.add(m); return; }
@@ -7516,7 +7883,7 @@ function onIncomingMsg(payload) {
 }
 function onIncomingNote(payload) {
   const n = payload.new;
-  refreshBadge();
+  refreshBadge(true);
   if (n.kind === "message") return;
   Promise.all([acctsFor([n.actor_id]), loadSocial()]).then(() => {
     const a = acctCache.get(n.actor_id) || { name: "user" };
@@ -7526,6 +7893,7 @@ function onIncomingNote(payload) {
 function onDeletedMsg(payload) {
   const id = payload && payload.old ? payload.old.id : null;
   if (id == null) return;
+  inboxStale(); threadRuns.clear();
   if (liveDm) liveDm.drop(id);
   // deletes of everybody's messages arrive here, so a burst is answered with one refresh
   clearTimeout(delMsgT);
@@ -7664,6 +8032,10 @@ function stopDelChan() {
   [delChan, delFallback].forEach(c => { if (c) { try { sb.removeChannel(c); } catch (e) {} } });
   delChan = delFallback = null; delErrN = 0;
 }
+// [E4] the chat list and the open chat poll every 5 s as a safety net; with the live connection up that is stretched to every 15 s
+// (a new message still shows at once through the connection; a dropped connection brings the 5 s polls back)
+let rtOk = false;
+const pollGap = () => (rtOk ? 15000 : 5000);
 function startRealtime() {
   if (!sbUser || rtChan) return;
   // a dropped connection is opened again by itself, a little later each time it fails
@@ -7673,6 +8045,8 @@ function startRealtime() {
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "bans", filter: "user_id=eq." + sbUser.id }, () => showBanned())
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "mod_notices", filter: "user_id=eq." + sbUser.id }, p => showModNotice(p.new))
     .subscribe(st => {
+      // [E4] while the live connection is up, incoming messages arrive by themselves and the 5 s polls only back it up (see pollGap)
+      if (rtChan === ch || !rtChan) rtOk = st === "SUBSCRIBED";
       if (st === "SUBSCRIBED") { rtBackoff = 2000; return; }
       if ((st === "CHANNEL_ERROR" || st === "TIMED_OUT" || st === "CLOSED") && rtChan === ch && !rtTimer) {
         rtTimer = setTimeout(() => {
@@ -7763,6 +8137,20 @@ const shieldKey = e => {
 window.addEventListener("keydown", shieldKey, true);
 window.addEventListener("keyup", shieldKey, true);
 let ageGate = false;
+// a short fingerprint of everything the home screen is drawn from: every field of every post (long strings such as pictures by their length and ends), the follows, and the feed status while no post is on the screen (it only shows in the empty state)
+let homeSig = null;
+function homeSigNow() {
+  const out = [main.querySelector(".post") ? "" : feedStatus, followSet ? [...followSet].join(",") : "", sbUser ? sbUser.id : ""];
+  const put = v => {
+    if (typeof v === "string") out.push(v.length > 200 ? v.length + ":" + v.slice(0, 40) + v.slice(-40) : v);
+    else if (v && typeof v === "object") { out.push("{"); if (Array.isArray(v)) v.forEach(put); else Object.keys(v).sort().forEach(k => { const x = v[k]; if (x == null || x === false || x === 0 || x === "" || (Array.isArray(x) && !x.length)) return; out.push(k); put(x); }); out.push("}"); }
+    else out.push(String(v));
+  };
+  // a field that is empty, 0 or false counts the same as a missing one, and the order of the list does not matter to the posts shown (the screen sorts them)
+  put(S.posts.slice().sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)));
+  put(S.profile && [S.profile.handle, S.profile.name, S.profile.avatar]);
+  return out.join("\u0001");
+}
 function render(anim) {
   // a held account sees only the age question, whatever route or history entry asked for something else
   if (ageGate) { stack = [{ r: "age" }]; scrolls.length = 0; }
@@ -7788,10 +8176,11 @@ function render(anim) {
   navEl.hidden = false;
   shieldRoute = SHIELD_ROUTES.has(cur.r); shieldApply();
   VIEWS[cur.r](cur);
+  homeSig = cur.r === "home" && stack.length === 1 ? homeSigNow() : null;
   buildNav(cur);
   if (cur.r === "auth" || cur.r === "banned") railEl.textContent = ""; else renderRail();
   main.className = "";
-  if (anim) { void main.offsetWidth; main.className = "go-" + anim; }
+  if (anim) { void getComputedStyle(main).animationName; main.className = "go-" + anim; }
   fresh = null;
   bump = null;
 }
@@ -7852,6 +8241,7 @@ async function boot() {
     if (u && u.id && mark === u.id && !stack.some(x => x.r === "auth" || x.r === "banned" || x.r === "age")) {
       sbUser = u;
       early = true;
+      feedPrefetch();
       histSync();
       render();
       earlySig = [S.profile.handle, S.profile.name, S.profile.avatar].join("|");
@@ -7865,17 +8255,19 @@ async function boot() {
   sbUser = sess && sess.session ? sess.session.user : slowLogin ? earlyUser : null;
   let ageHeld = false, ownAvatar = null;
   if (sbUser) {
+    // the age answer is asked for beside the ban and account reads (it is only read, and used below exactly as before), not one round trip after them
+    const okKey = "nook-age-ok:" + sbUser.id;
+    let verified = false;
+    try { verified = localStorage.getItem(okKey) === "1"; } catch (e) {}
+    const ageP = verified ? null : Promise.resolve(sb.rpc("my_age_verified")).catch(e => ({ error: e }));
     const [{ data: ban }, { data: acct, error: aerr }] = await Promise.all([sb.from("bans").select("user_id").eq("user_id", sbUser.id).maybeSingle(), sb.from("accounts").select("id, deactivated, username, avatar, display_name").eq("id", sbUser.id).maybeSingle()]);
-    if (ban) { hist(true); showBanned(); return; }
+    if (ban) { feedPre = null; hist(true); showBanned(); return; }
     if (acct) ownAvatar = acct.avatar || null;
     // if the check cannot be made the answer is "held": the age screen stays up until the server says otherwise
     if (acct) {
       // an account that passed the age check can never be put on hold, so after that one answer nothing is asked again
-      const okKey = "nook-age-ok:" + sbUser.id;
-      let verified = false;
-      try { verified = localStorage.getItem(okKey) === "1"; } catch (e) {}
       if (!verified) {
-        const v = await sb.rpc("my_age_verified");
+        const v = await ageP;
         if (!v.error && v.data === true) { verified = true; try { localStorage.setItem(okKey, "1"); } catch (e) {} }
       }
       if (verified) acct.age_hold = false;
@@ -7885,6 +8277,7 @@ async function boot() {
     let ageKnown = false;
     if (aerr) { try { ageKnown = localStorage.getItem("nook-age-ok:" + sbUser.id) === "1"; } catch (e) {} }
     ageHeld = !!(acct && acct.age_hold) || (!!aerr && !acct && !ageKnown);
+    if (ageHeld) feedPre = null;
     if (!aerr && (!acct || acct.deactivated)) { try { sessionStorage.setItem("nook-notice", acct ? "That account is deactivated. Sign in again to bring it back." : "Your account could not be loaded. Sign in again."); } catch (e) {} await sb.auth.signOut({ scope: "local" }).catch(() => {}); sbUser = null; }
     else if (sbUser && await foreignLocalData(acct)) {
       // an account that was deactivated here comes back with everything it had on this phone
@@ -7935,7 +8328,7 @@ async function boot() {
   refreshBadge();
   pushSync();
   setInterval(() => { if (document.visibilityState === "visible") checkBan(); }, 60000);
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { checkBan(); refreshBadge(); checkModNotices().catch(() => {}); } });
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { checkBan(); refreshBadge(true); checkModNotices().catch(() => {}); } });
 }
 // ---- notes to self: sealed on this phone and kept on every phone ----
 // each chat and each message is one row the server cannot read; nothing here ever makes the screen wait
@@ -8039,7 +8432,7 @@ async function notePriv(ns, key, r) {
   // known on this phone but gone from it: the removal goes up, it is not brought back
   if (ns.pushed[r.id] && !here) return false;
   if (here && ns.pushed[r.id] !== privSig(here)) return false;
-  const p = await noteOpen(key, r.body, r.id);
+  const p = await noteOpenP(key, r.body, r.id);
   const text = String(p.x || "").slice(0, 5000), t = Number(p.t) || Date.now(), pa = typeof p.pa === "string" ? p.pa : null;
   if (here) {
     if (here.text === text && here.t === t && (here.parent || null) === pa && !!here.liked === !!p.l && !!here.reposted === !!p.r && !!here.saved === !!p.s) return false;
@@ -8058,7 +8451,7 @@ async function noteExtra(ns, key, r) {
   const known = ns.pushed[r.id], cur = docs[r.id];
   // changed on this phone since the last sync: this phone wins and the change goes up
   if (known && known !== xSig(cur)) return false;
-  const p = await noteOpen(key, r.body, r.id);
+  const p = await noteOpenP(key, r.body, r.id);
   if (JSON.stringify(p) === JSON.stringify(cur)) { ns.pushed[r.id] = xSig(cur); return false; }
   xApply(r.id, p, !known);
   ns.pushed[r.id] = xSig(xDocs()[r.id]);
@@ -8096,6 +8489,51 @@ async function noteOpen(key, raw, rid) {
   } else pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
   return JSON.parse(new TextDecoder().decode(pt));
 }
+const noteTE = new TextEncoder(), noteTD = new TextDecoder();
+// [E2] noteOpenNow does what noteOpen does, but answers { p } (the opened note, plus legacy: true when the row was sealed without its id)
+// or { e } (the error noteOpen would have thrown). noteOpenP is what the pull uses: the answer that was started ahead of time for exactly
+// this row when there is one, else noteOpen itself (the legacy mark is set at the moment the row is taken in, as before).
+async function noteOpenNow(key, raw, rid) {
+  try {
+    const parts = String(raw).slice(5).split("."), iv = fromB64(parts[0]), ct = fromB64(parts[1]);
+    let pt, legacy = false;
+    try { pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv, additionalData: noteTE.encode(rid) }, key, ct); }
+    catch (e) { pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct); legacy = true; }
+    return { p: JSON.parse(noteTD.decode(pt)), legacy };
+  } catch (e) { return { e }; }
+}
+const noteMemo = new Map();
+async function noteOpenP(key, raw, rid) {
+  const m = typeof rid === "string" && rid ? noteMemo.get(rid) : null;
+  if (!m || m.raw !== raw || m.key !== key) return noteOpen(key, raw, rid);
+  noteMemo.delete(rid);
+  const r = await m.pr;
+  if (r.e) throw r.e;
+  if (r.legacy) legacySeen.add(rid);
+  return r.p;
+}
+// the next rows of a page are opened side by side a few dozen at a time while the earlier ones are being taken in
+function noteAhead(key, rows, from) {
+  for (let i = from; i < rows.length && i < from + 48; i++) {
+    const r = rows[i];
+    if (!r || r.deleted || typeof r.body !== "string" || typeof r.id !== "string" || noteMemo.has(r.id)) continue;
+    noteMemo.set(r.id, { raw: r.body, key, pr: noteOpenNow(key, r.body, r.id) });
+  }
+}
+const yieldMain = () => (typeof scheduler !== "undefined" && scheduler.yield ? scheduler.yield() : new Promise(r => setTimeout(r, 0)));
+// whether a chat holds a message of Zenith, remembered per chat during a pull and only looked at again for messages added since
+const noteAiMemo = new Map();
+function noteIsChat(c) {
+  const ms = c.msgs || [];
+  let e = noteAiMemo.get(c);
+  if (!e || e.arr !== ms || e.len > ms.length) e = { arr: ms, len: 0, ai: false };
+  if (!e.ai) for (let i = e.len; i < ms.length; i++) if (ms[i] && ms[i].ai) { e.ai = true; break; }
+  e.len = ms.length;
+  noteAiMemo.set(c, e);
+  return !e.ai;
+}
+// chats whose messages were sorted during this pull: a message that belongs at the end is then just added there
+const noteSorted = new Set();
 async function noteSeal(key, obj, rid) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const alg = typeof rid === "string" && rid ? { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(rid) } : { name: "AES-GCM", iv };
@@ -8149,10 +8587,10 @@ async function noteTake(ns, key, r) {
   }
   // a note this phone already knew but no longer has was removed here: the removal goes up, it is not brought back
   if (ns.pushed[r.id] && !noteHere(isChat, rid)) return false;
-  const p = await noteOpen(key, r.body, r.id);
+  const p = await noteOpenP(key, r.body, r.id);
   if (isChat) {
     let c = S.chats.find(x => x.id === rid);
-    if (c && (!isNoteChat(c) || ns.pushed[r.id] !== noteCSig(c))) return false;
+    if (c && (!noteIsChat(c) || ns.pushed[r.id] !== noteCSig(c))) return false;
     const name = String(p.n || "Notes to self").slice(0, 200), t = Number(p.t) || Date.now();
     if (c && c.name === name && c.t === t) return false;
     if (!c) { c = { id: rid, name, msgs: [], t }; S.chats.push(c); if (noteKnown) noteKnown.add("c:" + rid); } else { c.name = name; c.t = t; }
@@ -8162,7 +8600,7 @@ async function noteTake(ns, key, r) {
   const cid = String(p.c || "");
   if (!cid) return false;
   let c = S.chats.find(x => x.id === cid);
-  if (c && !isNoteChat(c)) return false;
+  if (c && !noteIsChat(c)) return false;
   const fm = noteFind(rid);
   let m = c && fm && fm.c === c ? fm.m : null;
   if (m && ns.pushed[r.id] !== noteMSig(m)) return false;
@@ -8178,7 +8616,12 @@ async function noteTake(ns, key, r) {
   for (const md of media) { try { imgs.push(await notePicIn(key, md)); } catch (e) { if (!(e && e.message === "gone" && (noteFails.get(r.id) || 0) >= 3)) throw e; } }
   if (!c) { c = { id: cid, name: "Notes to self", msgs: [], t }; S.chats.push(c); if (noteKnown) noteKnown.add("c:" + cid); ns.pushed["c:" + cid] = noteCSig(c); }
   noteFails.delete(r.id);
-  if (!m) { m = { id: rid, text, t, imgs }; c.msgs.push(m); c.msgs.sort((a, b) => a.t - b.t); if (noteKnown) noteKnown.add("m:" + rid); if (noteIdx) noteIdx.set(rid, { c, m }); } else { m.text = text; m.t = t; m.imgs = imgs; }
+  if (!m) {
+    m = { id: rid, text, t, imgs }; c.msgs.push(m);
+    // [E2] sorting the whole chat for every row of a pull is 5000 sorts; after the first one the order is known, and a row that is not older than the last one stays at the end
+    const n = c.msgs.length;
+    if (!(noteSorted.has(c) && n > 1 && c.msgs[n - 2].t <= t)) { c.msgs.sort((a, b) => a.t - b.t); noteSorted.add(c); }
+    if (noteKnown) noteKnown.add("m:" + rid); if (noteIdx) noteIdx.set(rid, { c, m }); } else { m.text = text; m.t = t; m.imgs = imgs; }
   if (rp) m.rpost = rp; else delete m.rpost;
   if (zp) m.zpost = zp; else delete m.zpost;
   ns.pushed[r.id] = noteMSig(m);
@@ -8209,7 +8652,11 @@ async function notesPull(ns, key) {
     const pics = (data || []).flatMap(r => Array.isArray(r.media) ? r.media : []).filter(md => md && md.url && md.iv).slice(0, 24);
     dmSignBatch(pics);
     pics.forEach(md => notePicIn(key, md).catch(() => {}));
+    // [E2] the rows of a page are opened a few dozen ahead (side by side), and the main thread is given back every 24 rows so a page of 500
+    // never runs as one long task
+    let idx = 0;
     for (const r of data || []) {
+      if (idx++ % 24 === 0) { noteAhead(key, data, idx - 1); await yieldMain(); }
       try { if (await noteTake(ns, key, r)) changed = true; noteBad.delete(r.id); okRows++; }
       catch (e) {
         if (e && e.message === "gone") noteFails.set(r.id, (noteFails.get(r.id) || 0) + 1);
@@ -8230,7 +8677,7 @@ async function notesPull(ns, key) {
   if (stuck && !okRows) return changed;
   ns.pullOk = true;
   return changed;
-  } finally { noteKnown = null; noteIdx = null; notePicMemo.clear(); }
+  } finally { noteKnown = null; noteIdx = null; notePicMemo.clear(); noteMemo.clear(); noteAiMemo.clear(); noteSorted.clear(); }
 }
 async function notesPush(ns, key) {
   const exist = new Set();
@@ -8443,7 +8890,7 @@ if (window.visualViewport) {
     // whatever stalls, the page reloads after a few seconds instead of hanging on the spinner
     setTimeout(() => location.reload(), 5000);
     try {
-      await Promise.all([Promise.race([flush(), wait(2500)]), wait(600)]);
+      clearTimeout(timer); await Promise.all([Promise.race([flush(), wait(2500)]), wait(350)]);
       if ("serviceWorker" in navigator) await Promise.race([navigator.serviceWorker.getRegistrations().then(rs => Promise.all(rs.map(r => r.update()))), wait(1200)]);
     } catch (e) {}
     location.reload();

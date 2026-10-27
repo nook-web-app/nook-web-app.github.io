@@ -3,6 +3,11 @@
 <title>Nook</title>
 <link rel="preload" href="fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preconnect" href="https://cimyolsipjdpibzaebmx.supabase.co" crossorigin>
+<!-- guard.js stays a plain script, so a framed page is hidden before anything is built. The parser cannot see the files below it until guard.js has arrived, so they are asked for first and fetched beside it. -->
+<link rel="preload" href="style.css" as="style">
+<link rel="preload" href="supabase.js" as="script" integrity="sha384-UagCvVPT5XXA0Hx+nJYUAGBFseHT9zBgpJMSebsAxl9lciTwbT+39j5VfRjdP5Tp" crossorigin="anonymous">
+<link rel="preload" href="app.js" as="script">
+<link rel="preload" href="update.js" as="script">
 <script src="guard.js"></script>
 <script defer src="supabase.js" integrity="sha384-UagCvVPT5XXA0Hx+nJYUAGBFseHT9zBgpJMSebsAxl9lciTwbT+39j5VfRjdP5Tp" crossorigin="anonymous"></script>
 <script defer src="app.js"></script>

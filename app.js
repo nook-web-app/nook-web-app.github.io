@@ -249,7 +249,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.11";
+const APP_VERSION = "3.22.12";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2737,7 +2737,8 @@ function settingsV() {
   main.append(h("div", { class: "group" },
     row(ic("pass", 22), "Change password", "Update your password", () => changePassV()),
     row(ic("mail", 22), "Change email", "Update your email", () => changeEmailV()),
-    totpRow, keyRow, pkRow));
+    pkRow,
+    totpRow, keyRow));
   main.append(sec("Feed"));
   main.append(h("div", { class: "group" }, row(ic("list", 22), "Languages I read", langText(), langSheet)));
   main.append(sec("Notifications"));
@@ -5320,7 +5321,7 @@ function authV() {
   main.append(h("div", { class: "auth" },
     h("h1", {}, "Nook"),
     h("p", { class: "sub" }, up ? "Make your account" : "Sign in to continue"),
-    ...fields, agreeRow, msg, btn, !pkOk() ? null : h("button", { class: "ghost", onclick: async e => {
+    ...fields, agreeRow, msg, btn, up || !pkOk() ? null : h("button", { class: "ghost", onclick: async e => {
       const b = e.currentTarget; msg.textContent = ""; b.disabled = true;
       try {
         const r = await passkeyAsk();
@@ -6288,7 +6289,7 @@ async function sealText(otherId, text) {
 const ZMARK = "\u2063Z\u2063";
 const ZPOST = "\u2063P\u2063";
 // the mark and the post card only count when they come from the owner's account, so nobody else can pose as Zenith
-const OWNER_ID = "8c1b5a27-edd0-4998-862d-e052f1260d80";
+const OWNER_ID = "8a5d16ec-1050-40d2-8a7d-bcb75dc75bba";
 // a shared post travels as a reference (its id): the other phone reads the post itself, so nobody can write words in someone else's name
 const RPOST = "\u2063R\u2063";
 const zUn = t => typeof t === "string" ? (t.startsWith(ZMARK) ? t.slice(ZMARK.length) : t.startsWith(ZPOST) || t.startsWith(RPOST) ? "a post" : t) : t;

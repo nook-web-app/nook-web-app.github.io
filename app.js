@@ -179,9 +179,15 @@ function view(src) {
   if (u) { urlCache.delete(src); urlCache.set(src, u); }
   if (!u) {
     try {
-      const bin = atob(src.slice(src.indexOf(",") + 1));
-      const arr = new Uint8Array(bin.length);
-      for (let k = 0; k < bin.length; k++) arr[k] = bin.charCodeAt(k);
+      const b64 = src.slice(src.indexOf(",") + 1);
+      let arr;
+      // the browser's own decoder is many times faster than a loop, which matters when a sheet or list shows a lot of pictures at once
+      if (typeof Uint8Array.fromBase64 === "function") arr = Uint8Array.fromBase64(b64);
+      else {
+        const bin = atob(b64);
+        arr = new Uint8Array(bin.length);
+        for (let k = 0; k < bin.length; k++) arr[k] = bin.charCodeAt(k);
+      }
       u = URL.createObjectURL(new Blob([arr], { type: (/^data:(image\/[^;,]+)/.exec(src) || [0, "image/jpeg"])[1] }));
     } catch (e) { u = src; }
     urlCache.set(src, u);
@@ -249,7 +255,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.26";
+const APP_VERSION = "3.22.27";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -898,8 +904,16 @@ function sheet(items, title, onDone) {
   // the sheet is a layer like a modal: the Back button closes it first, and what an item does starts once it is closed
   const gone = () => { scrim.style.animationPlayState = sh.style.animationPlayState = ""; dismiss(scrim, sh); if (onDone) setTimeout(onDone, 0); };
   const closeS = trackLayer(gone, gone);
+  // the pictures of people in a list are put in after the sheet has slid in, a few at a time, so opening it never waits for them
+  const late = [];
+  const lateAv = ra => { const a = rAv({ ...ra, avatar: null }, 32); if (ownMedia(ra.avatar)) late.push([a, ra.avatar]); return a; };
+  const fillLate = () => {
+    const batch = late.splice(0, 2);
+    batch.forEach(([a, src]) => { if (!a.isConnected) return; const im = picImg(src); im.loading = "eager"; a.prepend(im); });
+    if (late.length) requestAnimationFrame(fillLate);
+  };
   // an item with keep stays open when tapped, so several can be chosen one after another
-  const row = i => h("button", { class: "si" + (i.danger ? " danger" : "") + (i.on ? " on" : "") + (i.left ? " left" : i.icon || i.av ? "" : " plain"), onclick: e => { if (i.keep) i.fn(e.currentTarget); else close(i.fn ? () => i.fn() : undefined); } }, i.av ? h("span", { class: "sic" }, rAv(i.av, 32)) : i.icon ? h("span", { class: "sic" }, ic(i.icon, 20)) : null, h("span", {}, i.label), i.trail ? h("span", { class: "trail" }, i.trail) : null, i.keep ? h("span", { class: "trail ck" }, ic("check", 18)) : null);
+  const row = i => h("button", { class: "si" + (i.danger ? " danger" : "") + (i.on ? " on" : "") + (i.left ? " left" : i.icon || i.av ? "" : " plain"), onclick: e => { if (i.keep) i.fn(e.currentTarget); else close(i.fn ? () => i.fn() : undefined); } }, i.av ? h("span", { class: "sic" }, lateAv(i.av)) : i.icon ? h("span", { class: "sic" }, ic(i.icon, 20)) : null, h("span", {}, i.label), i.trail ? h("span", { class: "trail" }, i.trail) : null, i.keep ? h("span", { class: "trail ck" }, ic("check", 18)) : null);
   const grab = h("div", { class: "grab" }, h("i"));
   const sh = h("div", { class: "sheet", role: "dialog", "aria-label": title || "Options" }, grab, title ? h("div", { class: "st" }, title) : null,
     h("div", { class: "sg" }, items.filter(i => !i.cancel).map(row)),
@@ -921,6 +935,7 @@ function sheet(items, title, onDone) {
   scrim.style.animationPlayState = sh.style.animationPlayState = "paused";
   layer.append(scrim, sh);
   requestAnimationFrame(() => requestAnimationFrame(() => { if (!sh.classList.contains("out")) scrim.style.animationPlayState = sh.style.animationPlayState = ""; }));
+  if (late.length) setTimeout(fillLate, 260);
 }
 function confirmSheet(msg, label, fn) {
   sheet([{ label, danger: true, fn }, { label: "Cancel", cancel: true }], msg);

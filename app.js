@@ -249,7 +249,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.19";
+const APP_VERSION = "3.22.20";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1091,13 +1091,10 @@ function lightbox(imgs, i, cap, opts) {
     };
     const cached = isImgId(imgs[n]) ? imgPeek(imgs[n]) : imgs[n];
     if (cached !== undefined) put(cached); else imgReal(imgs[n]).then(put);
-    l.hidden = n === 0 || imgs.length < 2; r.hidden = n === imgs.length - 1 || imgs.length < 2;
   };
+  const step = d => { const k = n + d; if (k < 0 || k >= imgs.length) return; n = k; show(); };
   const lb = h("div", { class: "lb", onclick: () => closeLb() });
   const x = h("button", { class: "ib x", "aria-label": "Close", onclick: () => closeLb() }, ic("close", 22));
-  const l = h("button", { class: "ib l", "aria-label": "Previous", onclick: e => { e.stopPropagation(); n--; show(); } }, ic("back", 22));
-  const r = h("button", { class: "ib r", "aria-label": "Next", onclick: e => { e.stopPropagation(); n++; show(); } }, ic("back", 22));
-  r.firstChild.style.transform = "scaleX(-1)";
   const del = opts && opts.del ? h("button", { class: "ib d", "aria-label": "Delete photo", onclick: e => {
     e.stopPropagation();
     confirmSheet("Delete this photo?", "Delete", async () => {
@@ -1109,7 +1106,16 @@ function lightbox(imgs, i, cap, opts) {
       show();
     });
   } }, ic("trash", 22)) : null;
-  lb.append(...[holder, x, del, cap ? h("div", { class: "cap" }, cap) : null, imgs.length > 1 ? l : null, imgs.length > 1 ? r : null].filter(Boolean));
+  // a sideways swipe moves to the next or previous photo
+  let sx = 0, sy = 0, swipe = false;
+  lb.addEventListener("touchstart", e => { swipe = e.touches.length === 1; if (swipe) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; } }, { passive: true });
+  lb.addEventListener("touchend", e => {
+    if (!swipe || !imgs.length) return;
+    swipe = false;
+    const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) { step(dx < 0 ? 1 : -1); e.preventDefault(); }
+  });
+  lb.append(...[holder, x, del, cap ? h("div", { class: "cap" }, cap) : null].filter(Boolean));
   closeLb = trackLayer(() => dismiss(lb));
   layer.append(lb);
   show();

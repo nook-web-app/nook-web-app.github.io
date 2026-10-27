@@ -249,7 +249,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.21";
+const APP_VERSION = "3.22.22";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1105,33 +1105,25 @@ function lightbox(imgs, i, cap, opts) {
       show();
     });
   } }, ic("trash", 22)) : null;
-  // a sideways swipe drags the photo with the finger and slides the next one in
-  let sx = 0, sy = 0, swipe = false, drag = false, busy = false;
-  const move = (x, ms, op) => { holder.style.transition = ms ? `transform ${ms}ms cubic-bezier(.2,.8,.2,1),opacity ${ms}ms` : "none"; holder.style.transform = x ? `translateX(${x}px)` : ""; holder.style.opacity = op == null ? "" : op; };
-  lb.addEventListener("touchstart", e => { swipe = !busy && e.touches.length === 1; drag = false; if (swipe) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; } }, { passive: true });
+  // a sideways swipe changes the photo
+  let sx = 0, sy = 0, swipe = false, drag = false;
+  const move = (x, ms) => { holder.style.transition = ms ? `transform ${ms}ms ease-out` : "none"; holder.style.transform = x ? `translateX(${x}px)` : ""; };
+  lb.addEventListener("touchstart", e => { swipe = e.touches.length === 1; drag = false; if (swipe) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; } }, { passive: true });
   lb.addEventListener("touchmove", e => {
     if (!swipe) return;
     const dx = e.touches[0].clientX - sx, dy = e.touches[0].clientY - sy;
     if (!drag && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) drag = true;
-    if (!drag) return;
-    const edge = (dx > 0 && n === 0) || (dx < 0 && n === imgs.length - 1);
-    const x = edge ? dx / 4 : dx;
-    move(x, 0, Math.max(.4, 1 - Math.abs(x) / (window.innerWidth * 1.2)));
+    if (drag) move(dx, 0);
   }, { passive: true });
   lb.addEventListener("touchend", e => {
     if (!swipe || !drag) { swipe = false; return; }
     swipe = false; drag = false;
-    const dx = e.changedTouches[0].clientX - sx, d = dx < 0 ? 1 : -1, w = window.innerWidth;
-    if (Math.abs(dx) < Math.min(80, w * .2) || n + d < 0 || n + d >= imgs.length) { move(0, 220, 1); return; }
-    busy = true;
-    move(-d * w, 160, 0);
-    setTimeout(() => {
-      n += d; holder.classList.add("sw"); show();
-      move(d * w * .35, 0, 0);
-      void holder.offsetWidth;
-      move(0, 240, 1);
-      setTimeout(() => { busy = false; }, 240);
-    }, 160);
+    const dx = e.changedTouches[0].clientX - sx, d = dx < 0 ? 1 : -1;
+    if (Math.abs(dx) < 60 || n + d < 0 || n + d >= imgs.length) { move(0, 150); return; }
+    n += d; holder.classList.add("sw"); show();
+    move(-d * 60, 0);
+    void holder.offsetWidth;
+    move(0, 150);
   });
   lb.append(...[holder, x, del, cap ? h("div", { class: "cap" }, cap) : null].filter(Boolean));
   closeLb = trackLayer(() => dismiss(lb));

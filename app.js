@@ -4576,7 +4576,7 @@ function showBanned(email) {
     const mail = email || (sbUser && sbUser.email) || "";
     if (mail) sessionStorage.setItem(BAN_EMAIL, mail);
   } catch (e) {}
-  if (rtChan) { try { sb.removeChannel(rtChan); } catch (e) {} rtChan = null; }
+  if (rtChan) { try { sb.removeChannel(rtChan); } catch (e) {} rtChan = null; rtOk = false; }
   stopDelChan();
   leaving = true;
   Promise.resolve(sb.auth.signOut()).catch(() => {}).then(() => wipeLocal(true)).then(() => {
@@ -7553,7 +7553,7 @@ function dmV(c) {
     if (Date.now() - polledAt < pollGap() - 500) return;
     polledAt = Date.now();
     pulling = true;
-    const small = fullAt && Date.now() - fullAt < 60000;
+    const small = fullAt && Date.now() - fullAt < 30000;
     (small ? pullNew().catch(() => pull()) : pull()).catch(() => {}).finally(() => { pulling = false; });
     if (Date.now() - statusAt > 60000) refreshStatus();
   }, 5000);

@@ -249,7 +249,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.10";
+const APP_VERSION = "3.22.11";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1708,26 +1708,34 @@ function chatV() {
   topEl.append(bar(menuBtn(), ttl("Chats")));
   const dmBox = h("div");
   // rows of the same shape as the chats shimmer until the real ones are drawn, so the page never looks empty
-  const skelRows = () => [0, 1, 2, 3, 4].map(() => h("div", { class: "lrow skelrow" }, h("div", { class: "sk av48 skel" }), h("div", { class: "nm" }, h("div", { class: "sk l1 skel" }), h("div", { class: "sk l2 skel" }))));
+  const skelRows = () => Array.from({ length: Math.max(1, Math.min(6, Number((() => { try { return localStorage.getItem("nook-inbox-n"); } catch (e) { return 0; } })()) || 1)) }, () => h("div", { class: "lrow skelrow" }, h("div", { class: "sk av48 skel" }), h("div", { class: "nm" }, h("div", { class: "sk l1 skel" }), h("div", { class: "sk l2 skel" }))));
   const emptyBox = h("div");
   let inboxN = -1;
   const showEmpty = () => {
     emptyBox.textContent = "";
     if (inboxN === 0 && !S.chats.length) emptyBox.append(emptyState("smile", "Say hi to yourself.", h("button", { class: "pri", onclick: newChat }, "New chat")));
   };
-  dmBox.append(...skelRows());
+  const inboxHit = sbUser ? cacheRead("inbox:" + sbUser.id) : null;
+  if (!inboxHit) dmBox.append(...skelRows());
   main.append(dmBox);
   let paintSeq = 0;
-  const paintInbox = async convos => {
+  const paintInbox = convos => {
     const seq = ++paintSeq;
-    // the mute list is only waited for the first time on this phone
-    if (!dmMuteP) await loadDmMutes(); else loadDmMutes();
+    // nothing is waited for before the rows are drawn: names, pictures and times come from this phone, the message previews open a moment later
+    if (sbUser) { primeDmMutes(); loadDmMutes().then(() => { if (seq === paintSeq) dmBox.querySelectorAll(".lrow[data-uid]").forEach(r => { if (dmHideSet.has(r.dataset.uid)) r.remove(); }); }); }
     convos = convos.filter(cv => !dmHideSet.has(cv.other)).sort((a, b) => (dmPinned(b.other) ? 1 : 0) - (dmPinned(a.other) ? 1 : 0));
-    const bodies = await Promise.all(convos.map(cv => (cv.last ? openText(cv.other, cv.last.body, true).then(zUn) : "")));
-    if (seq !== paintSeq || !dmBox.isConnected) return;
     dmBox.textContent = "";
     inboxN = convos.length; showEmpty();
-    convos.forEach((cv, i) => dmBox.append(dmRow(cv, bodies[i])));
+    try { localStorage.setItem("nook-inbox-n", String(convos.length)); } catch (e) {}
+    convos.forEach(cv => dmBox.append(dmRow(cv, "")));
+    convos.forEach(cv => {
+      if (!cv.last) return;
+      openText(cv.other, cv.last.body, true).then(zUn).then(b => {
+        if (seq !== paintSeq) return;
+        const sub = dmBox.querySelector('[data-uid="' + cv.other + '"] .sub');
+        if (sub && !sub.classList.contains("tp")) sub.textContent = dmGist(b, cv.last.media, cv.last.sender_id === sbUser.id);
+      }).catch(() => {});
+    });
     // the newest chats are downloaded in the background, so tapping one shows its messages right away
     convos.slice(0, 3).forEach(cv => {
       const k = "thread:" + sbUser.id + ":" + cv.other, hit = cacheRead(k);
@@ -5733,9 +5741,8 @@ async function warmInbox() {
   convos.forEach(c => { if (c.avatar && /^https?:/.test(c.avatar)) new Image().src = c.avatar; });
 }
 async function dmInbox() {
-  await loadSocial(true);
-  // the server answers with the last message and the unread count of every chat, however long the history is
-  const { data, error } = await sb.rpc("dm_inbox");
+  // the server answers with the last message and the unread count of every chat, however long the history is; nicknames and clears load beside it
+  const [, { data, error }] = await Promise.all([loadSocial(true), sb.rpc("dm_inbox")]);
   // a failed load keeps what is on the screen and in the cache
   if (error) throw error;
   const convos = new Map();
@@ -6257,7 +6264,19 @@ function sharedKeyFast(otherId) {
   const hit = e2eReady.get(otherId);
   const fresh = sharedKey(otherId).then(k => { e2eReady.set(otherId, k); return k; });
   if (hit) { fresh.catch(() => {}); return Promise.resolve(hit); }
-  return fresh;
+  // first time in this session: the key remembered for this person (the first one ever seen) opens messages without waiting for the server, which still checks it behind the scenes
+  let pinned = null;
+  try { pinned = localStorage.getItem("nook-pin:" + sbUser.id + ":" + otherId); } catch (e) {}
+  if (!pinned || otherId === sbUser.id) return fresh;
+  fresh.catch(() => {});
+  const early = (async () => {
+    const mine = await myKeys();
+    const peer = await crypto.subtle.importKey("raw", fromB64(pinned), E2E_ALG, false, []);
+    const k = await crypto.subtle.deriveKey({ name: "ECDH", public: peer }, mine.priv, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+    if (!e2eReady.has(otherId)) e2eReady.set(otherId, k);
+    return k;
+  })();
+  return early.catch(() => fresh);
 }
 async function sealText(otherId, text) {
   const key = await sharedKey(otherId);
@@ -6419,7 +6438,8 @@ async function openText(otherId, raw, flag) {
   try {
     const parts = raw.slice(5).split(".");
     const key = await sharedKeyFast(otherId);
-    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(parts[0]) }, key, fromB64(parts[1]));
+    // the remembered key can be an old one after somebody changed phone: the checked key is tried before giving up
+    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(parts[0]) }, key, fromB64(parts[1])).catch(async () => crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(parts[0]) }, await sharedKey(otherId), fromB64(parts[1])));
     return new TextDecoder().decode(pt);
   } catch (e) { return e2eLocked ? "Locked. Unlock your messages in Settings" : "Can't open this one (the chat key changed)"; }
 }
@@ -6721,14 +6741,23 @@ function paintTyping(from, on) {
 const dmMuteSet = new Map();
 const dmHideSet = new Set();
 const dmMuted = id => { if (dmHideSet.has(id)) return true; if (!dmMuteSet.has(id)) return false; const u = dmMuteSet.get(id); return !u || u > Date.now(); };
-let dmMuteAt = 0, dmMuteP = null;
+let dmMuteAt = 0, dmMuteP = null, dmMuteOwner = null;
+// the last known mute and hide lists are put back from this phone at once, the server then confirms them
+function primeDmMutes() {
+  if (dmMuteOwner === sbUser.id) return;
+  dmMuteOwner = sbUser.id;
+  dmMuteSet.clear(); dmHideSet.clear();
+  const c = cacheRead("dmmutes:" + sbUser.id);
+  if (c && c.v) { (c.v.m || []).forEach(x => dmMuteSet.set(x[0], x[1])); (c.v.h || []).forEach(x => dmHideSet.add(x)); }
+}
 function loadDmMutes(force) {
+  primeDmMutes();
   if (!force && dmMuteP && Date.now() - dmMuteAt < 15000) return dmMuteP;
   dmMuteAt = Date.now();
   dmMuteP = Promise.resolve(sb.from("dm_mutes").select("target_id, until_at, hidden").eq("owner_id", sbUser.id)).then(r => {
     if (r && r.data) {
       dmMuteSet.clear(); dmHideSet.clear();
-      r.data.forEach(x => { if (x.hidden) dmHideSet.add(x.target_id); else dmMuteSet.set(x.target_id, x.until_at ? Date.parse(x.until_at) : 0); });
+      r.data.forEach(x => { if (x.hidden) dmHideSet.add(x.target_id); else dmMuteSet.set(x.target_id, x.until_at ? Date.parse(x.until_at) : 0); });      cacheWrite("dmmutes:" + sbUser.id, { m: [...dmMuteSet], h: [...dmHideSet] });
     }
   }, () => {});
   return dmMuteP;

@@ -249,7 +249,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.17";
+const APP_VERSION = "3.22.18";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -6909,11 +6909,16 @@ function dmV(c) {
   const stickFor = ms => { stick = true; clearTimeout(stickT); stickT = setTimeout(() => { stick = false; }, ms); };
   stickFor(3500);
   // both are let go when the chat closes, so opening many chats does not pile them up
-  const dmRo = typeof ResizeObserver === "function" ? new ResizeObserver(() => { if (stick) scrollEnd(); }) : null;
+  const dmRo = typeof ResizeObserver === "function" ? new ResizeObserver(() => { if (stick || (atEnd && list.querySelector(".dmw.wait"))) scrollEnd(); }) : null;
   if (dmRo) dmRo.observe(list);
   const dmAc = new AbortController();
   ["touchstart", "wheel"].forEach(ev => main.addEventListener(ev, () => { stick = false; }, { passive: true, signal: dmAc.signal }));
   const nearEnd = () => main.scrollHeight - main.scrollTop - main.clientHeight < 160;
+  // when the keyboard opens or closes the page changes height: a chat that was at its end stays at its end, so the newest messages are never hidden behind the keyboard
+  let atEnd = true;
+  main.addEventListener("scroll", () => { atEnd = nearEnd(); }, { passive: true, signal: dmAc.signal });
+  const mainRo = typeof ResizeObserver === "function" ? new ResizeObserver(() => { if (atEnd || stick) scrollEnd(); }) : null;
+  if (mainRo) mainRo.observe(main);
   const sync = () => {
     send.disabled = busy || !!locked || jobs.length > 0 || (!ta.value.trim() && !pend.length);
     ta.style.height = "auto";
@@ -7099,6 +7104,7 @@ function dmV(c) {
   });
   ta.addEventListener("input", () => { sync(); if (ta.value.trim()) sendTyping(c.id, true); else sendTyping(c.id, false); });
   ta.addEventListener("blur", () => sendTyping(c.id, false));
+  ta.addEventListener("focus", () => { if (atEnd) setTimeout(scrollEnd, 320); });
   ta.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey && window.matchMedia("(pointer: fine)").matches) { e.preventDefault(); doSend(); }
   });
@@ -7129,7 +7135,7 @@ function dmV(c) {
       if (el) foldAway(el, after); else after();
     },
     typing,
-    stop: () => { clearInterval(poll); document.removeEventListener("visibilitychange", onVis); if (dmRo) dmRo.disconnect(); dmAc.abort(); cancelAnimationFrame(tRaf); sendTyping(c.id, false); }
+    stop: () => { clearInterval(poll); document.removeEventListener("visibilitychange", onVis); if (dmRo) dmRo.disconnect(); if (mainRo) mainRo.disconnect(); dmAc.abort(); cancelAnimationFrame(tRaf); sendTyping(c.id, false); }
   };
   main.style.cssText = "display:flex;flex-direction:column";
   list.append(tEl);

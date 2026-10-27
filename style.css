@@ -340,6 +340,7 @@ textarea{resize:none}
 .lb{animation:fadeIn .2s ease-out}
 .lb.out{animation:fadeOut .2s forwards}
 .lb img{animation:zoomIn .24s cubic-bezier(.2,.8,.2,1)}
+.lb .lbm.sw img{animation:none}
 .post.fresh{animation:fresh .6s ease-out}
 .mrow.new{animation:fadeIn .18s ease-out}
 .cimgs div{animation:zoomIn .22s ease-out}

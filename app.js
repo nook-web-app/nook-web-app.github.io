@@ -249,7 +249,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.8";
+const APP_VERSION = "3.22.9";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -6491,11 +6491,13 @@ function srcDims(src) {
   });
 }
 function dmMedia(md, otherId, onOpen) {
-  const wrap = h("div", { class: "dmw" });
-  if (/^video\//.test(md.type || "")) { wrap.append(h("div", { class: "dmgone" }, "Videos are not supported")); return wrap; }
+  const wrap = h("div", { class: "dmw wait" });
+  if (/^video\//.test(md.type || "")) { wrap.classList.remove("wait"); wrap.append(h("div", { class: "dmgone" }, "Videos are not supported")); return wrap; }
   const el = h("img", { alt: "", decoding: "async", class: "dmm" });
-  if (md.w && md.h) el.style.setProperty("--ar", md.w / md.h);
-  const gone = () => { wrap.textContent = ""; wrap.append(h("div", { class: "dmgone" }, "Photo not available")); };
+  if (md.w && md.h) { el.style.setProperty("--ar", md.w / md.h); wrap.style.setProperty("--ar", md.w / md.h); }
+  // until the picture is in, a shimmering frame of the same size holds its place
+  el.addEventListener("load", () => wrap.classList.remove("wait"));
+  const gone = () => { wrap.classList.remove("wait"); wrap.textContent = ""; wrap.append(h("div", { class: "dmgone" }, "Photo not available")); };
   el.addEventListener("error", () => { if (el.getAttribute("src") && !/^(blob|data):/.test(el.getAttribute("src"))) gone(); });
   if (onOpen) el.addEventListener("click", () => onOpen(el));
   if (md.iv) loadEncMedia(md, otherId).then(u => { if (u) el.src = u; }).catch(gone);

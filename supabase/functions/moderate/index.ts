@@ -155,6 +155,7 @@ async function ask(parts: unknown[], system = SYSTEM): Promise<Verdict> {
   if (!key) { C().lastNote = "no gemini key in the vault"; C().aiDown = true; return null; }
   try {
     let r: Response | null = null;
+    let unreadable = false;
     for (let round = 0; round < 3; round++) {
       const now = Date.now();
       const start = turn++;
@@ -185,11 +186,26 @@ async function ask(parts: unknown[], system = SYSTEM): Promise<Verdict> {
         }
         // a model whose quota is used up or that is overloaded rests and the next one takes the check
         if (r.status === 429 || r.status >= 500) { busyUntil[model] = Date.now() + (r.status === 429 ? REST_MS : 5000); continue; }
+        // an answer that cannot be read as a verdict (Gemma sometimes writes its reasoning and runs out of room) goes to the next model
+        if (r.ok) {
+          const j = await r.json();
+          const v = readVerdict(j);
+          if (v !== null) return v;
+          const cand = j && j.candidates && j.candidates[0];
+          // deno-lint-ignore no-explicit-any
+          const txt = ((cand && cand.content && cand.content.parts) || []).map((p: any) => p.text || "").join("\n");
+          C().lastNote = "unreadable answer from " + model + " finish=" + (cand ? cand.finishReason : "none") + " len=" + txt.length + " tail=" + txt.slice(-200);
+          r = null;
+          unreadable = true;
+          continue;
+        }
         break;
       }
       if (r && r.status !== 429 && r.status < 500) break;
     }
-    if (!r || !r.ok) { C().lastNote = "gemini " + (r ? r.status : "none") + " " + (r ? (await r.text()).slice(0, 120) : ""); if (!r || r.status === 429 || r.status >= 500) C().aiDown = true; return null; }
+    // every model answered but none in a form that can be read: not an outage, the check just stays open
+    if (!r && unreadable) return null;
+    if (!r || !r.ok) { if (r) C().lastNote = "gemini " + r.status + " " + (await r.text()).slice(0, 120); else if (!C().lastNote) C().lastNote = "gemini none"; if (!r || r.status === 429 || r.status >= 500) C().aiDown = true; return null; }
     const j = await r.json();
     const v = readVerdict(j);
     if (v === null) {
@@ -479,8 +495,19 @@ Deno.serve(async (req) => {
       };
       for (let i = 0; i < todo.length; i += AT_ONCE) await Promise.all(todo.slice(i, i + AT_ONCE).map((r) => again(r.id)));
       const { data: accs } = await admin.from("accounts").select("id").or("avatar_mod.eq.pending,banner_mod.eq.pending,text_pending.eq.true").limit(PER_SWEEP);
-      const accTodo = accs || [];
-      for (let i = 0; i < accTodo.length; i += AT_ONCE) await Promise.all(accTodo.slice(i, i + AT_ONCE).map((r) => als.run(fresh(), () => runAccount(r.id))));
+      const accIds = (accs || []).map((r) => r.id as string);
+      const { data: accWaits } = accIds.length ? await admin.from("mod_retry").select("post_id, tries, next_at").in("post_id", accIds) : { data: [] };
+      const accWait = new Map((accWaits || []).map((w) => [w.post_id as string, w as { tries: number; next_at: string }]));
+      const accTodo = accIds.filter((id) => !accWait.has(id) || Date.parse(accWait.get(id)!.next_at) <= Date.now()).map((id) => ({ id }));
+      // accounts wait the same way posts do (the table is keyed by a random id, so the two never meet)
+      const accAgain = async (id: string) => {
+        const tries = (accWait.get(id)?.tries || 0) + 1;
+        await admin.from("mod_retry").upsert({ post_id: id, tries, next_at: new Date(Date.now() + Math.min(2 ** (tries - 1), 30) * 60000).toISOString() }, { onConflict: "post_id" });
+        await als.run(fresh(), () => runAccount(id));
+        const { data: left } = await admin.from("accounts").select("id").eq("id", id).or("avatar_mod.eq.pending,banner_mod.eq.pending,text_pending.eq.true").maybeSingle();
+        if (!left) await admin.from("mod_retry").delete().eq("post_id", id);
+      };
+      for (let i = 0; i < accTodo.length; i += AT_ONCE) await Promise.all(accTodo.slice(i, i + AT_ONCE).map((r) => accAgain(r.id)));
     }
   })();
   // answer at once, finish the check in the background

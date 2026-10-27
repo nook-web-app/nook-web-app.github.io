@@ -249,7 +249,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.15";
+const APP_VERSION = "3.22.16";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2315,6 +2315,8 @@ function zenCounts() {
     if (n) { if (!sp) { sp = h("span", {}); b.append(sp); } sp.textContent = String(n); } else if (sp) sp.remove();
   });
 }
+// chats that came from the saved copy while the chat list is open show up at once
+const chatListRefresh = () => { const cur = stack[stack.length - 1]; if (cur && cur.r === "chat" && !layer.childElementCount) render(); };
 const zenRefresh = () => {
   const sig = S.posts.length + ":" + S.posts.filter(p => p.zenLike).length;
   if (sig === zenSig) return;
@@ -2344,7 +2346,7 @@ async function zenTick() {
   if (zenBusy || !S || !zOn() || !zenSyncOn || document.visibilityState !== "visible") return;
   zenBusy = true;
   try {
-    if (Date.now() - zenPulled > 45000) { zenPulled = Date.now(); if (await zenPull()) zenRefresh(); }
+    if (Date.now() - zenPulled > 45000) { zenPulled = Date.now(); if (await zenPull()) { zenRefresh(); chatListRefresh(); } }
   } catch (e) {} finally { zenBusy = false; }
 }
 // asks the server to look at the owner's new posts right away instead of at its next minute
@@ -2573,7 +2575,7 @@ async function zenPull() {
 }
 async function zenStart() {
   if (zenSyncOn || !sbUser || !isOwner()) return;
-  await zenPull();
+  const pulled = await zenPull();
   zenSyncOn = true;
   zenSync();
   // his account is looked up each time, so a remade account is never mixed up with the old one; the profile picture goes up again for a new one
@@ -2586,6 +2588,7 @@ async function zenStart() {
   if (S.zen.pfpPushed !== (S.zen.pfpAt || 0)) zenPushProfile();
   const top = stack[stack.length - 1].r;
   if (!layer.childElementCount && (top === "zen" || (stack.length === 1 && top === "home"))) render();
+  else if (pulled) chatListRefresh();
 }
 // his picture and banner style only: no name and no bio
 // his public account gets the same picture and banner style the owner chose

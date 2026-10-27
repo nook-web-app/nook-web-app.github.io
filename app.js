@@ -249,7 +249,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.18";
+const APP_VERSION = "3.22.19";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1118,11 +1118,14 @@ function lightbox(imgs, i, cap, opts) {
 let stack = [{ r: "home" }];
 const scrolls = [];
 // a page that was left comes back to the same spot even when its pictures are still loading: the spot is set again until the page is tall enough
+let settleOff = null;
 function settleScroll(y) {
+  if (settleOff) settleOff();
   main.scrollTop = y;
   if (!y) return;
   let n = 0, stop = false;
-  const off = () => { stop = true; main.removeEventListener("touchstart", off); main.removeEventListener("wheel", off); };
+  const off = () => { stop = true; if (settleOff === off) settleOff = null; main.removeEventListener("touchstart", off); main.removeEventListener("wheel", off); };
+  settleOff = off;
   main.addEventListener("touchstart", off, { passive: true });
   main.addEventListener("wheel", off, { passive: true });
   const tick = () => {
@@ -1136,7 +1139,10 @@ function settleScroll(y) {
 const MAX_OPEN_POSTS = 2;
 function go(r) {
   if (r && r.r === "thread" && stack.filter(x => x.r === "thread").length >= MAX_OPEN_POSTS) return;
-  scrolls.push(main.scrollTop); stack.push(r); hist(false); render("fwd"); main.scrollTop = 0; }
+  scrolls.push(main.scrollTop); stack.push(r); hist(false); render("fwd");
+  // a chat puts itself at its newest message; the others start at the top
+  if (r.r !== "conv" && r.r !== "dm") main.scrollTop = 0;
+}
 function back() { if (stack.length > 1) history.back(); }
 function hist(replace) { const st = { s: JSON.parse(JSON.stringify(stack)), sc: scrolls.slice() }; try { if (replace) history.replaceState(st, ""); else history.pushState(st, ""); } catch (e) {} }
 // after the app was closed and opened again the browser has one history entry but the screen has several levels: every level gets its own entry, so one back press goes up one level
@@ -1880,13 +1886,19 @@ function convV(c) {
   main.append(list, dock);
   navEl.hidden = true;
   let stick = true;
+  // while the chat is opening it is held at its newest message, whatever the layout does underneath, until the person scrolls it themselves
+  const born = Date.now();
+  let touched = false;
+  ["touchstart", "wheel"].forEach(ev => main.addEventListener(ev, () => { touched = true; }, { passive: true }));
+  const opening = () => !touched && Date.now() - born < 2500;
   main.scrollTop = main.scrollHeight;
-  main.onscroll = () => { stick = main.scrollHeight - main.scrollTop - main.clientHeight < 120; };
+  main.onscroll = () => { stick = opening() || main.scrollHeight - main.scrollTop - main.clientHeight < 120; };
   let roRaf = 0;
-  convRO = new ResizeObserver(() => { if (!stick || roRaf) return; roRaf = requestAnimationFrame(() => { roRaf = 0; main.scrollTop = main.scrollHeight; }); });
+  convRO = new ResizeObserver(() => { if (!(stick || opening()) || roRaf) return; roRaf = requestAnimationFrame(() => { roRaf = 0; main.scrollTop = main.scrollHeight; }); });
   convRO.observe(list);
   convRO.observe(main);
   requestAnimationFrame(() => { if (stick) main.scrollTop = main.scrollHeight; });
+  [120, 400, 900].forEach(ms => setTimeout(() => { if (opening() && main.isConnected && list.isConnected) main.scrollTop = main.scrollHeight; }, ms));
 }
 function renameChat(chat) {
   const inp = h("input", { class: "in", id: "rn" });
@@ -7717,6 +7729,8 @@ function render(anim) {
   if (stack.length === 1 && ((cur.r === "thread" && !byId(cur.id)) || (cur.r === "conv" && !S.chats.some(x => x.id === cur.id)) || (cur.r === "list" && !S.lists.some(x => x.id === cur.id)))) { stack = [{ r: "home" }]; scrolls.length = 0; cur = stack[0]; }
   try { sessionStorage.setItem("nook-route", JSON.stringify({ stack, scrolls })); } catch (e) {}
   if (window.nookPtr) window.nookPtr.cancel();
+  // a scroll position being restored for the page we leave must not fight the next page
+  if (settleOff) settleOff();
   if (convRO) { convRO.disconnect(); convRO = null; }
   if (liveDm && liveDm.stop) liveDm.stop();
   liveDm = null;

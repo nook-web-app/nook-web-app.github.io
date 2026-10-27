@@ -125,6 +125,9 @@ function readVerdict(j: any): Verdict {
 
 // moderation only uses Gemma 4 (high daily limit); the 31B one takes over when the 26B one is out of tokens for the minute or the day. Zenith has its own models so they never share this quota
 const MODELS = ["gemma-4-26b-a4b-it", "gemma-4-31b-it"];
+// Gemma 4 has no thinking level (asking for one is an error that doubled every check), and it can take a long time to answer; when both are busy or too slow the check goes to this faster model
+const FALLBACK = "gemini-3.1-flash-lite";
+const CALL_MS = 30000;
 // checks take turns between the models; one that answered "busy" rests for a short while, and when every model is resting
 // the check waits for the first one to be free (or stays queued for the next sweep when that takes too long)
 const busyUntil: Record<string, number> = {};
@@ -151,22 +154,31 @@ async function ask(parts: unknown[], system = SYSTEM): Promise<Verdict> {
     for (let round = 0; round < 3; round++) {
       const now = Date.now();
       const start = turn++;
-      const free = MODELS.map((_, i) => MODELS[(start + i) % MODELS.length]).filter((m) => (busyUntil[m] || 0) <= now);
+      const free = [...MODELS.map((_, i) => MODELS[(start + i) % MODELS.length]), FALLBACK].filter((m) => (busyUntil[m] || 0) <= now);
       if (!free.length) {
-        const wait = Math.min(...MODELS.map((m) => busyUntil[m] || 0)) - now;
+        const wait = Math.min(...[...MODELS, FALLBACK].map((m) => busyUntil[m] || 0)) - now;
         if (wait > WAIT_MS) break;
         await sleep(Math.max(wait, 200));
         continue;
       }
       for (const model of free) {
+        const gemma = model.startsWith("gemma");
         const call = (think: boolean) => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
           method: "POST",
           headers: { "content-type": "application/json", "x-goog-api-key": key },
-          signal: AbortSignal.timeout(20000),
-          body: JSON.stringify({ systemInstruction: { parts: [{ text: system + " Reply with the verdict only. When it is SAFE, reply with the single word SAFE and nothing else: no reason, no analysis, no bullet points. For any other verdict give the two lines." }] }, contents: [{ role: "user", parts }], generationConfig: { temperature: 0, maxOutputTokens: 2000, ...(think ? { thinkingConfig: { thinkingLevel: "low" } } : {}) } }),
+          signal: AbortSignal.timeout(CALL_MS),
+          body: JSON.stringify({ systemInstruction: { parts: [{ text: system + " Reply with the verdict only. When it is SAFE, reply with the single word SAFE and nothing else: no reason, no analysis, no bullet points. For any other verdict give the two lines." }] }, contents: [{ role: "user", parts }], generationConfig: { temperature: 0, maxOutputTokens: 2000, ...(think ? { thinkingConfig: { thinkingLevel: "minimal" } } : {}) } }),
         });
-        r = await call(true);
-        if (r.status === 400) r = await call(false);
+        try {
+          r = await call(!gemma);
+          if (r.status === 400 && !gemma) r = await call(false);
+        } catch (e) {
+          // too slow or unreachable: the model rests and the next one takes the check
+          C().lastNote = "fetch failed " + String((e as Error).message || e);
+          busyUntil[model] = Date.now() + REST_MS;
+          r = null;
+          continue;
+        }
         // a model whose quota is used up or that is overloaded rests and the next one takes the check
         if (r.status === 429 || r.status >= 500) { busyUntil[model] = Date.now() + (r.status === 429 ? REST_MS : 5000); continue; }
         break;

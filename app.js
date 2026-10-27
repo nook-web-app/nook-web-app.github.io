@@ -249,7 +249,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.13";
+const APP_VERSION = "3.22.14";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -4430,13 +4430,15 @@ function authenticatorSetup() {
   return new Promise(resolve => {
     const box = h("div", { class: "fld ctr" }, h("p", { class: "note" }, "Getting your key..."));
     const code = codeInput();
+    // the code box only appears once the key is shown, so it is clear what the code is for
+    const codeFld = h("div", { class: "fld", hidden: true }, h("label", {}, "Then type the 6 digit code it shows"), code);
     const msg = h("p", { class: "note", role: "alert" });
     let done = false;
     const finish = v => { if (!done) { done = true; resolve(v); } };
     const m = modal({
       title: "Authenticator app",
       action: "Turn on",
-      body: [box, h("div", { class: "fld" }, h("label", {}, "Then type the 6 digit code it shows"), code), msg],
+      body: [box, codeFld, msg],
       onBack: () => finish(false),
       onCancel: close => { close(); finish(false); },
       onAction: async close => {
@@ -4469,6 +4471,7 @@ function authenticatorSetup() {
       return callFn("totp", { action: "begin", password: pw }).then(r => {
         box.textContent = "";
         if (!r.ok) { askPw(failText(r, "Could not start the setup.")); return; }
+        codeFld.hidden = false;
         box.append(
           h("a", { class: "pri sbtn big", href: r.body.uri }, "Add Nook to the app"),
           h("p", { class: "note" }, "If that does not open the app, add it by hand with this key. Tap the key to copy it."),

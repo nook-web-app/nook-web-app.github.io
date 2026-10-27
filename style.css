@@ -42,7 +42,8 @@ textarea{resize:none}
 .cr .ib{width:var(--btn);color:var(--muted)}
 .av{position:relative;width:40px;height:40px;border-radius:50%;background:var(--accent);color:var(--on);display:flex;align-items:center;justify-content:center;font-weight:700;flex:none;overflow:hidden}
 .pic{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
-.banner .pic{inset:-1px;width:calc(100% + 2px);height:calc(100% + 2px)}
+.banner .pic{inset:-2px;width:calc(100% + 4px);height:calc(100% + 4px)}
+.banner:has(> .pic:not(.blur)){background:var(--bg2)}
 .avc{display:flex;flex-direction:column;align-items:center}
 .post.line{border-bottom:0}
 .post.line .avc::after{content:"";flex:1;width:2px;background:var(--line);margin-top:4px;border-radius:2px}

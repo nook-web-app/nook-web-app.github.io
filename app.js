@@ -249,7 +249,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.16";
+const APP_VERSION = "3.22.17";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2496,16 +2496,21 @@ async function zenPull() {
   // the pictures that belong to the sealed chats are opened first; one that cannot be fetched is left out and tried again at the next pull
   const zenPics = new Map();
   const picFail = new Set();
-  for (const [cdoc, dd] of chatOpen) {
-    for (const m of dd.msgs || []) {
-      if (!Array.isArray(m.media) || !m.media.length || typeof m.id !== "string") continue;
+  {
+    // every picture of every sealed chat is signed in one request and fetched side by side
+    const jobs = [];
+    for (const [cdoc, dd] of chatOpen) for (const m of dd.msgs || []) if (Array.isArray(m.media) && m.media.length && typeof m.id === "string") jobs.push([cdoc, m]);
+    dmSignBatch(jobs.flatMap(([, m]) => m.media));
+    await Promise.all(jobs.map(async ([cdoc, m]) => {
       try {
-        const k = await sharedKey(sbUser.id), imgs = [], zm = [];
+        const k = await sharedKey(sbUser.id);
         // one picture that cannot be fetched is left out, the others of the message still show; the chat is tried again at the next pull
-        for (const md of m.media) { try { const src = await notePicIn(k, md); imgs.push(src); zm.push({ h: imgH(src), d: md }); } catch (e) { picFail.add(cdoc); } }
+        const got = await Promise.allSettled(m.media.map(md => notePicIn(k, md)));
+        const imgs = [], zm = [];
+        got.forEach((g, n) => { if (g.status === "fulfilled") { imgs.push(g.value); zm.push({ h: imgH(g.value), d: m.media[n] }); } else picFail.add(cdoc); });
         if (imgs.length) zenPics.set(m.id, { imgs, zm });
       } catch (e) { picFail.add(cdoc); }
-    }
+    }));
   }
   const chatById = new Map(S.chats.map(x => [x.id, x]));
   (data || []).forEach(r => {
@@ -2566,6 +2571,7 @@ async function zenPull() {
     changed = true;
   }
   if (changed) persist();
+  notePicMemo.clear();
   zenPullSig = picFail.size ? "" : sig;
   zenPullAt = Date.now();
   if (!incr) zenFullAt = zenPullAt;
@@ -8032,11 +8038,19 @@ async function noteSeal(key, obj, rid) {
   const ct = await crypto.subtle.encrypt(alg, key, new TextEncoder().encode(JSON.stringify(obj)));
   return "e2e1:" + toB64(iv) + "." + toB64(new Uint8Array(ct));
 }
-async function notePicIn(key, md) {
-  const res = await fetch(await dmSignedUrl(md.url));
-  if (!res.ok) throw new Error("gone");
-  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(md.iv) }, key, await res.arrayBuffer());
-  return blobToData(new Blob([pt], { type: md.type || "image/jpeg" }));
+// a picture asked for twice in one pull (started early for speed, read again in order) is fetched once; the list is emptied when the pull ends
+const notePicMemo = new Map();
+function notePicIn(key, md) {
+  const k = md && md.url;
+  if (k && notePicMemo.has(k)) return notePicMemo.get(k);
+  const p = (async () => {
+    const res = await fetch(await dmSignedUrl(md.url));
+    if (!res.ok) throw new Error("gone");
+    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(md.iv) }, key, await res.arrayBuffer());
+    return blobToData(new Blob([pt], { type: md.type || "image/jpeg" }));
+  })();
+  if (k) { notePicMemo.set(k, p); p.catch(() => notePicMemo.delete(k)); }
+  return p;
 }
 async function notePicOut(key, src) {
   const blob = await (await fetch(src)).blob();
@@ -8127,6 +8141,10 @@ async function notesPull(ns, key) {
   for (let off = 0; off < 40000; off += 500) {
     const { data, error } = await sb.from("notes_self").select("id, body, media, deleted, updated_at").gte("updated_at", from).order("updated_at", { ascending: true }).order("id", { ascending: true }).range(off, off + 499);
     if (error) throw error;
+    // the pictures of this page are signed in one request and downloaded side by side while the rows are read in order
+    const pics = (data || []).flatMap(r => Array.isArray(r.media) ? r.media : []).filter(md => md && md.url && md.iv).slice(0, 24);
+    dmSignBatch(pics);
+    pics.forEach(md => notePicIn(key, md).catch(() => {}));
     for (const r of data || []) {
       try { if (await noteTake(ns, key, r)) changed = true; noteBad.delete(r.id); okRows++; }
       catch (e) {
@@ -8148,7 +8166,7 @@ async function notesPull(ns, key) {
   if (stuck && !okRows) return changed;
   ns.pullOk = true;
   return changed;
-  } finally { noteKnown = null; noteIdx = null; }
+  } finally { noteKnown = null; noteIdx = null; notePicMemo.clear(); }
 }
 async function notesPush(ns, key) {
   const exist = new Set();

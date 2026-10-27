@@ -10,9 +10,9 @@ self.addEventListener("install", e => {
 self.addEventListener("message", e => { if (e.data === "skip") self.skipWaiting(); });
 async function handleShare(request) {
   const home = new URL("./index.html", self.registration.scope).href;
-  // a share comes from the phone's share menu; a form sent by another website is ignored
+  // a share comes from the phone's share menu; a form sent by another website is ignored (phones that send no such header are the share menu too)
   const site = request.headers.get("sec-fetch-site");
-  if (site !== "none" && site !== "same-origin") return Response.redirect(home, 303);
+  if (site === "cross-site" || site === "same-site") return Response.redirect(home, 303);
   let data = null;
   try {
     data = await request.formData();

@@ -137,11 +137,15 @@ const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 // the AI never reads real private values: emails, phone numbers and secrets are swapped for a label before anything is sent
 const PHONE_RE = /(?<![\w.])\+?\d[\d\s().-]{7,}\d(?!\w)/g;
 function mask(t: string): string {
-  return t
+  // a link is kept whole: the long number inside a post link is not a phone number
+  const links: string[] = [];
+  const keep = t.replace(/https?:\/\/[^\s<>"]+/gi, (m) => { links.push(m); return "\u0000" + (links.length - 1) + "\u0000"; });
+  return keep
     .replace(EMAIL_RE, "[email]")
     .replace(/\b(password|passcode|passwd|pwd|pin|token|api[ _-]?key|secret)\b(\s*(?:is|are|:|=|->)\s*)\S+/gi, "$1$2[secret]")
-    .replace(PHONE_RE, (m) => (m.replace(/\D/g, "").length >= 9 ? "[phone]" : m))
-    .replace(/\b[A-Za-z0-9_-]{32,}\b/g, "[secret]");
+    .replace(PHONE_RE, (m) => { const n = m.replace(/\D/g, "").length; return n >= 9 && n <= 15 ? "[phone]" : m; })
+    .replace(/\b[A-Za-z0-9_-]{32,}\b/g, "[secret]")
+    .replace(/\u0000(\d+)\u0000/g, (_m, i) => links[Number(i)]);
 }
 const MASK_NOTE = " Private values were hidden from you: [email], [phone] and [secret] stand in for real ones that were written there. A post that gives out a password, a phone number or other private details of a person is sharing private info.";
 async function ask(parts: unknown[], system = SYSTEM): Promise<Verdict> {

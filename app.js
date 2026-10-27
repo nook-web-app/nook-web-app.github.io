@@ -249,7 +249,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.9";
+const APP_VERSION = "3.22.10";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1707,15 +1707,26 @@ function chatV() {
   if (e2eLocked) promptUnlock();
   topEl.append(bar(menuBtn(), ttl("Chats")));
   const dmBox = h("div");
+  // rows of the same shape as the chats shimmer until the real ones are drawn, so the page never looks empty
+  const skelRows = () => [0, 1, 2, 3, 4].map(() => h("div", { class: "lrow skelrow" }, h("div", { class: "sk av48 skel" }), h("div", { class: "nm" }, h("div", { class: "sk l1 skel" }), h("div", { class: "sk l2 skel" }))));
+  const emptyBox = h("div");
+  let inboxN = -1;
+  const showEmpty = () => {
+    emptyBox.textContent = "";
+    if (inboxN === 0 && !S.chats.length) emptyBox.append(emptyState("smile", "Say hi to yourself.", h("button", { class: "pri", onclick: newChat }, "New chat")));
+  };
+  dmBox.append(...skelRows());
   main.append(dmBox);
   let paintSeq = 0;
   const paintInbox = async convos => {
     const seq = ++paintSeq;
-    await loadDmMutes();
+    // the mute list is only waited for the first time on this phone
+    if (!dmMuteP) await loadDmMutes(); else loadDmMutes();
     convos = convos.filter(cv => !dmHideSet.has(cv.other)).sort((a, b) => (dmPinned(b.other) ? 1 : 0) - (dmPinned(a.other) ? 1 : 0));
     const bodies = await Promise.all(convos.map(cv => (cv.last ? openText(cv.other, cv.last.body, true).then(zUn) : "")));
     if (seq !== paintSeq || !dmBox.isConnected) return;
     dmBox.textContent = "";
+    inboxN = convos.length; showEmpty();
     convos.forEach((cv, i) => dmBox.append(dmRow(cv, bodies[i])));
     // the newest chats are downloaded in the background, so tapping one shows its messages right away
     convos.slice(0, 3).forEach(cv => {
@@ -1727,24 +1738,23 @@ function chatV() {
   };
   if (sbUser) {
     const hit = cacheRead("inbox:" + sbUser.id);
-    if (hit) paintInbox(hit.v); else dmBox.append(loadingEl());
+    if (hit) paintInbox(hit.v);
     let sig = hit ? JSON.stringify(hit.v) : "";
     const pull = () => dmInbox().then(convos => {
       refreshBadge();
       if (!dmBox.isConnected) return;
       const next = JSON.stringify(convos);
       if (next !== sig) { sig = next; cacheWrite("inbox:" + sbUser.id, convos); paintInbox(convos); }
-    }, () => { if (!hit && dmBox.isConnected) dmBox.textContent = ""; });
+    }, () => { if (!hit && dmBox.isConnected) { dmBox.textContent = ""; inboxN = 0; showEmpty(); } });
     refreshChat = pull;
     let busy = false;
     const iv = setInterval(() => { if (!document.hidden && !busy) { busy = true; Promise.resolve(pull()).finally(() => { busy = false; }); } }, 5000);
     pageStop = () => clearInterval(iv);
     pull();
   }
-  if (!S.chats.length) {
-    main.append(emptyState("smile", "Say hi to yourself.", h("button", { class: "pri", onclick: newChat }, "New chat")));
-    return;
-  }
+  main.append(emptyBox);
+  if (!sbUser) { inboxN = 0; showEmpty(); }
+  if (!S.chats.length) return;
   const mine = S.chats.slice().sort((a, b) => lastT(b) - lastT(a)).map(c => {
     const last = c.msgs[c.msgs.length - 1];
     return h("div", { class: "lrow", onclick: () => go({ r: "conv", id: c.id }) }, avatar(48), h("div", { class: "nm" }, h("b", {}, c.name), h("span", { class: "sub" }, last ? last.text || (last.rpost || last.zpost ? "Shared a post" : "Sent a photo") : "No messages yet")), last ? h("span", { class: "time" }, ago(last.t)) : null);
@@ -5382,6 +5392,7 @@ function cacheWrite(k, v) {
   }
 }
 // the pictures people see first are loaded before the app opens, so they never pop in later (waits 3 seconds at most)
+const avKeep = [];
 async function preloadAvatars(own) {
   const urls = new Set();
   const add = u => { if (typeof u === "string" && u) urls.add(u); };
@@ -5394,6 +5405,8 @@ async function preloadAvatars(own) {
   } catch (e) {}
   const load = u => new Promise(res => {
     const i = new Image();
+    // the decoded picture is kept, so a list that shows it later has it at once
+    avKeep.push(i); if (avKeep.length > 80) avKeep.shift();
     i.onload = i.onerror = () => res();
     i.src = view(u);
     if (i.decode) i.decode().then(res, res);
@@ -6588,13 +6601,7 @@ async function openDmViewer(row, idx) {
   got.forEach((r, n) => { if (r.status === "fulfilled") { urls.push(r.value); map.push(jobs[n].i); } });
   const start = map.indexOf(idx);
   if (start < 0 || !urls.length) return;
-  const mine = m.sender_id === sbUser.id || row._mine;
-  lightbox(urls, start, null, mine && m.id != null ? { del: async n => {
-    const k = map[n];
-    const ok = await deleteDmMedia(row, k);
-    if (ok) { map.splice(n, 1); for (let j = 0; j < map.length; j++) if (map[j] > k) map[j]--; }
-    return ok;
-  } } : null);
+  lightbox(urls, start, null, null);
 }
 function dmRowMenu(row, mine, otherId) {
   const m = row._m;

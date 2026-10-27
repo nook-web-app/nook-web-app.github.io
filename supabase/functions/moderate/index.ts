@@ -1,5 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 // Aegis is the name of the moderation AI (it means protection); Zenith is the owner-only AI, they use separate models
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
@@ -12,6 +13,7 @@ async function geminiKey(): Promise<string> {
   return keyCache.v;
 }
 const MAX_IMG = 12 * 1024 * 1024;
+const md5 = (v: string | null): string => (v ? createHash("md5").update(v).digest("hex") : "");
 // a sweep runs every minute: up to 15 posts a minute, checked 4 at a time so Gemma is not flooded
 const PER_SWEEP = 15;
 const AT_ONCE = 4;
@@ -370,10 +372,11 @@ async function runProfile(id: string, field: "avatar" | "banner") {
   }
   if (v === null) return;
   if (v === "minor") v = "rules";
-  if (v === "safe") { await holds(admin.from("accounts").update({ [field + "_mod"]: "safe" }).eq("id", id).eq(field + "_mod", "pending"), field, value); return; }
+  // a profile photo is a data address of tens of kilobytes: it cannot travel in the address of a request, so the database compares its checksum instead
+  if (v === "safe") { await admin.rpc("nook_mod_profile", { p_id: id, p_field: field, p_md5: md5(value), p_clear: false }); return; }
   // whoever clears the picture first gives the warning, so two checks at once do not warn twice
-  const done = await holds(admin.from("accounts").update({ [field]: null, [field + "_mod"]: "safe" }).eq("id", id).eq(field + "_mod", "pending"), field, value).select("id");
-  if (done.data && done.data.length) await admin.from("mod_notices").insert({ user_id: id, kind: field + (v === "big" ? "_toolarge" : v === "rules" ? "_rules" : ""), note: v === "big" ? "could not be checked" : C().why });
+  const done = await admin.rpc("nook_mod_profile", { p_id: id, p_field: field, p_md5: md5(value), p_clear: true });
+  if (done.data === true) await admin.from("mod_notices").insert({ user_id: id, kind: field + (v === "big" ? "_toolarge" : v === "rules" ? "_rules" : ""), note: v === "big" ? "could not be checked" : C().why });
 }
 
 // username, display name and bio, each read on its own; a bad one is cleared (a username becomes user plus random letters)

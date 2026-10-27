@@ -286,7 +286,7 @@ textarea{resize:none}
 .si.on .trail.ck{display:flex}
 .sx{border-radius:var(--r-m);display:block;width:100%;padding:15px;border:0;background:none;color:var(--fg);font-weight:700;font-size:var(--fs-lg)}
 .sx:active{background:var(--bg2)}
-.lb{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.94);display:flex;align-items:center;justify-content:center}
+.lb{position:fixed;inset:0;overflow:hidden;z-index:80;background:rgba(0,0,0,.94);display:flex;align-items:center;justify-content:center}
 .lb img{max-width:100%;max-height:100%;object-fit:contain}
 .lb .ib{position:absolute;color:#fff;background:rgba(255,255,255,.14)}
 .lb .x{top:calc(12px + env(safe-area-inset-top,0px));right:12px}
@@ -341,7 +341,7 @@ textarea{resize:none}
 .lb{animation:fadeIn .2s ease-out}
 .lb.out{animation:fadeOut .2s forwards}
 .lb img{animation:zoomIn .24s cubic-bezier(.2,.8,.2,1)}
-.lbt{position:absolute;inset:0;display:flex}
+.lbt{position:absolute;inset:0;display:flex;will-change:transform}
 .lbs{flex:0 0 100%;width:100%;height:100%;display:flex;align-items:center;justify-content:center}
 .lb.sw img{animation:none}
 .post.fresh{animation:fresh .6s ease-out}

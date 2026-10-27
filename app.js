@@ -249,7 +249,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.25";
+const APP_VERSION = "3.22.26";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1090,8 +1090,9 @@ function lightbox(imgs, i, cap, opts) {
     const cached = isImgId(imgs[k]) ? imgPeek(imgs[k]) : imgs[k];
     if (cached !== undefined) put(cached); else imgReal(imgs[k]).then(put);
   };
-  const base = () => (n > 0 ? -1 : 0) * window.innerWidth;
-  const slide = (x, ms) => { track.style.transition = ms ? `transform ${ms}ms ease-out` : "none"; track.style.transform = `translateX(${x}px)`; };
+  // positions are in whole slide widths plus a pixel drag, so a neighbour can never peek in at the edge
+  const baseIdx = () => (n > 0 ? 1 : 0);
+  const slide = (idx, px, ms) => { track.style.transition = ms ? `transform ${ms}ms cubic-bezier(.25,.8,.25,1)` : "none"; track.style.transform = `translate3d(calc(${-idx} * 100% + ${px}px),0,0)`; };
   const show = () => {
     track.textContent = "";
     for (let k = Math.max(0, n - 1); k <= Math.min(imgs.length - 1, n + 1); k++) {
@@ -1099,7 +1100,7 @@ function lightbox(imgs, i, cap, opts) {
       track.append(s);
       fill(s, k);
     }
-    slide(base(), 0);
+    slide(baseIdx(), 0, 0);
     if (!first) lb.classList.add("sw");
     first = false;
   };
@@ -1116,25 +1117,26 @@ function lightbox(imgs, i, cap, opts) {
       show();
     });
   } }, ic("trash", 22)) : null;
-  // a sideways swipe drags the photos with the finger and settles on the next one
-  let sx = 0, sy = 0, swipe = false, drag = false, busy = false;
-  lb.addEventListener("touchstart", e => { swipe = !busy && e.touches.length === 1; drag = false; if (swipe) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; } }, { passive: true });
+  // a sideways swipe drags the photos with the finger and settles on the next one; a quick flick is enough
+  let sx = 0, sy = 0, st = 0, swipe = false, drag = false, busy = false;
+  lb.addEventListener("touchstart", e => { swipe = !busy && e.touches.length === 1; drag = false; if (swipe) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; st = Date.now(); } }, { passive: true });
   lb.addEventListener("touchmove", e => {
     if (!swipe) return;
     const dx = e.touches[0].clientX - sx, dy = e.touches[0].clientY - sy;
     if (!drag && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) drag = true;
     if (!drag) return;
     const edge = (dx > 0 && n === 0) || (dx < 0 && n === imgs.length - 1);
-    slide(base() + (edge ? dx / 3 : dx), 0);
+    slide(baseIdx(), edge ? Math.sign(dx) * Math.min(36, Math.abs(dx) / 4) : dx, 0);
   }, { passive: true });
   lb.addEventListener("touchend", e => {
     if (!swipe || !drag) { swipe = false; return; }
     swipe = false; drag = false;
     const dx = e.changedTouches[0].clientX - sx, d = dx < 0 ? 1 : -1;
-    if (Math.abs(dx) < window.innerWidth * .2 || n + d < 0 || n + d >= imgs.length) { slide(base(), 200); return; }
+    const fast = Math.abs(dx) / Math.max(1, Date.now() - st) > 0.35 && Math.abs(dx) > 24;
+    if (!(fast || Math.abs(dx) > window.innerWidth * .18) || n + d < 0 || n + d >= imgs.length) { slide(baseIdx(), 0, 140); return; }
     busy = true;
-    slide(base() - d * window.innerWidth, 200);
-    setTimeout(() => { n += d; show(); busy = false; }, 200);
+    slide(baseIdx() + d, 0, 150);
+    setTimeout(() => { n += d; show(); busy = false; }, 150);
   });
   lb.append(...[track, x, del, cap ? h("div", { class: "cap" }, cap) : null].filter(Boolean));
   closeLb = trackLayer(() => dismiss(lb));

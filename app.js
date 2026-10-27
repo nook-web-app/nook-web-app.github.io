@@ -249,7 +249,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.22";
+const APP_VERSION = "3.22.23";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1074,23 +1074,34 @@ function modal(o) {
   return { ov, close, act };
 }
 function lightbox(imgs, i, cap, opts) {
-  let n = i, closeLb;
-  const holder = h("div", { class: "lbm" });
-  const show = () => {
-    holder.textContent = "";
-    const at = n;
+  let n = i, closeLb, first = true;
+  const track = h("div", { class: "lbt" });
+  const fail = () => h("p", { class: "note", style: "color:#fff;text-align:center" }, "Photo not available");
+  const fill = (slide, k) => {
     const put = src => {
-      if (n !== at) return;
-      holder.textContent = "";
-      if (!src) { holder.append(h("p", { class: "note", style: "color:#fff;text-align:center" }, "Photo not available")); return; }
+      slide.textContent = "";
+      if (!src) { slide.append(fail()); return; }
       const el = h("img", { alt: "" });
-      el.onerror = () => { el.onerror = () => { holder.textContent = ""; holder.append(h("p", { class: "note", style: "color:#fff;text-align:center" }, "Photo not available")); }; el.src = src; };
+      el.onerror = () => { el.onerror = () => { slide.textContent = ""; slide.append(fail()); }; el.src = src; };
       el.src = view(src);
       el.addEventListener("click", e => e.stopPropagation());
-      holder.append(el);
+      slide.append(el);
     };
-    const cached = isImgId(imgs[n]) ? imgPeek(imgs[n]) : imgs[n];
-    if (cached !== undefined) put(cached); else imgReal(imgs[n]).then(put);
+    const cached = isImgId(imgs[k]) ? imgPeek(imgs[k]) : imgs[k];
+    if (cached !== undefined) put(cached); else imgReal(imgs[k]).then(put);
+  };
+  const base = () => (n > 0 ? -1 : 0) * window.innerWidth;
+  const slide = (x, ms) => { track.style.transition = ms ? `transform ${ms}ms ease-out` : "none"; track.style.transform = `translateX(${x}px)`; };
+  const show = () => {
+    track.textContent = "";
+    for (let k = Math.max(0, n - 1); k <= Math.min(imgs.length - 1, n + 1); k++) {
+      const s = h("div", { class: "lbs" });
+      track.append(s);
+      fill(s, k);
+    }
+    slide(base(), 0);
+    if (!first) lb.classList.add("sw");
+    first = false;
   };
   const lb = h("div", { class: "lb", onclick: () => closeLb() });
   const x = h("button", { class: "ib x", "aria-label": "Close", onclick: () => closeLb() }, ic("close", 22));
@@ -1105,27 +1116,27 @@ function lightbox(imgs, i, cap, opts) {
       show();
     });
   } }, ic("trash", 22)) : null;
-  // a sideways swipe changes the photo
-  let sx = 0, sy = 0, swipe = false, drag = false;
-  const move = (x, ms) => { holder.style.transition = ms ? `transform ${ms}ms ease-out` : "none"; holder.style.transform = x ? `translateX(${x}px)` : ""; };
-  lb.addEventListener("touchstart", e => { swipe = e.touches.length === 1; drag = false; if (swipe) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; } }, { passive: true });
+  // a sideways swipe drags the photos with the finger and settles on the next one
+  let sx = 0, sy = 0, swipe = false, drag = false, busy = false;
+  lb.addEventListener("touchstart", e => { swipe = !busy && e.touches.length === 1; drag = false; if (swipe) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; } }, { passive: true });
   lb.addEventListener("touchmove", e => {
     if (!swipe) return;
     const dx = e.touches[0].clientX - sx, dy = e.touches[0].clientY - sy;
     if (!drag && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) drag = true;
-    if (drag) move(dx, 0);
+    if (!drag) return;
+    const edge = (dx > 0 && n === 0) || (dx < 0 && n === imgs.length - 1);
+    slide(base() + (edge ? dx / 3 : dx), 0);
   }, { passive: true });
   lb.addEventListener("touchend", e => {
     if (!swipe || !drag) { swipe = false; return; }
     swipe = false; drag = false;
     const dx = e.changedTouches[0].clientX - sx, d = dx < 0 ? 1 : -1;
-    if (Math.abs(dx) < 60 || n + d < 0 || n + d >= imgs.length) { move(0, 150); return; }
-    n += d; holder.classList.add("sw"); show();
-    move(-d * 60, 0);
-    void holder.offsetWidth;
-    move(0, 150);
+    if (Math.abs(dx) < window.innerWidth * .2 || n + d < 0 || n + d >= imgs.length) { slide(base(), 200); return; }
+    busy = true;
+    slide(base() - d * window.innerWidth, 200);
+    setTimeout(() => { n += d; show(); busy = false; }, 200);
   });
-  lb.append(...[holder, x, del, cap ? h("div", { class: "cap" }, cap) : null].filter(Boolean));
+  lb.append(...[track, x, del, cap ? h("div", { class: "cap" }, cap) : null].filter(Boolean));
   closeLb = trackLayer(() => dismiss(lb));
   layer.append(lb);
   show();

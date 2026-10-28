@@ -63,6 +63,35 @@ async function linkInfo(body: string): Promise<{ note: string; pics: unknown[] }
   } catch { return { note: "", pics: [] }; }
 }
 
+// the pictures of a post are downloaded from the media bucket and handed to him; gifs and videos cannot be read, he is only told they are there
+function mediaUrls(v: string | null): string[] {
+  if (!v) return [];
+  if (v.charAt(0) === "[") { try { const a = JSON.parse(v); return Array.isArray(a) ? a.filter((x) => typeof x === "string") : []; } catch { return []; } }
+  return [v];
+}
+async function mediaInfo(mediaUrl: string | null): Promise<{ note: string; pics: unknown[] }> {
+  const urls = mediaUrls(mediaUrl).slice(0, 3);
+  if (!urls.length) return { note: "", pics: [] };
+  const pics: unknown[] = [];
+  let unseen = 0;
+  for (const u of urls) {
+    const m = /\/object\/public\/media\/([^?#]+)/.exec(u);
+    let path = "";
+    try { path = m ? decodeURIComponent(m[1]) : ""; } catch { path = ""; }
+    const { data } = path ? await admin.storage.from("media").download(path) : { data: null };
+    if (!data) { unseen++; continue; }
+    const b = new Uint8Array(await data.arrayBuffer());
+    const type = b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff ? "image/jpeg"
+      : b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 ? "image/png"
+      : b.length > 12 && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50 ? "image/webp" : "";
+    if (!type || b.length > 4 * 1024 * 1024) { unseen++; continue; }
+    let bin = "";
+    for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode(...b.subarray(i, i + 0x8000));
+    pics.push({ inline_data: { mime_type: type, data: btoa(bin) } });
+  }
+  return { note: unseen ? "\n(The post also has " + (unseen === 1 ? "a video, gif or picture" : unseen + " videos, gifs or pictures") + " that you cannot see)" : "", pics };
+}
+
 let cached: string | null = null;
 let cachedAt = 0;
 async function expectedSecret(): Promise<string | null> {
@@ -256,16 +285,17 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
   const doneMine = await answeredOf(mineNew.map((p) => p.id));
   for (const p of mineNew) {
     if (budget <= 0) break;
-    if (seenMine.has(p.id) || !p.body || !String(p.body).trim()) { if (!seenMine.has(p.id)) await mark(p.id, "skip"); continue; }
+    if (seenMine.has(p.id) || ((!p.body || !String(p.body).trim()) && !p.media_url)) { if (!seenMine.has(p.id)) await mark(p.id, "skip"); continue; }
     if (doneMine.has(p.id)) { await mark(p.id, "reply"); continue; }
     const chain = await chainText(p.id, owner, zen, String(p.body));
     if (p.parent_id && !chain.zenIn) { await mark(p.id, "skip"); continue; }
     if (!(await claim(p.id))) continue;
     budget--;
     let lk = { note: "", pics: [] as unknown[] };
-    try { lk = await linkInfo(String(p.body)); } catch { /* a post without a preview is answered all the same */ }
+    try { lk = await linkInfo(String(p.body || "")); } catch { /* a post without a preview is answered all the same */ }
+    try { const md = await mediaInfo(p.media_url); lk = { note: lk.note + md.note, pics: [...lk.pics, ...md.pics] }; } catch { /* answered without the pictures */ }
     let text = "";
-    try { text = (await ask(replySystem, (p.parent_id ? chain.text : "Post: " + String(p.body).slice(0, 2000)) + lk.note, lk.pics, true)).slice(0, 600); } catch { text = ""; }
+    try { text = (await ask(replySystem, (p.parent_id ? chain.text : "Post: " + (String(p.body || "").slice(0, 2000) || "(no text, only a picture)")) + lk.note, lk.pics, true)).slice(0, 600); } catch { text = ""; }
     if (!text) { await release(p.id); continue; }
     const rid = await say(zen, text, p.id);
     if (!rid) { await release(p.id); continue; }
@@ -299,7 +329,7 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
     if (shut.has(p.user_id)) { await mark(p.id, "shut"); continue; }
     // a reply to him is never answered; the post is only noted, so it is not looked at again
     if (p.parent_id && parents.get(p.parent_id) === zen) { await mark(p.id, "to-him"); continue; }
-    if (!p.body || !String(p.body).trim() || budget <= 0) { if (!(budget <= 0)) await mark(p.id, "skip"); continue; }
+    if (((!p.body || !String(p.body).trim()) && !p.media_url) || budget <= 0) { if (!(budget <= 0)) await mark(p.id, "skip"); continue; }
     if (doneOth.has(p.id)) { await mark(p.id, "done"); continue; }
     const likeIt = Math.random() < odds, answerIt = Math.random() < odds;
     if (!likeIt && !answerIt) { await mark(p.id, "pass"); continue; }
@@ -309,9 +339,10 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
     if (likeIt) { await admin.from("likes").insert({ user_id: zen, post_id: p.id }); out.liked++; acted = "like"; }
     if (answerIt) {
       let lk = { note: "", pics: [] as unknown[] };
-      try { lk = await linkInfo(String(p.body)); } catch { /* fine without */ }
+      try { lk = await linkInfo(String(p.body || "")); } catch { /* fine without */ }
+      try { const md = await mediaInfo(p.media_url); lk = { note: lk.note + md.note, pics: [...lk.pics, ...md.pics] }; } catch { /* fine without */ }
       let text = "";
-      try { text = (await ask(replySystem + " You are replying to a post by someone you do not know, and they can never answer you, so never ask a question.", "Post: " + String(p.body).slice(0, 2000) + lk.note, lk.pics, true)).slice(0, 600); } catch { text = ""; }
+      try { text = (await ask(replySystem + " You are replying to a post by someone you do not know, and they can never answer you, so never ask a question.", "Post: " + (String(p.body || "").slice(0, 2000) || "(no text, only a picture)") + lk.note, lk.pics, true)).slice(0, 600); } catch { text = ""; }
       if (text && (await say(zen, text, p.id))) { out.others++; acted += " reply"; }
     }
     await mark(p.id, acted.trim() || "none");

@@ -171,8 +171,14 @@ Deno.serve(async (req) => {
   const roll = Math.random() * 100;
   if (!dry && !force && roll < 100 - band) return json({ skipped: "roll " + roll.toFixed(2) + " needs " + (100 - band).toFixed(2) });
 
+  // his last posts are shown to him so he does not circle around the same joke, and a random subject is suggested so each post starts somewhere new
+  const { data: lastPosts } = await admin.from("posts").select("body").eq("user_id", zen).is("parent_id", null).not("body", "is", null).order("created_at", { ascending: false }).limit(25);
+  const earlier = (lastPosts || []).map((r) => String(r.body || "").replace(/\s+/g, " ").trim().slice(0, 160)).filter(Boolean);
+  const subject = SUBJECTS[Math.floor(Math.random() * SUBJECTS.length)];
+  const brief = "Write your next post. A subject you could pick up: " + subject + " (ignore it if it does not fit you). Do not mention how many hours something took. Do not start the same way as your earlier posts, and do not reuse their jokes, subjects or phrases."
+    + (earlier.length ? " Your earlier posts, for you to avoid repeating:\n" + earlier.map((e) => "- " + e).join("\n") : "");
   let text = "";
-  try { text = (await ask(promptFor(docs || [], "post"), "Write your next post.")).slice(0, 600); } catch { return json({ error: "gemini unreachable" }, 502); }
+  try { text = (await ask(promptFor(docs || [], "post"), brief)).slice(0, 600); } catch { return json({ error: "gemini unreachable" }, 502); }
   if (!text) return json({ skipped: "empty answer" });
   if (dry) return json({ dry: true, length: text.length, sample: text.slice(0, 50) });
   const pid = await say(zen, text, null);
@@ -214,6 +220,7 @@ async function chainText(postId: string, owner: string, zen: string, last: strin
   return { text: text || last, zenIn: rows.some((r) => r.user_id === zen) };
 }
 
+const SUBJECTS = ["a food you are craving", "a song stuck in your head", "something you saw on a walk", "a game you are playing", "the weather", "a tiny win today", "something that made you laugh", "a random shower thought", "a snack ranking opinion", "being sleepy", "a show you are watching", "a silly fear", "your favorite cozy spot", "a dream you had", "something you want to learn", "a pet peeve", "an unpopular opinion that is harmless", "a drawing or craft idea", "a memory from when you were little", "a question you wonder about", "your messy room", "a weird food combo", "a goal for the week", "a compliment for your followers", "something you are grateful for", "a clumsy moment", "a hobby you are bad at", "what you would do with a free day"];
 const GAP = 40000;
 let lastImport = 0;
 // the app answers nothing itself any more: this runs every minute (and when the owner nudges it) and handles three things

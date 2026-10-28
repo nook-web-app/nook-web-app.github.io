@@ -136,8 +136,8 @@ fun DrawerHost(app: AppState) {
 }
 
 fun Modifier.lineRight(color: Color) = this.then(Modifier.drawBehind {
-    drawLine(color, androidx.compose.ui.geometry.Offset(size.width - 0.5f, 0f), androidx.compose.ui.geometry.Offset(size.width - 0.5f, size.height), 1.dp.toPx())
-})
+    val w = 1.dp.toPx(); drawRect(color, androidx.compose.ui.geometry.Offset(size.width - w, 0f), androidx.compose.ui.geometry.Size(w, size.height))
+}.padding(end = 1.dp))
 
 // #toast: a small note above the bottom bar for two seconds
 @Composable
@@ -196,7 +196,7 @@ private fun ComposePanel(app: AppState) {
             BasicTextField(
                 text, { text = it }, Modifier.weight(1f).heightIn(min = 130.dp).padding(vertical = 6.dp),
                 textStyle = LocalTextStyle.current.copy(color = c.fg, fontSize = Fs.xl, lineHeight = (17 * 1.4).sp), cursorBrush = SolidColor(c.accent),
-                decorationBox = { inner -> Box { if (text.isEmpty()) T(Sample.placeholders[1], Fs.xl, color = c.muted); inner() } },
+                decorationBox = { inner -> Box { if (text.isEmpty()) T(Sample.placeholder, Fs.xl, color = c.muted); inner() } },
             )
         }
         // .cfoot: the camera and gallery buttons in the accent color

@@ -16,6 +16,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material.ripple.rememberRipple
 import androidx.compose.ui.composed
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,6 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.offset
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 
@@ -45,9 +49,18 @@ fun T(
     letterSpacing: TextUnit = TextUnit.Unspecified,
 ) {
     val lh = if (lineHeight == TextUnit.Unspecified) (size.value * 1.4f).sp else lineHeight
+    // a text box is as tall as its lines (rounded to the nearest pixel) instead of always rounded up, like the browser's
+    // fractional layout; otherwise every line of text pushes what follows down by up to a pixel
+    val lhPx = with(androidx.compose.ui.platform.LocalDensity.current) { lh.toPx() }
+    var lines = 1
     Text(
-        text, modifier, color = color, style = LocalTextStyle.current.copy(fontSize = size, fontWeight = weight, lineHeight = lh, letterSpacing = letterSpacing),
+        text, modifier.layout { m, c ->
+            val p = m.measure(c)
+            val h = (lines * lhPx).roundToInt().coerceIn(minOf(c.minHeight, p.height), p.height)
+            layout(p.width, h) { p.place(0, 0) }
+        }, color = color, style = LocalTextStyle.current.copy(fontSize = size, fontWeight = weight, lineHeight = lh, letterSpacing = letterSpacing),
         textAlign = align, maxLines = maxLines, overflow = if (maxLines == Int.MAX_VALUE) TextOverflow.Clip else TextOverflow.Ellipsis,
+        onTextLayout = { lines = it.lineCount },
     )
 }
 
@@ -57,9 +70,28 @@ fun Modifier.tap(shape: androidx.compose.ui.graphics.Shape? = null, enabled: Boo
     m.clickable(remember { MutableInteractionSource() }, rememberRipple(), enabled = enabled, onClick = onClick)
 }
 
+// Layout probes for the screenshot tests: when on, tagged elements record where they ended up (in dp from the top left),
+// so their places can be compared with the same elements of the web app number by number.
+object Probes { var on = false; val at = linkedMapOf<String, androidx.compose.ui.geometry.Rect>() }
+fun Modifier.probe(tag: String): Modifier = if (!Probes.on) this else composed {
+    val d = androidx.compose.ui.platform.LocalDensity.current.density
+    this.then(Modifier.onGloballyPositioned { val r = it.boundsInRoot(); Probes.at[tag] = androidx.compose.ui.geometry.Rect(r.left / d, r.top / d, r.right / d, r.bottom / d) })
+}
+
+// Vertical padding that keeps the browser's fractional sizes in check: the top and bottom are added up first and rounded
+// once (halves to even), so a row with 14dp above and below is exactly 28dp of room on any screen density instead of
+// gaining a pixel every time a half pixel is rounded up.
+fun Modifier.vpad(top: Dp, bottom: Dp = top) = this.then(Modifier.layout { m, c ->
+    val t = top.toPx(); val total = Math.rint((t + bottom.toPx()).toDouble()).toInt()
+    val p = m.measure(c.offset(vertical = -total))
+    val y = Math.rint(t.toDouble()).toInt().coerceIn(0, total)
+    layout(p.width, p.height + total) { p.place(0, y) }
+})
+
 // a 1px rule in --line, drawn under the content (border-bottom)
-fun Modifier.lineBelow(color: Color) = drawBehind { drawLine(color, Offset(0f, size.height - 0.5f), Offset(size.width, size.height - 0.5f), 1.dp.toPx()) }
-fun Modifier.lineAbove(color: Color) = drawBehind { drawLine(color, Offset(0f, 0.5f), Offset(size.width, 0.5f), 1.dp.toPx()) }
+// like a CSS border, the line takes its own 1dp of room (with box-sizing:border-box a fixed height already includes it)
+fun Modifier.lineBelow(color: Color) = drawBehind { val w = 1.dp.toPx(); drawRect(color, Offset(0f, size.height - w), androidx.compose.ui.geometry.Size(size.width, w)) }.padding(bottom = 1.dp)
+fun Modifier.lineAbove(color: Color) = drawBehind { drawRect(color, Offset.Zero, androidx.compose.ui.geometry.Size(size.width, 1.dp.toPx())) }.padding(top = 1.dp)
 
 @Composable
 fun Line() { Box(Modifier.fillMaxWidth().height(1.dp).background(LocalNook.current.line)) }
@@ -71,8 +103,8 @@ fun Avatar(p: Person, size: Dp = 40.dp, ring: Color? = null, modifier: Modifier 
     val zen = p.handle.equals("zenith", ignoreCase = true)
     val bg: Brush = when {
         zen -> Brush.linearGradient(listOf(Color(0xFF14466F), Color(0xFF208BFE)))
-        p.hue == null -> SolidColor(c.accent)
-        else -> SolidColor(hsl(p.hue, 0.45f, 0.42f))
+        p.own -> SolidColor(c.accent)
+        else -> SolidColor(hsl(hueOf(p.name.ifBlank { p.handle }), 0.45f, 0.42f))
     }
     val ringMod = if (ring != null) Modifier.border(4.dp, ring, CircleShape) else Modifier
     Box(modifier.size(size).clip(CircleShape).background(bg).then(ringMod), contentAlignment = Alignment.Center) {
@@ -108,7 +140,8 @@ fun Bar(title: String, left: (@Composable () -> Unit)? = null, right: (@Composab
     Row(Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.width(44.dp).offset(x = (-10).dp), contentAlignment = Alignment.CenterStart) { left?.invoke() }
         T(title, Fs.xl, FontWeight.Bold, modifier = Modifier.weight(1f), align = TextAlign.Center, maxLines = 1)
-        Box(Modifier.width(44.dp).offset(x = 10.dp), contentAlignment = Alignment.CenterEnd) { right?.invoke() }
+        // only the left button is pulled out by 10dp: in the CSS grid the right one keeps its place (margin-right does not move it)
+        Box(Modifier.width(44.dp), contentAlignment = Alignment.CenterEnd) { right?.invoke() }
     }
 }
 
@@ -119,20 +152,34 @@ fun Top(content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxWidth().background(c.bg).lineBelow(c.line), content = content)
 }
 
-// .tabs / .tab: equal tabs (or a scrolling row on profiles) with a 3dp accent line under the chosen one
+// .tabs / .tab: each tab is as wide as its text plus 14dp on each side, and the room left over is shared out equally
+// (flex: 1 0 auto); when the tabs do not fit, the row scrolls. The chosen tab has a 3dp accent line under its text.
 @Composable
 fun Tabs(items: List<String>, selected: Int, scroll: Boolean = false, onSelect: (Int) -> Unit) {
     val c = LocalNook.current
-    val row = if (scroll) Modifier.horizontalScroll(rememberScrollState()) else Modifier.fillMaxWidth()
-    Row(row.padding(horizontal = 16.dp)) {
-        items.forEachIndexed { i, t ->
-            val on = i == selected
-            val m = if (scroll) Modifier else Modifier.weight(1f)
-            Box(m.tap { onSelect(i) }.padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
-                Box(Modifier.drawBehind { if (on) drawRect(c.accent, Offset(0f, size.height - 3.dp.toPx()), androidx.compose.ui.geometry.Size(size.width, 3.dp.toPx())) }
-                    .padding(top = 13.dp, bottom = 14.dp)) {
-                    T(t, Fs.base, if (on) FontWeight.Bold else FontWeight.SemiBold, if (on) c.fg else c.muted, maxLines = 1)
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val room = maxWidth - 32.dp
+        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+            androidx.compose.ui.layout.Layout(content = {
+                items.forEachIndexed { i, t ->
+                    val on = i == selected
+                    Box(Modifier.tap { onSelect(i) }.padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
+                        Box(Modifier.drawBehind { if (on) drawRect(c.accent, Offset(0f, size.height - 3.dp.toPx()), androidx.compose.ui.geometry.Size(size.width, 3.dp.toPx())) }
+                            .vpad(13.dp, 11.dp + 3.dp)) {
+                            T(t, Fs.base, if (on) FontWeight.Bold else FontWeight.SemiBold, if (on) c.fg else c.muted, maxLines = 1)
+                        }
+                    }
                 }
+            }) { ms, cons ->
+                val natural = ms.map { it.maxIntrinsicWidth(cons.maxHeight) }
+                val extra = ((room.roundToPx() - natural.sum()).coerceAtLeast(0)).toFloat() / ms.size
+                var acc = 0f
+                val ps = ms.mapIndexed { i, m ->
+                    // the shares are rounded so that together they still add up to the whole row
+                    val from = acc.roundToInt(); acc += natural[i] + extra
+                    m.measure(androidx.compose.ui.unit.Constraints.fixedWidth(acc.roundToInt() - from))
+                }
+                layout(ps.sumOf { it.width }, ps.maxOf { it.height }) { var x = 0; ps.forEach { it.place(x, 0); x += it.width } }
             }
         }
     }
@@ -167,7 +214,7 @@ fun Empty(icon: String?, text: String, button: (@Composable () -> Unit)? = null)
 // .sec: the small upper case heading of a settings group
 @Composable
 fun Sec(text: String) {
-    T(text.uppercase(), Fs.sm, FontWeight.Bold, LocalNook.current.muted, Modifier.padding(start = 16.dp, end = 16.dp, top = 18.dp, bottom = 6.dp), letterSpacing = (13 * 0.06).sp)
+    T(text.uppercase(), Fs.sm, FontWeight.Bold, LocalNook.current.muted, Modifier.probe("sec:$text").padding(horizontal = 16.dp).vpad(18.dp, 6.dp), letterSpacing = (13 * 0.06).sp)
 }
 
 // .seg: a pill of choices with the chosen one filled
@@ -195,13 +242,13 @@ fun SRow(icon: (@Composable () -> Unit)?, title: String, sub: String? = null, da
     val c = LocalNook.current
     val col = if (danger) c.danger else c.fg
     Row(
-        Modifier.fillMaxWidth().then(if (last) Modifier else Modifier.lineBelow(c.line)).tap(onClick = onClick).padding(horizontal = 16.dp, vertical = 14.dp),
+        Modifier.fillMaxWidth().probe("srow:$title").then(if (last) Modifier else Modifier.lineBelow(c.line)).tap(onClick = onClick).padding(horizontal = 16.dp).vpad(14.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (icon != null) CompositionLocalProvider(LocalContentColor provides if (danger) c.danger else c.muted) { icon() }
         Column(Modifier.weight(1f)) {
-            T(title, weight = FontWeight.SemiBold, color = col, maxLines = 1)
-            if (sub != null) T(sub, Fs.sm, color = c.muted, maxLines = 1)
+            T(title, weight = FontWeight.SemiBold, color = col, maxLines = 1, modifier = Modifier.probe("srow-b:$title"))
+            if (sub != null) T(sub, Fs.sm, color = c.muted, maxLines = 1, modifier = Modifier.probe("srow-sub:$title"))
         }
     }
 }
@@ -211,7 +258,7 @@ fun SRow(icon: (@Composable () -> Unit)?, title: String, sub: String? = null, da
 fun LRow(lead: @Composable () -> Unit, title: String, sub: String? = null, time: String? = null, trail: (@Composable () -> Unit)? = null, subStrong: Boolean = false, onClick: () -> Unit = {}) {
     val c = LocalNook.current
     Row(
-        Modifier.fillMaxWidth().lineBelow(c.line).tap(onClick = onClick).padding(horizontal = 16.dp, vertical = 14.dp),
+        Modifier.fillMaxWidth().lineBelow(c.line).tap(onClick = onClick).padding(horizontal = 16.dp).vpad(14.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         lead()

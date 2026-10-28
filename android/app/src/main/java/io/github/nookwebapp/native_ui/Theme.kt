@@ -16,6 +16,8 @@ import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -74,8 +76,10 @@ fun NookTheme(mode: ThemeMode = ThemeMode.System, content: @Composable () -> Uni
     val scheme = (if (dark) darkColorScheme() else lightColorScheme()).copy(
         background = c.bg, surface = c.bg, primary = c.accent, onBackground = c.fg, onSurface = c.fg,
     )
+    // text keeps the web app's sizes whatever the phone's font size setting is, so the screens stay the same as the web app
+    val d = LocalDensity.current
     MaterialTheme(colorScheme = scheme) {
-        CompositionLocalProvider(LocalNook provides c, LocalContentColor provides c.fg, LocalTextStyle provides BaseText.copy(color = c.fg)) {
+        CompositionLocalProvider(LocalDensity provides Density(d.density, 1f), LocalNook provides c, LocalContentColor provides c.fg, LocalTextStyle provides BaseText.copy(color = c.fg)) {
             content()
         }
     }

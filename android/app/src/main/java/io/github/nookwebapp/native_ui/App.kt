@@ -1,6 +1,7 @@
 package io.github.nookwebapp.native_ui
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -23,6 +24,13 @@ fun NookApp(app: AppState = remember { AppState() }) {
     NookTheme(app.theme) {
         CompositionLocalProvider(LocalApp provides app) {
             val c = LocalNook.current
+            // the status and navigation bar icons follow the app's own theme, not only the phone's
+            val activity = androidx.compose.ui.platform.LocalContext.current as? androidx.activity.ComponentActivity
+            SideEffect {
+                val bars = if (c.dark) androidx.activity.SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+                else androidx.activity.SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+                activity?.enableEdgeToEdge(bars, bars)
+            }
             BackHandler(app.sheet != null || app.drawer || app.panel != null || app.stack.size > 1) { app.back() }
             Box(Modifier.fillMaxSize().background(c.bg)) {
                 Column(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -80,10 +88,7 @@ private fun NavBar(app: AppState) {
             Box(Modifier.weight(1f).fillMaxHeight().tap { if (!(on && app.stack.size == 1)) app.root(r) }, contentAlignment = Alignment.Center) {
                 if (r == Route.Profile) Avatar(Sample.me, 28.dp, modifier = if (on) Modifier.border(2.dp, c.fg, CircleShape).padding(0.dp) else Modifier)
                 else NIcon(icon, 26.dp, if (on) c.fg else c.muted, fill = on)
-                if (r == Route.Chats) {
-                    val unread = Sample.chats.count { it.unread > 0 }
-                    if (unread > 0) Badge(unread, Modifier.align(Alignment.TopCenter).offset(x = 16.dp, y = 4.dp))
-                }
+                if (r == Route.Chats && app.unreadPeople > 0) Badge(app.unreadPeople, Modifier.align(Alignment.TopCenter).offset(x = 16.dp, y = 4.dp))
             }
         }
     }

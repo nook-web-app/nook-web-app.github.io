@@ -23,7 +23,7 @@ private fun Ab(icon: String, n: Int, on: Boolean, onColor: Color, big: Boolean, 
     val c = LocalNook.current
     val col = if (on) onColor else c.muted
     Row(
-        modifier.defaultMinSize(minHeight = 38.dp).tap(RoundedCornerShape(Rad.pill), onClick = onClick).padding(8.dp),
+        modifier.defaultMinSize(minHeight = 38.dp).tap(RoundedCornerShape(Rad.pill), onClick = onClick).padding(horizontal = 8.dp).vpad(8.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         NIcon(icon, if (big) 24.dp else 20.dp, col, fill && on)
@@ -49,7 +49,7 @@ fun Acts(p: Post, big: Boolean = false) {
         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceAround) { items.forEach { it(Modifier) } }
         return
     }
-    BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 2.dp)) {
+    BoxWithConstraints(Modifier.fillMaxWidth().vpad(2.dp, 0.dp).probe("acts:" + p.id)) {
         // the row starts 8dp left of the text (margin-left:-8px), so it is 8dp wider than the column
         val w = maxWidth + 8.dp
         val rest = 36.dp * 3
@@ -62,15 +62,20 @@ fun Acts(p: Post, big: Boolean = false) {
     }
 }
 
-// .imgs: the pictures of a post (sample posts show a soft gradient where the photo would be)
+// .imgs.n1: the picture of a post, full width at its own shape and at most min(460dp, 60% of the screen) tall, inside a
+// 1dp line with rounded corners (the sample photo stands in for the real one)
 @Composable
-fun Pics(n: Int, seed: Float) {
+fun Pics() {
     val c = LocalNook.current
     val shape = RoundedCornerShape(Rad.m)
-    Box(
-        Modifier.padding(top = 8.dp).fillMaxWidth().aspectRatio(if (n > 1) 2f else 0.85f).clip(shape).border(1.dp, c.line, shape)
-            .background(Brush.linearGradient(listOf(hsl(seed, 0.35f, 0.45f), hsl((seed + 50) % 360, 0.45f, 0.25f)))),
-    )
+    val maxH = minOf(460f, androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp * 0.6f).dp
+    BoxWithConstraints(Modifier.padding(top = 8.dp).fillMaxWidth().clip(shape).border(1.dp, c.line, shape).padding(1.dp)) {
+        val h = minOf(maxWidth * (700f / 600f), maxH)
+        androidx.compose.foundation.Image(
+            androidx.compose.ui.res.painterResource(R.drawable.sample_pic), null,
+            Modifier.fillMaxWidth().height(h).background(c.bg2), contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+        )
+    }
 }
 
 // .post: avatar, then name, handle and time on one baseline, the text, pictures and actions
@@ -79,11 +84,11 @@ fun PostCard(p: Post, depth: Int = 0, label: String? = null) {
     val app = LocalApp.current
     val c = LocalNook.current
     Row(
-        Modifier.fillMaxWidth().lineBelow(c.line).tap { app.go(Route.Thread(p.id)) }
-            .padding(start = 16.dp + (14 * depth).dp, end = 16.dp, top = 12.dp, bottom = 2.dp),
+        Modifier.fillMaxWidth().probe("post:" + p.id).lineBelow(c.line).tap { app.go(Route.Thread(p.id)) }
+            .padding(start = 16.dp + (14 * depth).dp, end = 16.dp).vpad(12.dp, 2.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Avatar(p.author, 40.dp, modifier = Modifier.tap(androidx.compose.foundation.shape.CircleShape) { if (p.author.id != "me") app.go(Route.User(p.author.id)) })
+        Avatar(p.author, 40.dp, modifier = Modifier.probe("av:" + p.id).tap(androidx.compose.foundation.shape.CircleShape) { if (!p.author.own) app.go(Route.User(p.author.id)) })
         Column(Modifier.weight(1f)) {
             if (label != null) Row(Modifier.padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 NIcon("repost", 14.dp, c.muted); T(label, Fs.sm, color = c.muted)
@@ -91,13 +96,13 @@ fun PostCard(p: Post, depth: Int = 0, label: String? = null) {
             BoxWithConstraints {
                 val half = maxWidth / 2
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    T(p.author.name, weight = FontWeight.Bold, maxLines = 1, modifier = Modifier.alignBy(FirstBaseline).widthIn(max = half))
+                    T(p.author.name, weight = FontWeight.Bold, maxLines = 1, modifier = Modifier.alignBy(FirstBaseline).widthIn(max = half).probe("name:" + p.id))
                     T("@" + p.author.handle, color = c.muted, maxLines = 1, modifier = Modifier.alignBy(FirstBaseline).weight(1f))
-                    T(p.ago, Fs.md, color = c.muted, modifier = Modifier.alignBy(FirstBaseline))
+                    T(p.ago, Fs.md, color = c.muted, modifier = Modifier.alignBy(FirstBaseline).probe("time:" + p.id))
                 }
             }
-            if (p.text.isNotEmpty()) T(p.text, lineHeight = (15 * 1.38).sp)
-            if (p.pics > 0) Pics(p.pics, hueOf(p.id))
+            if (p.text.isNotEmpty()) T(p.text, lineHeight = (15 * 1.38).sp, modifier = Modifier.probe("text:" + p.id))
+            if (p.pic) Pics()
             Acts(p)
         }
     }
@@ -110,11 +115,11 @@ fun MainPost(p: Post) {
     val c = LocalNook.current
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Avatar(p.author, 48.dp, modifier = Modifier.tap(androidx.compose.foundation.shape.CircleShape) { if (p.author.id != "me") app.go(Route.User(p.author.id)) })
+            Avatar(p.author, 48.dp, modifier = Modifier.tap(androidx.compose.foundation.shape.CircleShape) { if (!p.author.own) app.go(Route.User(p.author.id)) })
             Column { T(p.author.name, weight = FontWeight.Bold); T("@" + p.author.handle, color = c.muted) }
         }
         if (p.text.isNotEmpty()) T(p.text, Fs.x2, modifier = Modifier.padding(top = 12.dp), lineHeight = (20 * 1.35).sp)
-        if (p.pics > 0) Pics(p.pics, hueOf(p.id))
+        if (p.pic) Pics()
         T(p.time + if (p.edited) " · edited" else "", Fs.md, color = c.muted, modifier = Modifier.padding(top = 12.dp, bottom = 12.dp))
         if (p.saves > 0) Row(Modifier.padding(bottom = 12.dp)) { T("${p.saves}", Fs.md, FontWeight.Bold); T(if (p.saves == 1) " save" else " saves", Fs.md, color = c.muted) }
         Acts(p, big = true)
@@ -127,9 +132,9 @@ fun MainPost(p: Post) {
 fun ComposerRow() {
     val app = LocalApp.current
     val c = LocalNook.current
-    Row(Modifier.fillMaxWidth().lineBelow(c.line).padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    Row(Modifier.fillMaxWidth().lineBelow(c.line).padding(horizontal = 16.dp).vpad(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Avatar(Sample.me, 40.dp)
-        Box(Modifier.weight(1f).tap { app.panel = Panel.Compose }.padding(vertical = 8.dp)) { T(Sample.placeholders[0], Fs.lg, color = c.muted, maxLines = 1) }
+        Box(Modifier.weight(1f).tap { app.panel = Panel.Compose }.vpad(8.dp)) { T(Sample.placeholder, Fs.lg, color = c.muted, maxLines = 1) }
         IB("camera", box = 36.dp, height = 44.dp) { app.panel = Panel.Compose }
         IB("image", box = 36.dp, height = 44.dp) { app.panel = Panel.Compose }
     }
@@ -137,8 +142,8 @@ fun ComposerRow() {
 
 // the sheets a post opens: more (own or someone else's), share, report
 fun postSheet(app: AppState, p: Post) {
-    if (p.author.id != "me") {
-        val zenOwner = p.author.id == "zen"
+    if (!p.author.own) {
+        val zenOwner = false
         app.open(listOfNotNull(
             if (p.text.isNotEmpty()) SheetItem("Copy post text", "copy") { app.say("Copied") } else null,
             SheetItem("Not interested", "eyeoff", danger = true) { app.say("You will see less like this") },
@@ -150,7 +155,7 @@ fun postSheet(app: AppState, p: Post) {
     app.open(listOfNotNull(
         if (p.text.isNotEmpty()) SheetItem("Copy post text", "copy") { app.say("Copied") } else null,
         if (p.parent == null) SheetItem(if (p.pinned) "Unpin from profile" else "Pin to profile", "pin") { app.say("Pinned to your profile") } else null,
-        SheetItem("Add to list", "list") { app.open(Sample.lists.map { SheetItem(it.name, "list") { app.say("Added to " + it.name) } } + SheetItem("Cancel", cancel = true), "Add to list") },
+        SheetItem("Add to list", "list") { app.open(app.lists.map { SheetItem(it.name, "list") { app.say("Added to " + it.name) } } + SheetItem("New list", "plus") + SheetItem("Cancel", cancel = true), "Add to list") },
         SheetItem("Edit post", "edit") { app.panel = Panel.Compose },
         SheetItem("Delete post", "trash", danger = true) { app.confirm("Delete this post?", "Delete") { Sample.posts.remove(p); app.say("Post deleted") } },
     ))
@@ -163,7 +168,7 @@ fun shareSheet(app: AppState, p: Post) = app.open(listOf(
 ), "Share post")
 
 fun reportSheet(app: AppState, p: Post) {
-    val why = (if (p.pics > 0) listOf("Sexual content") else emptyList()) + listOf(
+    val why = (if (p.pic) listOf("Sexual content") else emptyList()) + listOf(
         "Bullying or harassment", "Hate speech", "Threats or violence", "Self harm", "Illegal or dangerous",
         "Private information", "Pretending to be someone", "Spam or scam", "Something else",
     )

@@ -44,7 +44,7 @@ fun HomeScreen() {
         Bar("Nook", { MenuBtn() }, { BellBtn() })
         Tabs(listOf("For you", "Media"), app.homeTab) { app.homeTab = it }
     }) {
-        val shown = if (app.homeTab == 1) Sample.posts.filter { it.pics > 0 && it.parent == null } else Sample.posts.filter { it.parent == null }
+        val shown = if (app.homeTab == 1) Sample.posts.filter { it.pic && it.parent == null } else Sample.posts.filter { it.parent == null }
         LazyColumn(Modifier.fillMaxSize()) {
             item { ComposerRow() }
             if (shown.isEmpty()) item { Empty("smile", if (app.homeTab == 1) "No media posts yet." else "No posts yet. Write your first one.") }
@@ -76,7 +76,7 @@ fun ProfileBody(who: Person, own: Boolean) {
     val tabs = listOf("Posts", "Replies", "Reposts", "Media", "Likes")
     val shown = when (app.profileTab) {
         0 -> mine.filter { it.parent == null }; 1 -> mine.filter { it.parent != null }
-        2 -> Sample.posts.filter { it.reposted }; 3 -> mine.filter { it.pics > 0 }; else -> Sample.posts.filter { it.liked }
+        2 -> Sample.posts.filter { it.reposted }; 3 -> mine.filter { it.pic }; else -> Sample.posts.filter { it.liked }
     }
     var following by remember(who.id) { mutableStateOf(false) }
     LazyColumn(Modifier.fillMaxSize()) {
@@ -88,8 +88,9 @@ fun ProfileBody(who: Person, own: Boolean) {
                     Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (own) Pill("Edit Profile", Btn.Ghost, small = true) { app.panel = Panel.EditProfile }
                         else Pill(if (following) "Following" else "Follow", if (following) Btn.FOn else Btn.F, small = true) { following = !following }
-                        Box(Modifier.size(32.dp).clip(CircleShape).background(c.bg2).border(1.dp, c.line, CircleShape).tap(CircleShape) { profileSheet(app, who, own) }, contentAlignment = Alignment.Center) {
-                            NIcon("dots", 24.dp, c.muted)
+                        // the more button is an outlined pill with the dots, like the Edit Profile one
+                        Box(Modifier.height(32.dp).clip(RoundedCornerShape(Rad.pill)).border(1.dp, c.line, RoundedCornerShape(Rad.pill)).tap(RoundedCornerShape(Rad.pill)) { profileSheet(app, who, own) }.padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
+                            NIcon("dots", 20.dp, c.fg)
                         }
                     }
                 }
@@ -124,12 +125,15 @@ private fun Stat(n: Int, one: String, many: String, onClick: () -> Unit) {
 }
 
 fun profileSheet(app: AppState, who: Person, own: Boolean) {
-    if (own) app.open(listOf(SheetItem("Share profile", "share") {}, SheetItem("Copy link", "copy") { app.say("Copied") }, SheetItem("Cancel", cancel = true)))
+    if (own) app.open(listOf(
+        SheetItem("Copy handle", "copy") { app.say("Copied") }, SheetItem("Settings", "sliders") { app.root(Route.Settings) }, SheetItem("Cancel", cancel = true),
+    ), "@" + who.handle)
     else app.open(listOf(
-        SheetItem("Message", "chat") {}, SheetItem("Add to list", "list") {}, SheetItem("Mute", "bellOff") { app.say("Muted") },
-        SheetItem("Block", "close", danger = true) { app.confirm("Block @${who.handle}?", "Block") { app.say("Blocked") } },
-        SheetItem("Report account", "flag", danger = true) {}, SheetItem("Cancel", cancel = true),
-    ))
+        SheetItem("Mute account", "eyeoff") { app.say("Muted. Their posts are hidden from your feed") },
+        SheetItem("Report account", "flag", danger = true) {},
+        SheetItem("Block", "close", danger = true) { app.say("Blocked") },
+        SheetItem("Cancel", cancel = true),
+    ), "@" + who.handle)
 }
 
 @Composable
@@ -137,7 +141,7 @@ fun ProfileScreen() = Page({ Bar("Profile", { Lead() }) }) { ProfileBody(Sample.
 
 @Composable
 fun UserScreen(id: String) {
-    val who = LocalApp.current.person(id) ?: Sample.user
+    val who = LocalApp.current.person(id) ?: Person(id, "user", "user")
     Page({ Bar(who.name, { Lead() }) }) { ProfileBody(who, false) }
 }
 
@@ -154,13 +158,13 @@ fun SavedScreen() {
 
 // the list of chats only: the conversations themselves come later
 @Composable
-fun ChatsScreen(empty: Boolean = false) {
+fun ChatsScreen() {
     val app = LocalApp.current
     val c = LocalNook.current
     Page({ Bar("Chats", { Lead() }, { IB("edit") { app.say("New chat") } }) }) {
         LazyColumn(Modifier.fillMaxSize()) {
-            if (empty) item { Empty("smile", "Say hi to yourself.") { Pill("New chat") {} } }
-            else items(Sample.chats, key = { it.id }) { ch ->
+            if (app.chats.isEmpty()) item { Empty("smile", "Say hi to yourself.") { Pill("New chat") {} } }
+            items(app.chats, key = { it.id }) { ch ->
                 LRow(
                     { if (ch.note) Sq("edit") else Avatar(ch.who, 48.dp) },
                     if (ch.note) "Notes" else ch.who.name, ch.last, ch.time, subStrong = ch.unread > 0,
@@ -181,18 +185,18 @@ fun ListsScreen() {
     val app = LocalApp.current
     Page({ Bar("Lists", { Lead() }) }) {
         LazyColumn(Modifier.fillMaxSize()) {
-            if (Sample.lists.isEmpty()) item { Empty("list", "Make your first list.") { Pill("New list") {} } }
-            items(Sample.lists, key = { it.id }) { l ->
+            if (app.lists.isEmpty()) item { Empty("list", "Make your first list.") { Pill("New list") {} } }
+            items(app.lists, key = { it.id }) { l ->
                 LRow({ Sq("list") }, l.name, "${l.count} " + if (l.count == 1) "post" else "posts") { app.go(Route.ListPage(l.id)) }
             }
-            item { Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { Pill("New list") {} } }
+            if (app.lists.isNotEmpty()) item { Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { Pill("New list") {} } }
         }
     }
 }
 
 @Composable
 fun ListScreen(id: String) {
-    val l = Sample.lists.firstOrNull { it.id == id }
+    val l = LocalApp.current.lists.firstOrNull { it.id == id }
     Page({ Bar(l?.name ?: "List", { BackBtn() }) }) {
         LazyColumn(Modifier.fillMaxSize()) { items(Sample.posts.take(3), key = { it.id }) { PostCard(it) } }
     }
@@ -208,7 +212,9 @@ fun SearchScreen() {
             Box(Modifier.padding(start = 16.dp, end = 16.dp, top = 18.dp)) { Field(q, { q = it }, "Search people") }
             T("Suggested people, refreshed often", Fs.sm, color = c.muted, align = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
             LazyColumn(Modifier.weight(1f)) {
-                items(Sample.people.filter { q.isBlank() || it.name.contains(q, true) || it.handle.contains(q, true) }, key = { it.id }) { p ->
+                val found = app.suggested.filter { q.isBlank() || it.name.contains(q, true) || it.handle.contains(q, true) }
+                if (found.isEmpty()) item { Empty("user", if (q.isBlank()) "No one to suggest yet." else "No one found.") }
+                items(found, key = { it.id }) { p ->
                     var on by remember { mutableStateOf(false) }
                     LRow({ Avatar(p, 44.dp) }, p.name, "@" + p.handle, trail = { Pill(if (on) "Following" else "Follow", if (on) Btn.FOn else Btn.F, small = true) { on = !on } }) { app.go(Route.User(p.id)) }
                 }

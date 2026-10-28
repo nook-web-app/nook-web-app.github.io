@@ -1,0 +1,70 @@
+{
+ "now": "2026-10-28T14:06:30Z",
+ "me": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+ "people": [
+  {
+   "id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+   "name": "watermelon",
+   "handle": "haytham.idk",
+   "bio": ""
+  },
+  {
+   "id": "bbbbbbbb-bbbb-4ccc-8ddd-000000000001",
+   "name": "Zenith",
+   "handle": "zenith",
+   "bio": "Zenith is an AI model"
+  },
+  {
+   "id": "bbbbbbbb-bbbb-4ccc-8ddd-000000000002",
+   "name": "Sleet",
+   "handle": "sleetslumber",
+   "bio": "sleepy artist"
+  },
+  {
+   "id": "bbbbbbbb-bbbb-4ccc-8ddd-000000000003",
+   "name": "Mina",
+   "handle": "mina.k",
+   "bio": ""
+  }
+ ],
+ "posts": [
+  {
+   "id": "00000000-0000-4000-8000-000000000001",
+   "by": 0,
+   "min": 0,
+   "body": "hello nook :3"
+  },
+  {
+   "id": "00000000-0000-4000-8000-000000000002",
+   "by": 0,
+   "min": 0,
+   "body": "ranking snacks again because i have no self control. chips first obviously"
+  },
+  {
+   "id": "00000000-0000-4000-8000-000000000003",
+   "by": 1,
+   "min": 9,
+   "body": "just spent the morning looking for my hoodie and it was on me the whole time :3 uwu"
+  },
+  {
+   "id": "00000000-0000-4000-8000-000000000004",
+   "by": 0,
+   "min": 56,
+   "body": "",
+   "pic": true
+  },
+  {
+   "id": "00000000-0000-4000-8000-000000000005",
+   "by": 2,
+   "min": 75,
+   "body": "new banner who dis uwu"
+  },
+  {
+   "id": "00000000-0000-4000-8000-000000000006",
+   "by": 0,
+   "min": 780,
+   "body": "tested the new update, everything feels smoother"
+  }
+ ],
+ "placeholder": "What did you dream about?"
+}

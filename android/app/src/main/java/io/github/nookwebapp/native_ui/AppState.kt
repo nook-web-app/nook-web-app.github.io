@@ -47,6 +47,11 @@ class AppState(start: Route = Route.Home) {
     var theme by mutableStateOf(ThemeMode.System)
     var homeTab by mutableIntStateOf(0)
     var profileTab by mutableIntStateOf(0)
+    // chats and lists start empty until the app is connected
+    val chats = mutableStateListOf<ChatRow>()
+    val lists = mutableStateListOf<NookList>()
+    val suggested = mutableStateListOf<Person>()
+    val unreadPeople: Int get() = chats.count { it.unread > 0 }
 
     val top: Route get() = stack.last()
     val rootRoute: Route get() = stack.first()
@@ -70,6 +75,7 @@ class AppState(start: Route = Route.Home) {
 
     fun post(id: String) = Sample.posts.firstOrNull { it.id == id }
     fun person(id: String) = (Sample.people + Sample.me).firstOrNull { it.id == id }
+    fun isZenith(p: Person) = p.handle.equals("zenith", ignoreCase = true)
 }
 
 val LocalApp = staticCompositionLocalOf<AppState> { error("no app state") }

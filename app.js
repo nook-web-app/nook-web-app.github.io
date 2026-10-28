@@ -291,7 +291,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.28";
+const APP_VERSION = "3.22.29";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1583,7 +1583,7 @@ function acts(p, big, nc) {
     ab("like", "heart", p.lc || 0, p.liked, () => toggleRemoteLike(p, big), "Like", true),
     ab("bm", "bookmark", p.svc || 0, p.saved, () => { setSaved(p, !p.saved); bump = p.id + "bm"; persist(); refresh(p, big); toast(p.saved ? "Saved" : "Removed from saved"); }, "Save", true),
     ab("sh", "share", p.shc || 0, false, () => sharePost(p), "Share post"),
-    ab("mo", "dots", 0, false, () => sheet([...(typeof p.text === "string" && p.text ? [{ icon: "copy", label: "Copy post text", fn: () => copy(p.text || "") }] : []), { icon: "eyeoff", label: "Not interested", danger: true, fn: () => lessLikeThis(p) }, { icon: "flag", label: "Report post", danger: true, fn: () => reportPost(p) }]), "More"));
+    ab("mo", "dots", 0, false, () => sheet([...(typeof p.text === "string" && p.text ? [{ icon: "copy", label: "Copy post text", fn: () => copy(p.text || "") }] : []), { icon: "eyeoff", label: "Not interested", danger: true, fn: () => lessLikeThis(p) }, zenithOfOwner(p) ? { icon: "trash", label: "Delete post", danger: true, fn: () => confirmSheet("Delete this post of Zenith and its replies?", "Delete", () => deleteZenithPost(p)) } : { icon: "flag", label: "Report post", danger: true, fn: () => reportPost(p) }]), "More"));
   return h("div", { class: "acts" + (big ? " big" : ""), "data-pid": p.id, "data-nc": nc ? "1" : null },
     ab("rl", "reply", n, false, () => openCompose({ parent: p.id }), "Reply"),
     ab("rp", "repost", p.ai ? 0 : p.rpc || 0, p.reposted, () => (p.remote ? toggleRemoteRepost(p, big) : (p.reposted = !p.reposted, p.rpAt = p.reposted ? Date.now() : 0, bump = p.id + "rp", persist(), refresh(p, big))), "Repost"),
@@ -1669,6 +1669,19 @@ function reportPost(p) {
     if (error && error.code !== "23505") { toast(error.code === "P0001" ? "Too many reports. Try again later" : "Could not send the report"); return; }
     toast("Thanks, we will check it");
   } })), { label: "Cancel", cancel: true }], "Why are you reporting this post?");
+}
+// the owner takes down what Zenith posts in public (everybody else can only report it); the server checks the owner again
+const zenithOfOwner = p => !!(p.ra && p.remote && isOwner() && S.zen && S.zen.id && p.ra.id === S.zen.id);
+async function deleteZenithPost(p) {
+  const { data, error } = await sb.rpc("nook_owner_delete_zenith_post", { p_id: p.remote });
+  if (error || data !== true) { toast("Could not delete the post"); return; }
+  const gone = new Set([p.id, ...flat(p.id, 0, []).map(x => x.p.id)]);
+  S.posts = S.posts.filter(x => !gone.has(x.id));
+  S.lists.forEach(l => { l.ids = l.ids.filter(i => !gone.has(i)); });
+  persist();
+  while (stack.length > 1 && stack[stack.length - 1].r === "thread" && gone.has(stack[stack.length - 1].id)) { stack.pop(); scrolls.pop(); }
+  render();
+  toast("Post deleted");
 }
 function postSheet(p) {
   const items = [];

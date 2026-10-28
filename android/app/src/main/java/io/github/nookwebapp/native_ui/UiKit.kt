@@ -1,0 +1,258 @@
+package io.github.nookwebapp.native_ui
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.Text
+import androidx.compose.material.ripple.rememberRipple
+import androidx.compose.ui.composed
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
+
+// Small building blocks that match the web app's CSS classes one to one (the class name is in each comment).
+
+@Composable
+fun T(
+    text: String, size: TextUnit = Fs.base, weight: FontWeight = FontWeight.Normal, color: Color = LocalContentColor.current,
+    modifier: Modifier = Modifier, lineHeight: TextUnit = TextUnit.Unspecified, align: TextAlign? = null, maxLines: Int = Int.MAX_VALUE,
+    letterSpacing: TextUnit = TextUnit.Unspecified,
+) {
+    val lh = if (lineHeight == TextUnit.Unspecified) (size.value * 1.4f).sp else lineHeight
+    Text(
+        text, modifier, color = color, style = LocalTextStyle.current.copy(fontSize = size, fontWeight = weight, lineHeight = lh, letterSpacing = letterSpacing),
+        textAlign = align, maxLines = maxLines, overflow = if (maxLines == Int.MAX_VALUE) TextOverflow.Clip else TextOverflow.Ellipsis,
+    )
+}
+
+// a press feedback that stays inside the shape it is given
+fun Modifier.tap(shape: androidx.compose.ui.graphics.Shape? = null, enabled: Boolean = true, onClick: () -> Unit): Modifier = composed {
+    val m = if (shape != null) this.clip(shape) else this
+    m.clickable(remember { MutableInteractionSource() }, rememberRipple(), enabled = enabled, onClick = onClick)
+}
+
+// a 1px rule in --line, drawn under the content (border-bottom)
+fun Modifier.lineBelow(color: Color) = drawBehind { drawLine(color, Offset(0f, size.height - 0.5f), Offset(size.width, size.height - 0.5f), 1.dp.toPx()) }
+fun Modifier.lineAbove(color: Color) = drawBehind { drawLine(color, Offset(0f, 0.5f), Offset(size.width, 0.5f), 1.dp.toPx()) }
+
+@Composable
+fun Line() { Box(Modifier.fillMaxWidth().height(1.dp).background(LocalNook.current.line)) }
+
+// .av: a round picture; without one, the first letter on the accent color (own) or on a color from the name (others)
+@Composable
+fun Avatar(p: Person, size: Dp = 40.dp, ring: Color? = null, modifier: Modifier = Modifier) {
+    val c = LocalNook.current
+    val zen = p.handle.equals("zenith", ignoreCase = true)
+    val bg: Brush = when {
+        zen -> Brush.linearGradient(listOf(Color(0xFF14466F), Color(0xFF208BFE)))
+        p.hue == null -> SolidColor(c.accent)
+        else -> SolidColor(hsl(p.hue, 0.45f, 0.42f))
+    }
+    val ringMod = if (ring != null) Modifier.border(4.dp, ring, CircleShape) else Modifier
+    Box(modifier.size(size).clip(CircleShape).background(bg).then(ringMod), contentAlignment = Alignment.Center) {
+        val letter = if (zen) "Z" else (p.name.ifBlank { p.handle }).trim().take(1).uppercase()
+        T(letter, size = if (zen) (size.value * 0.5f).sp else (size.value * 0.4f).roundToInt().sp, weight = FontWeight.Bold, color = Color.White, lineHeight = (size.value * 0.5f).sp)
+    }
+}
+
+fun hsl(h: Float, s: Float, l: Float): Color {
+    val a = s * minOf(l, 1 - l)
+    fun f(n: Int): Float { val k = (n + h / 30f) % 12f; return l - a * maxOf(-1f, minOf(k - 3f, 9f - k, 1f)) }
+    return Color(f(0), f(8), f(4))
+}
+
+// the color of someone's letter avatar comes from their name, like rAv() does
+fun hueOf(seed: String): Float {
+    var h = 7L
+    for (ch in seed) h = (h * 31 + ch.code) and 0xFFFFFFFFL
+    return (h % 360).toFloat()
+}
+
+// .ib: a 44dp round icon button in the muted color
+@Composable
+fun IB(icon: String, size: Dp = 24.dp, tint: Color = LocalNook.current.muted, box: Dp = 44.dp, height: Dp = box, fill: Boolean = false, enabled: Boolean = true, onClick: () -> Unit = {}) {
+    Box(Modifier.size(box, height).alpha(if (enabled) 1f else 0.4f).tap(CircleShape, enabled, onClick), contentAlignment = Alignment.Center) {
+        NIcon(icon, size, tint, fill)
+    }
+}
+
+// .bar: 44dp, the title, 44dp, 54dp high, with the line under the whole top area drawn by Top()
+@Composable
+fun Bar(title: String, left: (@Composable () -> Unit)? = null, right: (@Composable () -> Unit)? = null) {
+    Row(Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.width(44.dp).offset(x = (-10).dp), contentAlignment = Alignment.CenterStart) { left?.invoke() }
+        T(title, Fs.xl, FontWeight.Bold, modifier = Modifier.weight(1f), align = TextAlign.Center, maxLines = 1)
+        Box(Modifier.width(44.dp).offset(x = 10.dp), contentAlignment = Alignment.CenterEnd) { right?.invoke() }
+    }
+}
+
+// #top: whatever sits above the page, with one line under it
+@Composable
+fun Top(content: @Composable ColumnScope.() -> Unit) {
+    val c = LocalNook.current
+    Column(Modifier.fillMaxWidth().background(c.bg).lineBelow(c.line), content = content)
+}
+
+// .tabs / .tab: equal tabs (or a scrolling row on profiles) with a 3dp accent line under the chosen one
+@Composable
+fun Tabs(items: List<String>, selected: Int, scroll: Boolean = false, onSelect: (Int) -> Unit) {
+    val c = LocalNook.current
+    val row = if (scroll) Modifier.horizontalScroll(rememberScrollState()) else Modifier.fillMaxWidth()
+    Row(row.padding(horizontal = 16.dp)) {
+        items.forEachIndexed { i, t ->
+            val on = i == selected
+            val m = if (scroll) Modifier else Modifier.weight(1f)
+            Box(m.tap { onSelect(i) }.padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.drawBehind { if (on) drawRect(c.accent, Offset(0f, size.height - 3.dp.toPx()), androidx.compose.ui.geometry.Size(size.width, 3.dp.toPx())) }
+                    .padding(top = 13.dp, bottom = 14.dp)) {
+                    T(t, Fs.base, if (on) FontWeight.Bold else FontWeight.SemiBold, if (on) c.fg else c.muted, maxLines = 1)
+                }
+            }
+        }
+    }
+}
+
+// .pri: the filled pill, .ghost: the outlined pill, .fbtn: the light pill used for Follow
+enum class Btn { Pri, Ghost, F, FOn }
+@Composable
+fun Pill(label: String, kind: Btn = Btn.Pri, small: Boolean = false, enabled: Boolean = true, modifier: Modifier = Modifier, onClick: () -> Unit = {}) {
+    val c = LocalNook.current
+    val shape = RoundedCornerShape(Rad.pill)
+    val (bg, fg) = when (kind) { Btn.Pri -> c.fill to c.on; Btn.Ghost, Btn.FOn -> Color.Transparent to c.fg; Btn.F -> c.fg to c.bg }
+    val border = if (kind == Btn.Ghost || kind == Btn.FOn) Modifier.border(1.dp, c.line, shape) else Modifier
+    Box(
+        modifier.defaultMinSize(minHeight = if (small) 32.dp else 36.dp).alpha(if (enabled) 1f else 0.45f).clip(shape).background(bg).then(border)
+            .tap(shape, enabled, onClick).padding(horizontal = if (small) 14.dp else 18.dp),
+        contentAlignment = Alignment.Center,
+    ) { T(label, if (small) Fs.md else Fs.base, if (kind == Btn.Ghost) FontWeight.SemiBold else FontWeight.Bold, fg, maxLines = 1) }
+}
+
+// .empty: a big muted icon, a short line and maybe a button, centered with 56dp above and below
+@Composable
+fun Empty(icon: String?, text: String, button: (@Composable () -> Unit)? = null) {
+    val c = LocalNook.current
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 56.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        if (icon != null) NIcon(icon, 56.dp, c.muted, modifier = Modifier.alpha(0.8f))
+        T(text, color = c.muted, align = TextAlign.Center)
+        button?.invoke()
+    }
+}
+
+// .sec: the small upper case heading of a settings group
+@Composable
+fun Sec(text: String) {
+    T(text.uppercase(), Fs.sm, FontWeight.Bold, LocalNook.current.muted, Modifier.padding(start = 16.dp, end = 16.dp, top = 18.dp, bottom = 6.dp), letterSpacing = (13 * 0.06).sp)
+}
+
+// .seg: a pill of choices with the chosen one filled
+@Composable
+fun Seg(items: List<String>, selected: Int, modifier: Modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 14.dp), onSelect: (Int) -> Unit) {
+    val c = LocalNook.current
+    Row(modifier.fillMaxWidth().clip(RoundedCornerShape(Rad.pill)).background(c.bg2).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        items.forEachIndexed { i, t ->
+            val on = i == selected
+            Box(Modifier.weight(1f).clip(RoundedCornerShape(Rad.pill)).background(if (on) c.fill else Color.Transparent).tap { onSelect(i) }.padding(9.dp), contentAlignment = Alignment.Center) {
+                T(t, Fs.base, FontWeight.SemiBold, if (on) c.on else c.muted)
+            }
+        }
+    }
+}
+
+// .group with .srow rows: the rounded settings card
+@Composable
+fun Group(content: @Composable ColumnScope.() -> Unit) {
+    Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp).fillMaxWidth().clip(RoundedCornerShape(Rad.m)).background(LocalNook.current.bg2), content = content)
+}
+
+@Composable
+fun SRow(icon: (@Composable () -> Unit)?, title: String, sub: String? = null, danger: Boolean = false, last: Boolean = false, onClick: () -> Unit = {}) {
+    val c = LocalNook.current
+    val col = if (danger) c.danger else c.fg
+    Row(
+        Modifier.fillMaxWidth().then(if (last) Modifier else Modifier.lineBelow(c.line)).tap(onClick = onClick).padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        if (icon != null) CompositionLocalProvider(LocalContentColor provides if (danger) c.danger else c.muted) { icon() }
+        Column(Modifier.weight(1f)) {
+            T(title, weight = FontWeight.SemiBold, color = col, maxLines = 1)
+            if (sub != null) T(sub, Fs.sm, color = c.muted, maxLines = 1)
+        }
+    }
+}
+
+// .lrow: a person, chat or list in a list
+@Composable
+fun LRow(lead: @Composable () -> Unit, title: String, sub: String? = null, time: String? = null, trail: (@Composable () -> Unit)? = null, subStrong: Boolean = false, onClick: () -> Unit = {}) {
+    val c = LocalNook.current
+    Row(
+        Modifier.fillMaxWidth().lineBelow(c.line).tap(onClick = onClick).padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        lead()
+        Column(Modifier.weight(1f)) {
+            T(title, weight = FontWeight.Bold, maxLines = 1)
+            if (sub != null) T(sub, Fs.md, color = if (subStrong) c.fg else c.muted, maxLines = 1)
+        }
+        if (time != null) T(time, Fs.sm, color = c.muted, modifier = Modifier.align(Alignment.Top).padding(top = 2.dp))
+        trail?.invoke()
+    }
+}
+
+// .sq: the square tile used for lists
+@Composable
+fun Sq(icon: String) {
+    val c = LocalNook.current
+    Box(Modifier.size(44.dp).clip(RoundedCornerShape(Rad.s)).background(c.accent), contentAlignment = Alignment.Center) { NIcon(icon, 22.dp, c.on) }
+}
+
+// .in: a text field on --bg2 with rounded corners (and the accent outline while it has focus)
+@Composable
+fun Field(value: String, onChange: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier, lines: Int = 1, border: Boolean = false, trailing: (@Composable () -> Unit)? = null) {
+    val c = LocalNook.current
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(Rad.s)
+    val outline = when { focused -> Modifier.border(2.dp, c.accent, shape); border -> Modifier.border(1.dp, c.line, shape); else -> Modifier }
+    Row(modifier.fillMaxWidth().defaultMinSize(minHeight = 42.dp).clip(shape).background(c.bg2).then(outline).padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        BasicTextField(
+            value, onChange, Modifier.weight(1f).onFocusChanged { focused = it.isFocused }, singleLine = lines == 1, minLines = lines,
+            textStyle = LocalTextStyle.current.copy(color = c.fg, fontSize = Fs.base), cursorBrush = SolidColor(c.accent),
+            decorationBox = { inner -> Box { if (value.isEmpty()) T(placeholder, color = c.muted); inner() } },
+        )
+        trailing?.invoke()
+    }
+}
+
+// .nbadge: the small count bubble
+@Composable
+fun Badge(n: Int, modifier: Modifier = Modifier) {
+    val c = LocalNook.current
+    Box(modifier.defaultMinSize(minWidth = 20.dp).height(20.dp).clip(RoundedCornerShape(Rad.pill)).background(c.accent).padding(horizontal = 6.dp), contentAlignment = Alignment.Center) {
+        T(n.toString(), Fs.xs, FontWeight.SemiBold, c.on)
+    }
+}

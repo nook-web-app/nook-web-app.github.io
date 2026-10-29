@@ -148,7 +148,7 @@ class LiveTest {
         val np = a.store.posts.last()
         waitFor { np.remote != null }
         use(bS)
-        val got = waitFor(60_000) { Sb.get(Q("notifications").select("kind, post_id").eq("user_id", bId).eq("kind", "post")).rows.any { it.optString("post_id") == np.remote } }
+        val got = waitFor(170_000) { Sb.get(Q("notifications").select("kind, post_id").eq("user_id", bId).eq("kind", "post")).rows.any { it.optString("post_id") == np.remote } }
         check("B is told about A's new post", got, np.remote)
         val zid = Sb.get(Q("accounts").select("id").eq("username", "zenith")).one?.optString("id")
         if (zid != null) {

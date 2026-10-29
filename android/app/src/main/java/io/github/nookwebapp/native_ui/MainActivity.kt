@@ -83,6 +83,7 @@ class MainActivity : ComponentActivity() {
             val prefs = getSharedPreferences("nook", 0)
             if (!prefs.getBoolean("asked", false)) { prefs.edit().putBoolean("asked", true).apply(); askNotifs() }
         }
+        watchNetwork()
         app.on.wireSession()
         app.scope.launch { app.on.boot(); take(intent) }
         // a new version is looked for a moment after the app opens
@@ -105,6 +106,26 @@ class MainActivity : ComponentActivity() {
                 repeat(3) { androidx.compose.runtime.withFrameNanos { } }
                 show(); root.invalidate()
             }
+        }
+    }
+
+    // the offline page follows the phone's connection: gone when it is back, and a start that failed for lack of it runs again
+    private fun watchNetwork() {
+        val cm = getSystemService(CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        fun now() = cm.getNetworkCapabilities(cm.activeNetwork)?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+        app.online = now()
+        fun set(on: Boolean) = runOnUiThread {
+            if (on == app.online) return@runOnUiThread
+            app.online = on
+            if (!on) { app.offlineSkip = false; return@runOnUiThread }
+            app.offlineSkip = false
+            if (app.bootOffline) { app.bootOffline = false; app.scope.launch { app.on.boot() } }
+        }
+        runCatching {
+            cm.registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onCapabilitiesChanged(n: android.net.Network, caps: android.net.NetworkCapabilities) = set(caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED))
+                override fun onLost(n: android.net.Network) = set(false)
+            })
         }
     }
 

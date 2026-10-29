@@ -495,3 +495,5 @@ html.shield-on::after{content:"";position:fixed;inset:0;background:var(--bg);z-i
 .skelrow .nm{display:flex;flex-direction:column;gap:8px}
 .skelrow .l1{height:14px;width:45%}
 .skelrow .l2{height:12px;width:75%}
+#offline{position:fixed;inset:0;z-index:95;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--bg);padding-top:max(24px,env(safe-area-inset-top,0px));padding-bottom:max(24px,env(safe-area-inset-bottom,0px))}
+#offline .empty{padding-block:0}

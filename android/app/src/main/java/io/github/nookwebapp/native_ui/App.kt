@@ -69,6 +69,7 @@ fun NookApp(app: AppState) {
                 SheetHost(app)
                 WarnHost(app)
                 PostLockedHost(app)
+                OfflineHost(app)
                 ToastHost(app)
             }
         }

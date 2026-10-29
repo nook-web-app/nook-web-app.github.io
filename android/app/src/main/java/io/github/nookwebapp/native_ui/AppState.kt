@@ -98,6 +98,12 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     var authUp by mutableStateOf(false)
     // a line the sign in page shows once (the web app's nook-notice), and the email of a banned account for its download
     var notice by mutableStateOf<String?>(null)
+    // the offline page: shown while the phone has no connection, or when the start could not be made for lack of one
+    var online by mutableStateOf(true)
+    var bootOffline by mutableStateOf(false)
+    var offlineSkip by mutableStateOf(false)
+    var canSkipOffline by mutableStateOf(true)
+    val offline get() = (!online || bootOffline) && !offlineSkip
     var banEmail by mutableStateOf("")
     // posting is paused: the sheet that says so
     var postLocked by mutableStateOf(false)

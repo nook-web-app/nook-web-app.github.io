@@ -76,6 +76,7 @@ class Shots {
         shot("43-warn") { warns.add(Warn("Post removed", "Reason: text that is not allowed.")) }
         shot("44-banned", start = Route.Banned)
         shot("45-age", start = Route.Age)
+        shot("50-offline") { online = false }
         shot("46-add-account") { root(Route.Settings); panels.add(Panel.AddAccount) }
         shot("47-totp") { root(Route.Settings); panels.add(Panel.TotpSetup) }
         shot("55-light-home", dark = false)

@@ -13,7 +13,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
-import androidx.compose.material.ripple.rememberRipple
 import androidx.compose.ui.composed
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -24,6 +23,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -64,10 +65,28 @@ fun T(
     )
 }
 
-// a press feedback that stays inside the shape it is given
+// a tap target with no highlight of its own, like the web app (which turns off the tap highlight everywhere)
 fun Modifier.tap(shape: androidx.compose.ui.graphics.Shape? = null, enabled: Boolean = true, onClick: () -> Unit): Modifier = composed {
     val m = if (shape != null) this.clip(shape) else this
-    m.clickable(remember { MutableInteractionSource() }, rememberRipple(), enabled = enabled, onClick = onClick)
+    m.clickable(remember { MutableInteractionSource() }, null, enabled = enabled, onClick = onClick)
+}
+
+// .ib, .pri, .ghost, .fab and the bottom bar buttons shrink to 92% while held (transform .12s)
+fun Modifier.pressTap(shape: androidx.compose.ui.graphics.Shape? = null, enabled: Boolean = true, onClick: () -> Unit): Modifier = composed {
+    val src = remember { MutableInteractionSource() }
+    val down by src.collectIsPressedAsState()
+    val k by androidx.compose.animation.core.animateFloatAsState(if (down) 0.92f else 1f, androidx.compose.animation.core.tween(120), label = "press")
+    val m = this.graphicsLayer { scaleX = k; scaleY = k }.let { if (shape != null) it.clip(shape) else it }
+    m.clickable(src, null, enabled = enabled, onClick = onClick)
+}
+
+// .si and .sx get --bg2 behind them while held (background-color .15s)
+fun Modifier.pressBg(shape: androidx.compose.ui.graphics.Shape, on: Boolean = false, onClick: () -> Unit): Modifier = composed {
+    val src = remember { MutableInteractionSource() }
+    val down by src.collectIsPressedAsState()
+    val c = LocalNook.current
+    val bg by androidx.compose.animation.animateColorAsState(if (down || on) c.bg2 else c.bg2.copy(alpha = 0f), androidx.compose.animation.core.tween(150), label = "pressbg")
+    this.clip(shape).background(bg).clickable(src, null, onClick = onClick)
 }
 
 // Layout probes for the screenshot tests: when on, tagged elements record where they ended up (in dp from the top left),
@@ -96,20 +115,16 @@ fun Modifier.lineAbove(color: Color) = drawBehind { drawRect(color, Offset.Zero,
 @Composable
 fun Line() { Box(Modifier.fillMaxWidth().height(1.dp).background(LocalNook.current.line)) }
 
-// .av: a round picture; without one, the first letter on the accent color (own) or on a color from the name (others)
+// .av: the owner's round photo; without one, the first letter of the name on the accent color
 @Composable
-fun Avatar(p: Person, size: Dp = 40.dp, ring: Color? = null, modifier: Modifier = Modifier) {
+fun MyAvatar(size: Dp = 40.dp, ring: Color? = null, modifier: Modifier = Modifier) {
     val c = LocalNook.current
-    val zen = p.handle.equals("zenith", ignoreCase = true)
-    val bg: Brush = when {
-        zen -> Brush.linearGradient(listOf(Color(0xFF14466F), Color(0xFF208BFE)))
-        p.own -> SolidColor(c.accent)
-        else -> SolidColor(hsl(hueOf(p.name.ifBlank { p.handle }), 0.45f, 0.42f))
-    }
-    val ringMod = if (ring != null) Modifier.border(4.dp, ring, CircleShape) else Modifier
-    Box(modifier.size(size).clip(CircleShape).background(bg).then(ringMod), contentAlignment = Alignment.Center) {
-        val letter = if (zen) "Z" else (p.name.ifBlank { p.handle }).trim().take(1).uppercase()
-        T(letter, size = if (zen) (size.value * 0.5f).sp else (size.value * 0.4f).roundToInt().sp, weight = FontWeight.Bold, color = Color.White, lineHeight = (size.value * 0.5f).sp)
+    val pr = LocalApp.current.store.profile
+    Box(modifier.size(size).clip(CircleShape).background(c.accent), contentAlignment = Alignment.Center) {
+        val letter = pr.name.ifBlank { pr.handle }.ifBlank { "?" }.trim().take(1).uppercase()
+        T(letter, size = (size.value * 0.4f).roundToInt().sp, weight = FontWeight.Bold, color = c.on, lineHeight = (size.value * 0.5f).sp)
+        if (pr.avatar != null) Pic(pr.avatar, Modifier.matchParentSize().clip(CircleShape), want = 320)
+        if (ring != null) Box(Modifier.matchParentSize().border(4.dp, ring, CircleShape))
     }
 }
 
@@ -129,7 +144,7 @@ fun hueOf(seed: String): Float {
 // .ib: a 44dp round icon button in the muted color
 @Composable
 fun IB(icon: String, size: Dp = 24.dp, tint: Color = LocalNook.current.muted, box: Dp = 44.dp, height: Dp = box, fill: Boolean = false, enabled: Boolean = true, onClick: () -> Unit = {}) {
-    Box(Modifier.size(box, height).alpha(if (enabled) 1f else 0.4f).tap(CircleShape, enabled, onClick), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(box, height).alpha(if (enabled) 1f else 0.4f).pressTap(CircleShape, enabled, onClick), contentAlignment = Alignment.Center) {
         NIcon(icon, size, tint, fill)
     }
 }
@@ -195,18 +210,21 @@ fun Pill(label: String, kind: Btn = Btn.Pri, small: Boolean = false, enabled: Bo
     val border = if (kind == Btn.Ghost || kind == Btn.FOn) Modifier.border(1.dp, c.line, shape) else Modifier
     Box(
         modifier.defaultMinSize(minHeight = if (small) 32.dp else 36.dp).alpha(if (enabled) 1f else 0.45f).clip(shape).background(bg).then(border)
-            .tap(shape, enabled, onClick).padding(horizontal = if (small) 14.dp else 18.dp),
+            .pressTap(shape, enabled, onClick).padding(horizontal = if (small) 14.dp else 18.dp),
         contentAlignment = Alignment.Center,
     ) { T(label, if (small) Fs.md else Fs.base, if (kind == Btn.Ghost) FontWeight.SemiBold else FontWeight.Bold, fg, maxLines = 1) }
 }
 
 // .empty: a big muted icon, a short line and maybe a button, centered with 56dp above and below
 @Composable
-fun Empty(icon: String?, text: String, button: (@Composable () -> Unit)? = null) {
+fun Empty(icon: String?, text: String, iconSize: Dp = 56.dp, button: (@Composable () -> Unit)? = null) {
     val c = LocalNook.current
+    // the line is at most 30 characters wide (max-width: 30ch, the width of thirty zeros)
+    val ch = androidx.compose.ui.text.rememberTextMeasurer().measure("0".repeat(30), LocalTextStyle.current.copy(fontSize = Fs.base)).size.width
+    val maxW = with(androidx.compose.ui.platform.LocalDensity.current) { ch.toDp() }
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 56.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        if (icon != null) NIcon(icon, 56.dp, c.muted, modifier = Modifier.alpha(0.8f))
-        T(text, color = c.muted, align = TextAlign.Center)
+        if (icon != null) NIcon(icon, iconSize, c.muted, modifier = Modifier.alpha(0.8f))
+        T(text, color = c.muted, align = TextAlign.Center, modifier = Modifier.widthIn(max = maxW))
         button?.invoke()
     }
 }
@@ -280,14 +298,16 @@ fun Sq(icon: String) {
 
 // .in: a text field on --bg2 with rounded corners (and the accent outline while it has focus)
 @Composable
-fun Field(value: String, onChange: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier, lines: Int = 1, border: Boolean = false, trailing: (@Composable () -> Unit)? = null) {
+fun Field(value: String, onChange: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier, lines: Int = 1, border: Boolean = false, password: Boolean = false, trailing: (@Composable () -> Unit)? = null) {
     val c = LocalNook.current
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(Rad.s)
     val outline = when { focused -> Modifier.border(2.dp, c.accent, shape); border -> Modifier.border(1.dp, c.line, shape); else -> Modifier }
-    Row(modifier.fillMaxWidth().defaultMinSize(minHeight = 42.dp).clip(shape).background(c.bg2).then(outline).padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+    // .in: 21 of text, 10 above and below and a 1dp border (see-through unless it is outlined) make it 43 tall
+    Row(modifier.fillMaxWidth().defaultMinSize(minHeight = 42.dp).clip(shape).background(c.bg2).then(outline).padding(horizontal = 13.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
         BasicTextField(
             value, onChange, Modifier.weight(1f).onFocusChanged { focused = it.isFocused }, singleLine = lines == 1, minLines = lines,
+            visualTransformation = if (password) androidx.compose.ui.text.input.PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
             textStyle = LocalTextStyle.current.copy(color = c.fg, fontSize = Fs.base), cursorBrush = SolidColor(c.accent),
             decorationBox = { inner -> Box { if (value.isEmpty()) T(placeholder, color = c.muted); inner() } },
         )

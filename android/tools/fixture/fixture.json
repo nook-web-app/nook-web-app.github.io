@@ -42,7 +42,7 @@
   },
   {
    "id": "00000000-0000-4000-8000-000000000003",
-   "by": 1,
+   "by": 0,
    "min": 9,
    "body": "just spent the morning looking for my hoodie and it was on me the whole time :3 uwu"
   },
@@ -55,7 +55,7 @@
   },
   {
    "id": "00000000-0000-4000-8000-000000000005",
-   "by": 2,
+   "by": 0,
    "min": 75,
    "body": "new banner who dis uwu"
   },
@@ -64,6 +64,13 @@
    "by": 0,
    "min": 780,
    "body": "tested the new update, everything feels smoother"
+  },
+  {
+   "id": "00000000-0000-4000-8000-000000000007",
+   "by": 0,
+   "min": 779,
+   "body": "replying to myself :3",
+   "parent": "00000000-0000-4000-8000-000000000006"
   }
  ],
  "placeholder": "What did you dream about?"

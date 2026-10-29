@@ -112,18 +112,29 @@ function query(table, sp) {
     ["22-profile", 'root("profile")'], ["23-edit-profile", "editProfile()"], ["x", "history.back()"],
     ["25-saved", 'root("saved")'], ["26-chats", 'root("chat")'], ["27-notifs", 'root("home");go({r:"notifs"})'],
     ["28-settings", 'root("settings")'], ["29-lists", 'root("lists")'], ["30-search", 'root("search")'],
-    ["32-confirm", `root("home");go({r:"user",id:"${FX.people[1].id}"});setTimeout(()=>confirmSheet("Delete this post?","Delete",()=>{}),300)`], ["x", "history.back()"],
-    ["48-user", `root("home");go({r:"user",id:"${FX.people[3].id}"})`], ["wait", "void 0"],
-    ["49-other-more", `root("home");document.querySelector('.post .ab.mo') && [...document.querySelectorAll(".post")].find(x=>x.textContent.includes("sleetslumber")).querySelector(".ab.mo").click()`], ["x", "history.back()"],
-    ["51-report", `reportPost(S.posts.find(x=>x.remote==="${P(4)}"))`], ["x", "history.back()"],
+    ["32-confirm", 'root("home");confirmSheet("Delete this post?","Delete",()=>{})'], ["x", "history.back()"],
+    ["34-followers", 'root("profile");go({r:"followers",id:sbUser.id})'],
+    ["35-blocked", 'root("settings");go({r:"blocked"})'],
+    ["36-list-form", 'root("lists");listForm(null)'], ["x", "history.back()"],
+    ["37-conv", 'root("chat");newChat()'],
+    ["38-terms", 'root("settings");go({r:"terms"})'],
+    ["39-reply", `root("home");openCompose({parent:"m${P(0)}"})`], ["x", "history.back()"],
     ["55-light-home", 'S.ui.theme="light";applyTheme();root("home")'], ["56-light-drawer", "openDrawer()"], ["x", "history.back()"],
-    ["58-light-settings", 'root("settings")'],
+    ["58-light-settings", 'root("settings")'], ["59-settings-end", 'S.ui.theme="system";applyTheme();root("settings");main.scrollTop=99999'],
   ];
   for (const [n, js] of steps) {
     try { await page.evaluate(js); } catch (e) { console.log("fail", n, e.message.slice(0, 160)); continue; }
     if (n === "x") { await page.waitForTimeout(450); continue; }
-    if (n === "wait") { await page.waitForTimeout(2500); if (!ONLY || ONLY === "48-user") await shot("48-user-late"); continue; }
     if (!ONLY || n === ONLY) await shot(n);
+  }
+  if (!ONLY || ONLY.startsWith("0")) {
+    const ctx2 = await browser.newContext({ ...devices["Pixel 5"], serviceWorkers: "block", colorScheme: "dark", timezoneId: "UTC", locale: "en-US" });
+    await ctx2.route(u => !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/)/.test(u.href) && !/^(data|blob):/.test(u.href), r => r.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: "{}" }));
+    await ctx2.addInitScript(() => { try { localStorage.setItem("nook-installed", "1"); } catch (e) {} });
+    const p2 = await ctx2.newPage();
+    await p2.goto("http://127.0.0.1:" + port + "/index.html"); await p2.waitForSelector("input[type=email]", { timeout: 30000 });
+    await p2.waitForTimeout(800); await p2.screenshot({ path: path.join(OUT, "00-auth.png") }); console.log("shot 00-auth");
+    await p2.click("text=Make an account"); await p2.waitForTimeout(800); await p2.screenshot({ path: path.join(OUT, "01-auth-signup.png") }); console.log("shot 01-auth-signup");
   }
   if (errs.length) console.log("page errors:", errs.slice(0, 5).join(" | "));
   await browser.close(); server.close();

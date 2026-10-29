@@ -53,7 +53,8 @@ fun SheetHost(app: AppState) {
     if (app.sheet != null) shown = app.sheet
     val maxH = LocalConfiguration.current.screenHeightDp.dp * 0.52f
     Scrim(app.sheet != null) { app.closeSheet() }
-    Box(Modifier.fillMaxSize().navigationBarsPadding(), contentAlignment = Alignment.BottomCenter) {
+    // the sheet sits on top of the keyboard when one is open, never under it
+    Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)), contentAlignment = Alignment.BottomCenter) {
         AnimatedVisibility(app.sheet != null, enter = slideInVertically(tween(220, easing = Snappy)) { it }, exit = slideOutVertically(tween(160)) { it }) {
             val spec = shown ?: return@AnimatedVisibility
             var drag by remember(spec) { mutableFloatStateOf(0f) }

@@ -174,14 +174,24 @@ fun Acts(p: LPost, big: Boolean = false, nc: Boolean = false) {
         Row(Modifier.fillMaxWidth().padding(top = 4.dp).vpad(4.dp), horizontalArrangement = Arrangement.SpaceAround) { items.forEach { it(Modifier) } }
         return
     }
-    BoxWithConstraints(Modifier.fillMaxWidth().vpad(2.dp, 0.dp).probe("acts:" + p.id)) {
-        // the row starts 8dp left of the text (margin-left:-8px), so it is 8dp wider than the column
-        val w = maxWidth + 8.dp
-        val first = minOf(84.dp, (w - 36.dp * 3) / 3)
-        Row(Modifier.requiredWidth(w).offset(x = (-4).dp)) {
-            items.take(3).forEach { it(Modifier.width(first)) }
-            Spacer(Modifier.weight(1f))
-            items.drop(3).forEach { it(Modifier) }
+    // the row starts 8dp left of the text (margin-left:-8px), so it is 8dp wider than the column. Like flex, the last
+    // three keep their own width (a count next to share or save never squeezes the dots), and the first three share
+    // what is left, at most 84dp each
+    androidx.compose.ui.layout.Layout(
+        content = { items.forEach { it(Modifier) } },
+        modifier = Modifier.fillMaxWidth().vpad(2.dp, 0.dp).probe("acts:" + p.id),
+    ) { ms, cons ->
+        val w = cons.maxWidth + 8.dp.roundToPx()
+        val right = ms.drop(3).map { it.measure(androidx.compose.ui.unit.Constraints()) }
+        val rw = right.sumOf { it.width }
+        val share = ((w - rw) / 3).coerceIn(0, 84.dp.roundToPx())
+        val left = ms.take(3).map { it.measure(androidx.compose.ui.unit.Constraints(minWidth = share)) }
+        val h = (left + right).maxOf { it.height }
+        layout(cons.maxWidth, h) {
+            var x = -8.dp.roundToPx()
+            left.forEach { it.place(x, (h - it.height) / 2); x += it.width }
+            var rx = w - 8.dp.roundToPx() - rw
+            right.forEach { it.place(rx, (h - it.height) / 2); rx += it.width }
         }
     }
 }
@@ -253,7 +263,7 @@ fun PostCard(p: LPost, lab: String? = null, pin: Boolean = false, replyTo: Boole
     LaunchedEffect(isFresh) { if (isFresh) { kotlinx.coroutines.delay(700); app.fresh = null } }
     val open = { app.go(Route.Thread(p.id)) }
     // only one's own posts open their sheet with a hold
-    val hold: (() -> Unit)? = if (p.ra == null) ({ postSheet(app, p) }) else null
+    val hold: (() -> Unit)? = if (p.ra == null) ({ app.buzz(); postSheet(app, p) }) else null
     Row(
         Modifier.fillMaxWidth().freshIn(isFresh).probe("post:" + p.id).then(if (line) Modifier else Modifier.lineBelow(c.line))
             // .post.line .avc::after: a 2dp line from 4dp under the avatar down to the next post of the thread
@@ -271,7 +281,7 @@ fun PostCard(p: LPost, lab: String? = null, pin: Boolean = false, replyTo: Boole
             if (lab != null || (pin && p.pinned)) Row(Modifier.padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 NIcon(if (lab != null) "repost" else "pin", 14.dp, c.muted); T(lab ?: "Pinned post", Fs.sm, color = c.muted)
             }
-            PostHead(nameOf(app, p), handleOf(app, p), ago(p.t), p.id)
+            PostHead(nameOf(app, p), handleOf(app, p), ago(p.t), p.id, p.edited)
             if (replyTo && p.parent != null) Row(Modifier.padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 val par = app.store.byId(p.parent)
                 NIcon("reply", 14.dp, c.muted); T("Replying to " + if (par == null) "a post" else handleOf(app, par), Fs.sm, color = c.muted)
@@ -279,34 +289,38 @@ fun PostCard(p: LPost, lab: String? = null, pin: Boolean = false, replyTo: Boole
             val txt = cardless(p)
             if (txt.isNotEmpty()) Tx(txt, modifier = Modifier.probe("text:" + p.id), onTap = open, onLong = hold)
             if (p.imgs.isNotEmpty()) ImgGrid(p.imgs) else firstUrl(p.text)?.let { LinkCard(it) }
-            // .rt.ed: the words were changed after the post went up
-            if (p.edited) Row(Modifier.padding(top = 6.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                NIcon("edit", 14.dp, c.muted); T("Edited", Fs.sm, color = c.muted)
-            }
             if (!compact) Acts(p, nc = nc)
         }
     }
 }
 
 // .ph2: name (at most half the row), handle (cut when long) and time at the right, all on one baseline
+// .pe: a post whose words were changed shows a small "Edited" right after the name
 @Composable
-fun PostHead(name: String, handle: String, time: String, id: String) {
+fun PostHead(name: String, handle: String, time: String, id: String, edited: Boolean = false) {
     val c = LocalNook.current
     androidx.compose.ui.layout.Layout(content = {
         if (name.isNotEmpty()) T(name, weight = FontWeight.Bold, maxLines = 1, modifier = Modifier.probe("name:$id")) else Box(Modifier)
         T(handle, color = c.muted, maxLines = 1)
         T(time, Fs.md, color = c.muted, modifier = Modifier.probe("time:$id"))
+        if (edited) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) { NIcon("edit", 13.dp, c.muted); T("Edited", Fs.sm, color = c.muted, maxLines = 1) } else Box(Modifier)
     }, Modifier.fillMaxWidth()) { ms, cons ->
         val gap = 5.dp.roundToPx()
         val w = cons.maxWidth
         val tm = ms[2].measure(androidx.compose.ui.unit.Constraints())
         val nm = ms[0].measure(androidx.compose.ui.unit.Constraints(maxWidth = w / 2))
-        val hm = ms[1].measure(androidx.compose.ui.unit.Constraints(maxWidth = maxOf(0, w - nm.width - tm.width - gap * 2)))
+        val em = ms[3].measure(androidx.compose.ui.unit.Constraints())
+        val eg = if (em.width > 0) em.width + gap else 0
+        val hm = ms[1].measure(androidx.compose.ui.unit.Constraints(maxWidth = maxOf(0, w - nm.width - eg - tm.width - gap * 2)))
         val base = maxOf(nm[FirstBaseline].takeIf { it > 0 } ?: 0, hm[FirstBaseline], tm[FirstBaseline])
         val top = { p: androidx.compose.ui.layout.Placeable -> base - p[FirstBaseline].coerceAtLeast(0) }
         val h = listOf(nm, hm, tm).maxOf { top(it) + it.height }
         layout(w, h) {
-            nm.place(0, top(nm)); hm.place(if (nm.width > 0) nm.width + gap else 0, top(hm)); tm.place(w - tm.width, top(tm))
+            val nx = if (nm.width > 0) nm.width + gap else 0
+            nm.place(0, top(nm))
+            // the little pencil and word sit on the middle of the name's line
+            if (em.width > 0) em.place(nx, top(nm) + (nm.height - em.height) / 2)
+            hm.place(nx + eg, top(hm)); tm.place(w - tm.width, top(tm))
         }
     }
 }

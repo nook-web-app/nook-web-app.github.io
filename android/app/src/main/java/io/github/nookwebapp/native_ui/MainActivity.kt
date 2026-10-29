@@ -27,6 +27,10 @@ class MainActivity : ComponentActivity() {
         app.say(if (ok) "Phone notifications are on" else "Notifications are blocked. Allow them in your phone settings.")
     }
 
+    // Google's fingerprint window answers here
+    private var resultWait: kotlinx.coroutines.CompletableDeferred<androidx.activity.result.ActivityResult>? = null
+    private val forResult = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r -> resultWait?.complete(r) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -37,6 +41,11 @@ class MainActivity : ComponentActivity() {
         AppState.current = app
         app.ctx = applicationContext
         app.activity = java.lang.ref.WeakReference(this)
+        app.startForResult = { pi ->
+            val d = kotlinx.coroutines.CompletableDeferred<androidx.activity.result.ActivityResult>()
+            resultWait?.cancel(); resultWait = d
+            runCatching { forResult.launch(androidx.activity.result.IntentSenderRequest.Builder(pi).build()) }.fold({ d.await() }, { null })
+        }
         app.clipboard = { t -> (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Nook", t)) }
         app.sharePicture = { p, toCompose -> sharePicture(p, toCompose) }
         app.sharePictureTo = { p, done -> picture(p) { f -> f?.let { done(it.absolutePath) } ?: app.say("Could not make picture") } }
@@ -65,7 +74,21 @@ class MainActivity : ComponentActivity() {
                 if (n % 3 == 0) app.on.retryUnsent()
             }
         }
-        setContent { NookApp(app) }
+        // the start screen stays until the first page is fully drawn, so the app never shows up in pieces
+        var ready = false
+        val root = findViewById<android.view.View>(android.R.id.content)
+        root.viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean { if (!ready) return false; root.viewTreeObserver.removeOnPreDrawListener(this); return true }
+        })
+        root.postDelayed({ ready = true; root.invalidate() }, 1500)
+        setContent {
+            NookApp(app)
+            androidx.compose.runtime.LaunchedEffect(Unit) {
+                // a few frames: the page, its pictures already in memory, and the lists measured
+                repeat(3) { androidx.compose.runtime.withFrameNanos { } }
+                ready = true; root.invalidate()
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); app.scope.launch { take(intent) } }

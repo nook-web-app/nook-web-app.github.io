@@ -56,7 +56,10 @@ fun ConvScreen(id: String) {
     var open by remember { mutableStateOf<String?>(null) }
     var shownFrom by remember(chat.id) { mutableIntStateOf(maxOf(0, chat.msgs.size - 80)) }
     val list = rememberLazyListState()
+    // the messages already there when the chat opened come in without an animation
+    val had = remember(chat.id) { chat.msgs.map { it.id }.toHashSet() }
     LaunchedEffect(chat.msgs.size) { if (chat.msgs.isNotEmpty()) list.scrollToItem(chat.msgs.size - shownFrom + 1) }
+    KeepAtBottom(list)
     Page({
         // .bar.chb: back, the chat's picture, name and handle, and its options
         Row(Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -86,12 +89,13 @@ fun ConvScreen(id: String) {
             if (shownFrom > 0) item { Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) { Pill("Show earlier messages", Btn.Ghost) { shownFrom = maxOf(0, shownFrom - 80) } } }
             items(chat.msgs.drop(shownFrom), key = { it.id }) { m ->
                 // pulling one of Zenith's messages to the right starts an answer to him
-                SwipeReply(m.ai, { setText("@zenith "); runCatching { focus.requestFocus() } }) { Bubble(m, open == m.id, onTap = { open = if (open == m.id) null else m.id }) {
+                val anim = remember(m.id) { if (m.id in had) MsgAnim.None else if (m.ai) MsgAnim.In else MsgAnim.Send }
+                Box(Modifier.msgIn(anim, !m.ai)) { SwipeReply(m.ai, { setText("@zenith "); runCatching { focus.requestFocus() } }) { Bubble(m, open == m.id, onTap = { open = if (open == m.id) null else m.id }) {
                     app.open(listOfNotNull(
                         if (m.text.isNotEmpty()) SheetItem("Copy message", "copy") { app.clipboard(m.text) } else null,
                         SheetItem("Delete message", "trash", danger = true) { chat.msgs.remove(m); app.persist() },
                     ))
-                } }
+                } } }
             }
             // his answer while it is still being typed out
             if (typing != null) item(key = "zen-typing") {
@@ -137,7 +141,7 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onLong: () -> Unit
     val c = LocalNook.current
     val w = LocalConfiguration.current.screenWidthDp.dp - 32.dp
     val left = m.ai
-    Column(Modifier.fillMaxWidth().pointerInput(m.id) { detectTapGestures(onTap = { onTap() }, onLongPress = { onLong() }) }, horizontalAlignment = if (left) Alignment.Start else Alignment.End) {
+    Column(Modifier.fillMaxWidth().pointerInput(m.id) { detectTapGestures(onTap = { onTap() }, onLongPress = { AppState.current?.buzz(); onLong() }) }, horizontalAlignment = if (left) Alignment.Start else Alignment.End) {
         if (m.imgs.isNotEmpty()) Box(Modifier.width(minOf(w * 0.82f, 320.dp)).clip(RoundedCornerShape(Rad.bubble))) { ImgGrid(m.imgs, whenText(m.t), framed = false) }
         m.rpost?.let { Box(Modifier.padding(top = if (m.imgs.isNotEmpty()) 4.dp else 0.dp)) { RCard(it.id, it.u) } }
         m.zpost?.let { Box(Modifier.padding(top = 4.dp)) { ZCard(it) } }

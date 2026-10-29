@@ -291,7 +291,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.24.0";
+const APP_VERSION = "3.25.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1604,12 +1604,11 @@ function postCard(p, o) {
   if (lab) col.append(h("div", { class: "rt" }, ic("repost", 14), lab));
   if (o.pin && p.pinned) col.append(h("div", { class: "rt" }, ic("pin", 14), "Pinned post"));
   const pname = p.ai ? "Zenith" : p.ra ? p.ra.name : S.profile.name, phand = p.ai ? "@zenith" : "@" + (p.ra ? p.ra.handle : S.profile.handle);
-  col.append(h("div", { class: "ph2" }, pname ? h("span", { class: "pn" }, pname) : null, h("span", { class: "pu" }, phand), h("span", { class: "pt" }, ago(p.t))));
+  col.append(h("div", { class: "ph2" }, pname ? h("span", { class: "pn" }, pname) : null, p.edited ? h("span", { class: "pe" }, ic("edit", 13), "Edited") : null, h("span", { class: "pu" }, phand), h("span", { class: "pt" }, ago(p.t))));
   if (o.replyTo && p.parent) { const par = byId(p.parent); col.append(h("div", { class: "rt" }, ic("reply", 14), "Replying to " + (!par ? "a post" : par.ai ? "@zenith" : "@" + (par.ra ? par.ra.handle : S.profile.handle)))); }
   if (cardless(p)) col.append(txBody(cardless(p), ""));
   if (p.imgs.length) col.append(imgGrid(p.imgs));
   else if (firstUrl(p.text)) col.append(linkCard(firstUrl(p.text)));
-  if (p.edited) col.append(h("div", { class: "rt ed" }, ic("edit", 14), "Edited"));
   if (!o.compact) col.append(acts(p, false, !!o.nc));
   const av = p.ai ? zenAv(40) : p.ra ? rAv(p.ra, 40) : avatar(40);
   if (p.ra) av.addEventListener("click", e => { e.stopPropagation(); go({ r: "user", id: p.ra.id }); });

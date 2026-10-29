@@ -38,8 +38,28 @@ object Updater {
         val c = URL(BASE + "nook.apk?t=" + System.currentTimeMillis()).openConnection() as HttpURLConnection
         c.connectTimeout = 10000; c.readTimeout = 30000; c.useCaches = false
         c.inputStream.use { i -> out.outputStream().use { o -> i.copyTo(o) } }
+        // only a newer build of this same app, signed with this app's own key, is ever handed to the installer
+        if (!trusted(ctx, out)) { out.delete(); throw SecurityException("update not signed by Nook") }
         return out
     }
+
+    private fun certs(ctx: Context, pi: android.content.pm.PackageInfo?): Set<String> {
+        @Suppress("DEPRECATION")
+        val sigs = if (Build.VERSION.SDK_INT >= 28) pi?.signingInfo?.let { if (it.hasMultipleSigners()) it.apkContentsSigners else it.signingCertificateHistory } else pi?.signatures
+        return sigs.orEmpty().map { java.security.MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).joinToString("") { b -> "%02x".format(b) } }.toSet()
+    }
+    private fun trusted(ctx: Context, apk: File): Boolean = runCatching {
+        val pm = ctx.packageManager
+        @Suppress("DEPRECATION")
+        val flags = if (Build.VERSION.SDK_INT >= 28) android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES else android.content.pm.PackageManager.GET_SIGNATURES
+        val theirs = pm.getPackageArchiveInfo(apk.path, flags) ?: return false
+        if (theirs.packageName != ctx.packageName) return false
+        @Suppress("DEPRECATION")
+        val code = if (Build.VERSION.SDK_INT >= 28) theirs.longVersionCode else theirs.versionCode.toLong()
+        if (code <= myCode(ctx)) return false
+        val mine = certs(ctx, pm.getPackageInfo(ctx.packageName, flags))
+        mine.isNotEmpty() && certs(ctx, theirs).any { it in mine }
+    }.getOrDefault(false)
 
     // Android asks once whether Nook may install apps; after that the installer's own Update button is all it takes
     fun install(ctx: Context, apk: File): Boolean {

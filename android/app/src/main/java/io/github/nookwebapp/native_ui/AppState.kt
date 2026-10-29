@@ -114,6 +114,8 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     var ctx: android.content.Context? = null
     // the activity on screen (the fingerprint window needs one); weak, so a closed activity is never kept
     var activity: java.lang.ref.WeakReference<android.app.Activity>? = null
+    // starts a window of Google Play services (the fingerprint) and hands back its answer; set by the activity
+    var startForResult: (suspend (android.app.PendingIntent) -> androidx.activity.result.ActivityResult?)? = null
     var foreground by mutableStateOf(true)
     // bumped when notes or Zenith's chats changed from another phone, so the open pages draw again
     var notesVersion by mutableIntStateOf(0)
@@ -160,6 +162,8 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     fun open(items: List<SheetItem>, title: String? = null, onDone: (() -> Unit)? = null) { sheet = SheetSpec(items, title, onDone) }
     fun closeSheet() { val s = sheet; sheet = null; s?.onDone?.invoke() }
     fun confirm(msg: String, label: String, fn: () -> Unit) = open(listOf(SheetItem(label, danger = true, fn = fn), SheetItem("Cancel", cancel = true)), msg)
+    // the phone's short tick for a hold (a long press that opens something)
+    fun buzz() { runCatching { activity?.get()?.window?.decorView?.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS) } }
     fun say(msg: String, label: String? = null, fn: (() -> Unit)? = null) { toast = Toast(msg, label, fn) }
 
     // alertMe(): a phone notification while the app is in the background, a toast while it is open

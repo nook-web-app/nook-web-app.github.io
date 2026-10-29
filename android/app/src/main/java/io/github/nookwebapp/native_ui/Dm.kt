@@ -517,6 +517,7 @@ suspend fun Online.dmThread(other: String): List<JSONObject> {
 }
 suspend fun Online.dmThreadAfter(other: String, after: Long): List<JSONObject> {
     val me = uid ?: throw IllegalStateException("signed out")
+    if (!UUID_RE.matches(other)) throw IllegalArgumentException("bad id")
     val r = Sb.get(Q("messages").select("id, sender_id, recipient_id, body, media, created_at, read_at")
         .or("and(sender_id.eq.$me,recipient_id.eq.$other),and(sender_id.eq.$other,recipient_id.eq.$me)").gt("id", after).order("id").limit(300))
     if (!r.ok) throw IllegalStateException(r.error?.message ?: "load")

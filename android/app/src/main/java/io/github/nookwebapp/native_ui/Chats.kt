@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -28,6 +29,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.composed
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
@@ -161,6 +164,7 @@ fun DmScreen(id: String) {
     l.fill = { pre -> if (l.locked.isEmpty()) { setText(if (text.isNotBlank()) text.trimEnd() + " " + pre else pre); runCatching { focus.requestFocus() } } }
     // the chat stays at its newest message while new ones come in
     LaunchedEffect(l.rows.size, l.typing) { if (l.rows.isNotEmpty()) list.animateScrollToItem(l.rows.size + 1) }
+    KeepAtBottom(list)
     Page({
         // .bar.chb: back, the person's picture, name and handle, and the chat's options
         Row(Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -181,13 +185,15 @@ fun DmScreen(id: String) {
             else if (l.rows.isEmpty()) item { Empty("chat", "No messages yet. Say hi.", iconSize = 48.dp) }
             items(l.rows, key = { it.id?.toString() ?: ("t" + System.identityHashCode(it)) }) { m ->
                 // one of Zenith's messages pulled to the right starts an answer to him (the owner's chats only)
-                SwipeReply(m.ai && zOn(), { l.fill?.invoke("@zenith ") }) { DmBubble(m, id, open === m, onTap = { open = if (open === m) null else m }) {
+                val mineM = m.sender == on.uid && !m.ai
+                val anim = remember(m) { (if (!m.fresh) MsgAnim.None else if (!mineM) MsgAnim.In else if (m.tmp) MsgAnim.Send else MsgAnim.Land).also { m.fresh = false } }
+                Box(Modifier.msgIn(anim, mineM)) { SwipeReply(m.ai && zOn(), { l.fill?.invoke("@zenith ") }) { DmBubble(m, id, open === m, onTap = { open = if (open === m) null else m }) {
                     val body = m.text ?: m.body
                     app.open(listOfNotNull(
                         if (body.isNotEmpty()) SheetItem("Copy message", "copy") { app.clipboard(body) } else null,
                         if (m.sender == on.uid && m.id != null) SheetItem("Delete message", "trash", danger = true) { app.confirm("Delete this message?", "Delete") { on.deleteDm(m, id) } } else null,
                     ).ifEmpty { return@DmBubble })
-                } }
+                } } }
             }
             // .trow: the typing dots, in a slot that grows smoothly
             item(key = "typing") {
@@ -273,7 +279,7 @@ fun DmBubble(m: DmMsg, other: String, open: Boolean, onTap: () -> Unit, onLong: 
     val left = !mine
     val w = LocalConfiguration.current.screenWidthDp.dp - 32.dp
     val body = m.text ?: ""
-    Column(Modifier.fillMaxWidth().alpha(if (m.tmp && mine) 0.7f else 1f).pointerInput(m) { detectTapGestures(onTap = { onTap() }, onLongPress = { onLong() }) }, horizontalAlignment = if (left) Alignment.Start else Alignment.End) {
+    Column(Modifier.fillMaxWidth().alpha(if (m.tmp && mine) 0.7f else 1f).pointerInput(m) { detectTapGestures(onTap = { onTap() }, onLongPress = { AppState.current?.buzz(); onLong() }) }, horizontalAlignment = if (left) Alignment.Start else Alignment.End) {
         val media = (0 until m.media.length()).mapNotNull { m.media.optJSONObject(it) }
         media.forEachIndexed { i, md -> DmMedia(md, other, m, i, Modifier.padding(top = if (i > 0) 4.dp else 0.dp)) }
         m.rpost?.let { Box(Modifier.padding(top = if (media.isNotEmpty()) 4.dp else 0.dp)) { RCard(it.id, it.u) } }
@@ -327,34 +333,46 @@ private fun DmMedia(md: JSONObject, other: String, m: DmMsg, i: Int, modifier: M
     }
 }
 
-// swipeReply() of app.js: a message pulled more than 50dp to the right (and not much up or down) calls onSwipe. On a phone
-// the message follows the finger, a reply arrow fades in behind it, the phone ticks once at the point where letting go
-// counts, and the message springs back.
+// swipeReply() of app.js: a message pulled more than 50dp to the right (and not much up or down) calls onSwipe. Nothing
+// moves on the screen, like in the web app; the phone ticks once when it counts.
 @Composable
 fun SwipeReply(on: Boolean, onSwipe: () -> Unit, content: @Composable () -> Unit) {
     if (!on) { content(); return }
-    val c = LocalNook.current
-    val scope = rememberCoroutineScope()
-    val dx = remember { androidx.compose.animation.core.Animatable(0f) }
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     val limit = with(androidx.compose.ui.platform.LocalDensity.current) { 50.dp.toPx() }
     val swipe by rememberUpdatedState(onSwipe)
-    Box(Modifier.fillMaxWidth()) {
-        val k = (dx.value / limit).coerceIn(0f, 1f)
-        if (k > 0f) Box(Modifier.align(Alignment.CenterStart).padding(start = 4.dp).size(30.dp).alpha(k).clip(CircleShape).background(c.bg2), contentAlignment = Alignment.Center) { NIcon("reply", 18.dp, c.accent) }
-        Box(Modifier.offset { androidx.compose.ui.unit.IntOffset(dx.value.toInt(), 0) }.pointerInput(Unit) {
-            var ticked = false
-            detectHorizontalDragGestures(
-                onDragStart = { ticked = false },
-                onDragEnd = { if (dx.value >= limit) swipe(); scope.launch { dx.animateTo(0f, androidx.compose.animation.core.spring(dampingRatio = 0.7f)) } },
-                onDragCancel = { scope.launch { dx.animateTo(0f) } },
-            ) { ch, amount ->
-                ch.consume()
-                // it moves slower than the finger and stops a little past the point where it counts
-                val next = (dx.value + amount * 0.6f).coerceIn(0f, limit * 1.4f)
-                scope.launch { dx.snapTo(next) }
-                if (!ticked && next >= limit) { ticked = true; haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress) }
-            }
-        }) { content() }
+    Box(Modifier.fillMaxWidth().pointerInput(Unit) {
+        var dx = 0f
+        detectHorizontalDragGestures(onDragStart = { dx = 0f }, onDragEnd = { if (dx > limit) { haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); swipe() } }) { _, amount -> dx += amount }
+    }) { content() }
+}
+
+// when the keyboard comes up the chat stays on its newest message (the page gets shorter from the bottom), like the web app
+@Composable
+fun KeepAtBottom(list: androidx.compose.foundation.lazy.LazyListState) {
+    val ime = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current)
+    var last by remember { mutableIntStateOf(ime) }
+    LaunchedEffect(ime) {
+        val n = list.layoutInfo.totalItemsCount
+        if (ime > last && n > 0) { list.scrollToItem(n - 1); list.scrollBy(100_000f) }
+        last = ime
+    }
+}
+
+// How a message comes in (.mrow.new): one of mine pops in from its corner while it is sent (sendPop) and gives a small
+// bounce when the server took it (landPop); one from the other side fades in (fadeIn). Each plays once.
+enum class MsgAnim { None, In, Send, Land }
+fun Modifier.msgIn(kind: MsgAnim, mine: Boolean): Modifier = if (kind == MsgAnim.None) this else composed {
+    val a = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(Unit) { a.animateTo(1f, androidx.compose.animation.core.tween(when (kind) { MsgAnim.Land -> 300; MsgAnim.Send -> 200; else -> 180 }, easing = androidx.compose.animation.core.LinearOutSlowInEasing)) }
+    this.graphicsLayer {
+        val k = a.value
+        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(if (mine) 1f else 0f, 1f)
+        when (kind) {
+            MsgAnim.In -> alpha = k
+            MsgAnim.Send -> { alpha = k; val sc = 0.94f + 0.06f * k; scaleX = sc; scaleY = sc }
+            MsgAnim.Land -> { val sc = if (k < 0.55f) 0.96f + (1.035f - 0.96f) * (k / 0.55f) else 1.035f - 0.035f * ((k - 0.55f) / 0.45f); scaleX = sc; scaleY = sc }
+            else -> {}
+        }
     }
 }

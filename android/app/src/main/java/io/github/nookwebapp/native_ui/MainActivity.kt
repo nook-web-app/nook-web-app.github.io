@@ -127,7 +127,7 @@ class MainActivity : ComponentActivity() {
         i.getStringExtra("open")?.let { v ->
             i.removeExtra("open")
             if (!app.signedIn) return@let
-            if (v == "notifs") app.go(Route.Notifs) else if (v.startsWith("dm:") && Regex("^[0-9a-f-]{36}$", RegexOption.IGNORE_CASE).matches(v.substring(3))) app.on.openDm(v.substring(3))
+            if (v == "notifs") app.go(Route.Notifs) else if (v.startsWith("zen:")) app.go(Route.Conv(v.substring(4))) else if (v.startsWith("dm:") && Regex("^[0-9a-f-]{36}$", RegexOption.IGNORE_CASE).matches(v.substring(3))) app.on.openDm(v.substring(3))
         }
         val data = i.data
         if (i.action == Intent.ACTION_VIEW && data != null && data.host == "nook-web-app.github.io" && data.path?.startsWith("/reset") == true) {

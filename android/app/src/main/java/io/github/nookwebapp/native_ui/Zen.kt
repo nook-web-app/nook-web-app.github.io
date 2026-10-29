@@ -80,12 +80,16 @@ fun Online.zAsk(chat: LChat, m: LMsg) {
         var full = ""
         var failed = false
         try {
-            val t = zStream(history) { full = it.replace(Regex("\\s*\\n+\\s*"), " "); ai.text = full }
+            val t = Keep.around(app.ctx) { zStream(history) { full = it.replace(Regex("\\s*\\n+\\s*"), " "); ai.text = full } }
             if (t.isEmpty()) { failed = true; ai.text = "Zenith did not answer. Try again" } else ai.text = t.replace(Regex("\\s*\\n+\\s*"), " ")
         } catch (e: Exception) { failed = true; ai.text = "Zenith is not reachable right now. Try again" }
         app.zenTyping.remove(chat.id)
         // an error line stays on the screen for a moment but is never saved as something Zenith said
-        if (failed) { app.say(ai.text) } else { chat.msgs.add(ai); app.persist(); zenSyncSoon() }
+        if (failed) { app.say(ai.text) } else {
+            chat.msgs.add(ai); app.persist(); zenSyncSoon()
+            // answered while the person is somewhere else: a notification says so
+            app.ctx?.let { c -> if (!app.foreground) Notify.show(c, "Zenith", ai.text.take(180), "zen:" + chat.id, ai.id.hashCode()) }
+        }
         app.zenVersion++
     }
 }
@@ -99,9 +103,10 @@ suspend fun Online.zenInDm(l: LiveDm, sentText: String, srcs: List<String>) {
     hist.add("Person A: " + (sentText.replace(Regex("@zenith", RegexOption.IGNORE_CASE), "Zenith").ifEmpty { "(photo only)" }) + if (srcs.isNotEmpty()) " (the photo is attached)" else "")
     val ghost = DmMsg(null, me, l.id, "", JSONArray(), isoNow(), null).apply { ai = true; text = ""; tmp = true }
     l.rows.add(ghost)
-    val reply = runCatching { zGen(ZSYS_REPLY + " This is a chat between two people, Person A and Person B, and Zenith is in it. Answer the last message that mentions Zenith. In this chat you may ask a short question back, this overrides the earlier rule about questions.", hist.joinToString("\n"), srcs.take(3)) }.getOrDefault("")
+    val reply = runCatching { Keep.around(app.ctx) { zGen(ZSYS_REPLY + " This is a chat between two people, Person A and Person B, and Zenith is in it. Answer the last message that mentions Zenith. In this chat you may ask a short question back, this overrides the earlier rule about questions.", hist.joinToString("\n"), srcs.take(3)) } }.getOrDefault("")
     l.rows.remove(ghost)
     if (reply.isEmpty()) { app.say("Zenith is not reachable right now"); return }
+    app.ctx?.let { c -> if (!app.foreground) Notify.show(c, "Zenith", reply.take(180), "dm:" + l.id, reply.hashCode()) }
     val nb = DmMsg(null, me, l.id, "", JSONArray(), isoNow(), null).apply { ai = true; text = reply; tmp = true; fresh = true }
     l.rows.add(nb)
     try {

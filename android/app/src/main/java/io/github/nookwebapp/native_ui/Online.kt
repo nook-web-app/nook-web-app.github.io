@@ -557,6 +557,8 @@ class Online(val app: AppState) {
         if (np.parent != null && par?.remote == null) return
         np.sending = true
         app.scope.launch {
+            // the post still goes up when the person leaves the app right after tapping Post
+            Keep.begin(app.ctx)
             try {
                 val row = JSONObject().put("user_id", me).put("body", np.text)
                 var urls: List<String>? = null
@@ -598,7 +600,7 @@ class Online(val app: AppState) {
                     }
                     if (!quiet) app.say("Could not send that post yet. It will be sent again when the connection is back")
                 }
-            } finally { np.sending = false }
+            } finally { np.sending = false; Keep.end(app.ctx) }
         }
     }
 

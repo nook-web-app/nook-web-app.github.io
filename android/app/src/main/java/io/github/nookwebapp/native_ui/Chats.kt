@@ -221,8 +221,9 @@ fun DmScreen(id: String) {
                 Box(Modifier.size(42.dp).alpha(if (can) 1f else 0.45f).clip(CircleShape).background(c.fill).pressTap(CircleShape, enabled = can) {
                     val t = cleanText(text.trim()); val srcs = pend.toList()
                     busy = true; setText(""); pend.clear()
-                    scope.launch {
-                        if (!on.doSendDm(l, t, srcs)) { setText(if (text.isNotBlank()) t + "\n" + tv.text else t); pend.addAll(srcs) }
+                    // the app's own scope and the keep-alive: leaving the chat or the app never cancels a message on its way
+                    app.scope.launch {
+                        if (!Keep.around(app.ctx) { on.doSendDm(l, t, srcs) }) { setText(if (text.isNotBlank()) t + "\n" + tv.text else t); pend.addAll(srcs) }
                         busy = false
                     }
                 }, contentAlignment = Alignment.Center) { NIcon("send", 20.dp, c.on) }

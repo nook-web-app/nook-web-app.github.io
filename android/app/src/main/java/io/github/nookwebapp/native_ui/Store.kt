@@ -302,3 +302,13 @@ fun JSONObject.optStr(k: String): String? = if (!has(k) || isNull(k)) null else 
 fun JSONArray?.strings(): List<String> = if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it, "").ifEmpty { null } }
 inline fun JSONArray.forEachObj(f: (JSONObject) -> Unit) { for (i in 0 until length()) optJSONObject(i)?.let(f) }
 fun JSONArray.objs(): List<JSONObject> = (0 until length()).mapNotNull { optJSONObject(it) }
+
+// the same JSON written the same way whatever order its keys are in (the server's jsonb sorts them), for comparing copies
+fun canonJson(v: Any?): String = when (v) {
+    null, JSONObject.NULL -> "null"
+    is JSONObject -> "{" + v.keys().asSequence().sorted().joinToString(",") { JSONObject.quote(it) + ":" + canonJson(v.opt(it)) } + "}"
+    is JSONArray -> "[" + (0 until v.length()).joinToString(",") { canonJson(v.opt(it)) } + "]"
+    is String -> JSONObject.quote(v)
+    is Number -> if (v.toDouble() == Math.floor(v.toDouble()) && !v.toDouble().isInfinite()) v.toLong().toString() else v.toString()
+    else -> v.toString()
+}

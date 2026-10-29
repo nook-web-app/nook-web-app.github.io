@@ -13,14 +13,6 @@ import java.io.File
 // live on this phone (p:<id>).
 
 private fun h(s: String): String { var a = 0x811c9dc5.toInt(); var b = 0x5bd1e995; s.forEachIndexed { i, c -> a = (a xor c.code) * 16777619; b = ((b xor c.code) * 0x01000193) + i }; return s.length.toString(36) + "-" + Integer.toUnsignedString(a, 36) + "-" + Integer.toUnsignedString(b, 36) }
-private fun canon(v: Any?): String = when (v) {
-    null, JSONObject.NULL -> "null"
-    is JSONObject -> "{" + v.keys().asSequence().sorted().joinToString(",") { JSONObject.quote(it) + ":" + canon(v.opt(it)) } + "}"
-    is JSONArray -> "[" + (0 until v.length()).joinToString(",") { canon(v.opt(it)) } + "]"
-    is String -> JSONObject.quote(v)
-    is Number -> if (v.toDouble() == Math.floor(v.toDouble()) && !v.toDouble().isInfinite()) v.toLong().toString() else v.toString()
-    else -> v.toString()
-}
 private fun cSig(c: LChat) = h("c|" + c.name + "|" + c.t)
 private fun imgSig(m: LMsg) = m.imgs.joinToString(",") { h(it) }
 private fun mSig(m: LMsg) = h("m|" + m.text + "|" + m.t + "|" + imgSig(m) + "|" + (m.rpost?.let { "${it.id}/${it.u}" } ?: "") + (m.zpost?.let { "${it.x}/${it.t}/${it.a}" } ?: ""))
@@ -157,7 +149,7 @@ private suspend fun Online.noteTake(ns: JSONObject, key: ByteArray, r: JSONObjec
     val have = pm.optJSONObject(rowId)
     val rp = p.optJSONObject("rp")?.let { o -> o.optString("id").takeIf { Regex("^[0-9a-f-]{36}$", RegexOption.IGNORE_CASE).matches(it) }?.let { RPost(it, o.optStr("u")) } }
     val zp = p.optJSONObject("zp")?.let { o -> if (o.has("x")) ZPost(o.optString("x").take(600), o.optLong("t").takeIf { it > 0 } ?: System.currentTimeMillis(), o.optStr("a")?.takeIf { it.startsWith("$SB_URL/storage/v1/object/public/media/") && it.length < 400 }) else null }
-    if (m != null && m.text == text && m.t == t && have != null && canon(have.optJSONArray("e")) == canon(media) && m.rpost == rp && m.zpost == zp) return false
+    if (m != null && m.text == text && m.t == t && have != null && canonJson(have.optJSONArray("e")) == canonJson(media) && m.rpost == rp && m.zpost == zp) return false
     // a photo that cannot be fetched stops the pull here (unless it has been missing for three rounds in a row)
     val imgs = ArrayList<String>()
     for (md in media.objs()) {
@@ -182,11 +174,11 @@ private fun Online.noteExtra(ns: JSONObject, key: ByteArray, r: JSONObject): Boo
     val pushed = ns.getJSONObject("pushed")
     val known = pushed.optStr(id); val cur = docs[id]!!
     // changed on this phone since the last sync: this phone wins and the change goes up
-    if (known != null && known != h(canon(cur))) return false
+    if (known != null && known != h(canonJson(cur))) return false
     val p = noteOpen(key, r.optString("body"), id)
-    if (canon(p) == canon(cur)) { pushed.put(id, h(canon(cur))); return false }
+    if (canonJson(p) == canonJson(cur)) { pushed.put(id, h(canonJson(cur))); return false }
     xApply(id, p, known == null)
-    pushed.put(id, h(canon(xDocs()[id])))
+    pushed.put(id, h(canonJson(xDocs()[id])))
     ns.put("extra", true)
     return true
 }
@@ -308,7 +300,7 @@ private suspend fun Online.notesPush(ns: JSONObject, key: ByteArray): Boolean {
     // settings, saved posts and lists go up only after the server copy has been read, so a fresh phone never wipes them
     if (ns.optBoolean("pullOk")) {
         val xrows = JSONArray(); val sigs = ArrayList<Pair<String, String>>()
-        xDocs().forEach { (id, d) -> val sg = h(canon(d)); if (pushed.optString(id) != sg) { xrows.put(JSONObject().put("owner_id", me).put("id", id).put("body", noteSeal(key, d, id)).put("media", JSONArray()).put("deleted", false)); sigs.add(id to sg) } }
+        xDocs().forEach { (id, d) -> val sg = h(canonJson(d)); if (pushed.optString(id) != sg) { xrows.put(JSONObject().put("owner_id", me).put("id", id).put("body", noteSeal(key, d, id)).put("media", JSONArray()).put("deleted", false)); sigs.add(id to sg) } }
         priv.forEach { p ->
             val id = "p:" + p.id; val sg = pSig(p)
             if (pushed.optString(id) != sg) {

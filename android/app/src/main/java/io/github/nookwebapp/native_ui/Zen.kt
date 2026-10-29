@@ -173,7 +173,7 @@ suspend fun Online.zenSync() {
     try {
         val me = uid!!
         val now = zenDocs()
-        val up = now.filter { (k, d) -> zenSeen[k] != d.toString() }
+        val up = now.filter { (k, d) -> zenSeen[k] != canonJson(d) }
         val del = if (s.posts.isNotEmpty() || s.chats.isNotEmpty()) zenSeen.filter { (k, j) -> k !in now && !j.contains("\"pub\":") }.keys.toList() else emptyList()
         for (part in up.entries.chunked(100)) {
             val rows = JSONArray()
@@ -188,7 +188,7 @@ suspend fun Online.zenSync() {
             if (rows.length() == 0) continue
             val r = Sb.upsert("zenith_docs", rows, "owner_id,kind,doc_id")
             if (!r.ok) throw IllegalStateException(r.error?.message)
-            part.forEach { (k, d) -> zenSeen[k] = d.toString() }
+            part.forEach { (k, d) -> zenSeen[k] = canonJson(d) }
         }
         for (k in del) { val (kind, docId) = zenKey(k); if (Sb.delete(Q("zenith_docs").eq("owner_id", me).eq("kind", kind).eq("doc_id", docId)).ok) zenSeen.remove(k) }
     } catch (e: Exception) { } finally { zenBusy = false }
@@ -220,7 +220,7 @@ suspend fun Online.zenPull(): Boolean {
         var d = row.optJSONObject("data") ?: JSONObject()
         when (kind) {
             "post" -> {
-                zenSeen[k] = d.toString()
+                zenSeen[k] = canonJson(d)
                 val gone = s.zen.optJSONArray("gone")?.strings() ?: emptyList()
                 if (d.optString("id") in gone) { app.scope.launch { if (Sb.delete(Q("zenith_docs").eq("owner_id", me).eq("kind", "post").eq("doc_id", docId)).ok) zenSeen.remove(k) }; continue }
                 val pr = d.optStr("parentRemote")
@@ -235,7 +235,7 @@ suspend fun Online.zenPull(): Boolean {
             }
             "flag" -> {
                 val p = d.optStr("remote")?.let { byRemote[it] } ?: byLocal[d.optString("local")] ?: continue
-                zenSeen[k] = d.toString()
+                zenSeen[k] = canonJson(d)
                 if (d.optBoolean("zenReplied") && !p.zenReplied) { p.zenReplied = true; changed = true }
                 if (d.optBoolean("zenAnswered") && !p.zenAnswered) { p.zenAnswered = true; changed = true }
                 if (d.optBoolean("zenLikeChecked") && !p.zenLikeChecked) { p.zenLikeChecked = true; changed = true }
@@ -254,17 +254,17 @@ suspend fun Online.zenPull(): Boolean {
                         LMsg(m.optString("id"), m.optString("text"), m.optLong("t"), imgs, ai = m.optBoolean("ai")).apply { if (zm.length() > 0) this.zm = zm }
                     } ?: emptyList()
                     if (fail) picFail = true else zenEncDone[docId] = enc
-                    zenSeen[k] = zenDocsChatSig(dd.optString("id"), dd.optString("name"), dd.optLong("t"), msgs)
+                    zenSeen[k] = canonJson(org.json.JSONObject(zenDocsChatSig(dd.optString("id"), dd.optString("name"), dd.optLong("t"), msgs)))
                     changed = mergeZenChat(dd.optString("id"), dd.optString("name"), dd.optLong("t"), msgs) || changed
                 } else {
-                    zenSeen[k] = d.toString()
+                    zenSeen[k] = canonJson(d)
                     val msgs = d.optJSONArray("msgs")?.objs()?.map { m -> LMsg(m.optString("id"), m.optString("text"), m.optLong("t"), emptyList(), ai = m.optBoolean("ai")) } ?: emptyList()
                     changed = mergeZenChat(d.optString("id"), d.optString("name"), d.optLong("t"), msgs) || changed
                 }
             }
             "state" -> {
                 val sz = d.optJSONObject("z") ?: continue
-                zenSeen[k] = d.toString()
+                zenSeen[k] = canonJson(d)
                 val z = s.zen
                 z.put("next", maxOf(z.optLong("next"), sz.optLong("next")))
                 z.put("since", minOf(z.optLong("since").takeIf { it > 0 } ?: System.currentTimeMillis(), sz.optLong("since").takeIf { it > 0 } ?: System.currentTimeMillis()))

@@ -62,8 +62,12 @@ fun UserScreen(id: String, fromMenu: Boolean = false) {
                     Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
                         Box(Modifier.layoutOffsetUp(44.dp).size(88.dp).clip(CircleShape).background(c.bg).padding(4.dp)) { RAv(name, handle, avatar, 80.dp, id, letter = 34.sp) }
                         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (ownerOfZen) Pill("Edit Profile", Btn.Ghost, small = true) { app.panels.add(Panel.ZenEdit) }
-                            else {
+                            if (ownerOfZen) {
+                                val st = pg.st
+                                Pill("Edit Profile", Btn.Ghost, small = true) { app.panels.add(Panel.ZenEdit) }
+                                // the owner can follow Zenith like everybody else
+                                if (st?.blocked != true) Pill(if (st?.following == true) "Following" else "Follow", if (st?.following == true) Btn.FOn else Btn.F, small = true, enabled = st != null) { on.toggleFollow(pg) }
+                            } else {
                                 val st = pg.st
                                 if (st?.blocked != true) Pill(if (st?.following == true) "Following" else if (st?.followsMe == true) "Follow back" else "Follow", if (st?.following == true) Btn.FOn else Btn.F, small = true, enabled = st != null) { on.toggleFollow(pg) }
                                 if (st != null && st.following && st.followsMe && !st.blocked) Pill("Message", Btn.Ghost, small = true) { on.openDm(id) }

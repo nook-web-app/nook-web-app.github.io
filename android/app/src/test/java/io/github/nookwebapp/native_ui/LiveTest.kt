@@ -6,6 +6,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
@@ -141,8 +142,24 @@ class LiveTest {
             check("unlike saved", waitFor { Sb.get(Q("likes").select("post_id").eq("user_id", bId).eq("post_id", p.remote!!)).one == null })
         }
 
+        // ---- a new post of A reaches B (who follows A) as a notification that points at the post ----
+        use(aS)
+        a.newPost("followers hear about this $tag", emptyList(), null)
+        val np = a.store.posts.last()
+        waitFor { np.remote != null }
+        use(bS)
+        val got = waitFor(60_000) { Sb.get(Q("notifications").select("kind, post_id").eq("user_id", bId).eq("kind", "post")).rows.any { it.optString("post_id") == np.remote } }
+        check("B is told about A's new post", got, np.remote)
+        val zid = Sb.get(Q("accounts").select("id").eq("username", "zenith")).one?.optString("id")
+        if (zid != null) {
+            val zf = Sb.insert("follows", JSONObject().put("follower_id", bId).put("followee_id", zid))
+            check("B can follow Zenith", zf.ok, zf.error?.message)
+            Sb.delete(Q("follows").eq("follower_id", bId).eq("followee_id", zid))
+        }
+
         // ---- A deletes the posts ----
         use(aS)
+        a.deletePost(np)
         a.deletePost(p)
         check("post deleted on the server", waitFor(25_000) { Sb.get(Q("posts").select("id").eq("id", p.remote!!)).ok && row("posts", "id", p.remote!!) == null })
         check("own reply under it deleted", row("posts", "id", rep.remote!!) == null)

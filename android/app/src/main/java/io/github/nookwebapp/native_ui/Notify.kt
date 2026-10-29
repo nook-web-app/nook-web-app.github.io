@@ -99,7 +99,12 @@ object Notify {
             val who = a?.let { if (it.isNull("display_name")) it.optString("username") else it.optString("display_name") } ?: "Someone"
             val kind = n.optString("kind")
             if (kind == "message" && n.optString("actor_id") in muted) return@forEach
-            show(ctx, who, NOTE_WHAT[kind] ?: "", if (kind == "message") "dm:" + n.optString("actor_id") else "notifs", n.optString("id").hashCode())
+            show(ctx, who, NOTE_WHAT[kind] ?: "", when {
+                kind == "message" -> "dm:" + n.optString("actor_id")
+                n.optStr("post_id") != null && kind in setOf("reply", "like", "repost", "post") -> "post:" + n.optString("post_id")
+                kind == "follow" -> "user:" + n.optString("actor_id")
+                else -> "notifs"
+            }, n.optString("id").hashCode())
         }
         markSeen(ctx, fresh.map { it.optString("id") })
         ctx.getSharedPreferences("nook", 0).edit().putLong("since", parseIso(fresh.first().optString("created_at"))).apply()

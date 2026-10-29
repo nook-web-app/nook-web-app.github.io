@@ -1007,7 +1007,7 @@ private fun Online.onIncomingMsg(m: JSONObject) {
     }
 }
 
-val NOTE_WHAT = mapOf("follow" to "followed you", "reply" to "replied to your post", "like" to "liked your post", "repost" to "reposted your post", "message" to "sent you a message")
+val NOTE_WHAT = mapOf("follow" to "followed you", "reply" to "replied to your post", "like" to "liked your post", "repost" to "reposted your post", "message" to "sent you a message", "post" to "posted something new")
 private fun Online.onIncomingNote(n: JSONObject) {
     refreshBadge(true)
     if (n.optString("kind") == "message") return
@@ -1064,8 +1064,18 @@ suspend fun Online.loadNotes(): List<Note>? {
 suspend fun Online.deleteNote(id: String): Boolean { val r = Sb.delete(Q("notifications").eq("id", id)); if (!r.ok) app.say("Could not delete"); return r.ok }
 fun Online.openNote(n: Note) {
     if (n.kind == "message") { openDm(n.actor); return }
-    n.post?.let { p -> s.byRemote(p)?.let { app.go(Route.Thread(it.id)); return } }
+    val post = n.post
+    if (post != null && n.kind != "follow") {
+        openNotePost(post)
+        return
+    }
     app.go(Route.User(n.actor))
+}
+
+// a post this phone does not have yet (a reply of somebody, a new post of a person you follow) is fetched and opened
+fun Online.openNotePost(id: String) {
+    s.byRemote(id)?.let { app.go(Route.Thread(it.id)); return }
+    app.scope.launch { runCatching { openSharedPost(id) }.onFailure { app.say("Could not open this post") } }
 }
 
 // ---- a shared post, opened from a chat ----

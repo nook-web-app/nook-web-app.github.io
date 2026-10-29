@@ -405,8 +405,6 @@ fun NotifsScreen() {
                     val a = app.on.acctCache[x.actor]
                     SwipeRow({ app.on.deleteNote(x.id) }, { notes = notes?.filter { it.id != x.id } }) {
                         Box(Modifier.background(c.bg)) {
-                            // an unread row has an inset rounded tint (inset 3px 6px), the rest of the row stays plain
-                            if (!x.read) Box(Modifier.matchParentSize().padding(horizontal = 6.dp, vertical = 3.dp).clip(RoundedCornerShape(Rad.m)).background(c.accent.copy(alpha = 0.09f)))
                             LRow({ RAv(a?.optString("name") ?: "user", a?.optString("username") ?: "", a?.optStr("avatar"), 40.dp, x.actor) }, app.on.nickOf(x.actor).ifEmpty { a?.optString("name") ?: "user" }, NOTE_WHAT[x.kind] ?: "", ago(parseIso(x.created))) { app.on.openNote(x) }
                         }
                     }

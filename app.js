@@ -292,7 +292,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.28.3";
+const APP_VERSION = "3.29.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -3863,7 +3863,7 @@ function userV(cur) {
   // on his own profile the owner changes how Zenith looks; everybody else can follow or block him like anyone
   const ownerOfZen = !!(S.zen && cur.id === S.zen.id && isOwner());
   const info = h("div", { class: "pinfo" },
-    h("div", { class: "arow" }, av, h("div", { class: "btns" }, ownerOfZen ? h("button", { class: "ghost", onclick: zenEdit }, "Edit Profile") : [followBtn, msgBtn, moreBtn])),
+    h("div", { class: "arow" }, av, h("div", { class: "btns" }, ownerOfZen ? [h("button", { class: "ghost", onclick: zenEdit }, "Edit Profile"), followBtn] : [followBtn, msgBtn, moreBtn])),
     pnEl, phEl, stat, bio);
   main.append(bn, info);
   const tabsEl = h("div", { class: "ptabs", role: "tablist" });
@@ -5487,6 +5487,8 @@ function handleOpen(v) {
   if (!sbUser || !v) return;
   if (v === "notifs") go({ r: "notifs" });
   else if (v.startsWith("dm:") && /^[0-9a-f-]{36}$/i.test(v.slice(3))) openDm(v.slice(3));
+  else if (v.startsWith("post:") && /^[0-9a-f-]{36}$/i.test(v.slice(5))) openSharedPost(v.slice(5)).catch(() => { toast("Could not open this post"); });
+  else if (v.startsWith("user:") && /^[0-9a-f-]{36}$/i.test(v.slice(5))) go({ r: "user", id: v.slice(5) });
 }
 function takeOpen() {
   const p = new URLSearchParams(location.search);
@@ -7880,12 +7882,15 @@ function swipeRow(row, del, gone) {
   row.addEventListener("click", e => { if (moved) { e.stopImmediatePropagation(); e.preventDefault(); moved = false; } }, true);
   return wrap;
 }
-const NOTE_WHAT = { follow: "followed you", reply: "replied to your post", like: "liked your post", repost: "reposted your post", message: "sent you a message" };
+const NOTE_WHAT = { follow: "followed you", reply: "replied to your post", like: "liked your post", repost: "reposted your post", message: "sent you a message", post: "posted something new" };
 function openNotif(n) {
   if (n.kind === "message") { openDm(n.actor_id); return; }
-  if (n.post_id) {
+  if (n.post_id && n.kind !== "follow") {
     const lp = S.posts.find(x => x.remote === n.post_id);
     if (lp) { go({ r: "thread", id: lp.id }); return; }
+    // a post this phone does not have yet (a reply of somebody, a new post of a person you follow) is fetched and opened
+    openSharedPost(n.post_id).catch(() => { toast("Could not open this post"); });
+    return;
   }
   go({ r: "user", id: n.actor_id });
 }

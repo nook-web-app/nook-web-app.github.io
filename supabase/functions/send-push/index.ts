@@ -11,6 +11,7 @@ const WHAT: Record<string, string> = {
   like: "liked your post",
   repost: "reposted your post",
   message: "sent you a message",
+  post: "posted something new",
 };
 let secretCache: string | null = null;
 let ready = false;
@@ -87,7 +88,7 @@ Deno.serve(async (req) => {
   const id = String(body.notification_id || "");
   if (!/^[0-9a-f-]{36}$/i.test(id)) return json({ error: "bad id" }, 400);
 
-  const { data: n } = await admin.from("notifications").select("id, user_id, actor_id, kind, created_at").eq("id", id).maybeSingle();
+  const { data: n } = await admin.from("notifications").select("id, user_id, actor_id, kind, post_id, created_at").eq("id", id).maybeSingle();
   if (!n) return json({ sent: 0 });
   // a muted chat gets no alert
   if (n.kind === "message") {
@@ -100,6 +101,10 @@ Deno.serve(async (req) => {
   if ((!subs || !subs.length) && (!fcm || !fcm.length)) return json({ sent: 0 });
 
   const name = (actor && (actor.display_name || actor.username)) || "Someone";
+  // a tap opens what the notification is about: the chat, the post (a reply, a like, a repost, a new post), or the person
+  const open = n.kind === "message" ? "dm:" + n.actor_id
+    : n.post_id && ["reply", "like", "repost", "post"].includes(n.kind) ? "post:" + n.post_id
+    : n.kind === "follow" ? "user:" + n.actor_id : "notifs";
   const msg: Record<string, unknown> = {};
   if (n.kind === "message") {
     // the words of a chat message stay end to end encrypted: only the sealed text goes along, and the phone opens it with its own key
@@ -117,7 +122,7 @@ Deno.serve(async (req) => {
   const payload = JSON.stringify({
     title: name,
     body: WHAT[n.kind] || "sent you something",
-    open: n.kind === "message" ? "dm:" + n.actor_id : "notifs",
+    open,
     tag: n.kind + ":" + n.actor_id,
     ...msg,
   });
@@ -125,7 +130,7 @@ Deno.serve(async (req) => {
   let sent = 0;
   const dead: string[] = [];
   if (fcm && fcm.length) {
-    const r = await sendFcm(fcm, { title: name, body: WHAT[n.kind] || "sent you something", open: n.kind === "message" ? "dm:" + n.actor_id : "notifs", id: n.id });
+    const r = await sendFcm(fcm, { title: name, body: WHAT[n.kind] || "sent you something", open, id: n.id });
     sent += r.sent;
     if (r.dead.length) await admin.from("fcm_tokens").delete().in("token", r.dead);
   }

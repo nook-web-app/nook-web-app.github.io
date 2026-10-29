@@ -101,9 +101,7 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     // the offline page: shown while the phone has no connection, or when the start could not be made for lack of one
     var online by mutableStateOf(true)
     var bootOffline by mutableStateOf(false)
-    var offlineSkip by mutableStateOf(false)
-    var canSkipOffline by mutableStateOf(true)
-    val offline get() = (!online || bootOffline) && !offlineSkip
+    val offline get() = !online || bootOffline
     var banEmail by mutableStateOf("")
     // posting is paused: the sheet that says so
     var postLocked by mutableStateOf(false)

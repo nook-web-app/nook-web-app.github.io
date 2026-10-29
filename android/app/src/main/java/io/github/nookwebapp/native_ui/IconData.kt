@@ -34,7 +34,6 @@ val ICONS: Map<String, Ic> = mapOf(
     "copy" to Ic(listOf(El("M11.0 9.0h7.0a2.0 2.0 0 0 1 2.0 2.0v7.0a2.0 2.0 0 0 1 -2.0 2.0h-7.0a2.0 2.0 0 0 1 -2.0 -2.0v-7.0a2.0 2.0 0 0 1 2.0 -2.0z", 2.0f, false, true), El("M5 15V6a2 2 0 0 1 2-2h9", 2.0f, false, true)), listOf(), null),
     "check" to Ic(listOf(El("M5 12l5 5 9-10", 2.0f, false, true)), listOf(), null),
     "refresh" to Ic(listOf(El("M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7", 2.0f, false, true)), listOf(), null),
-    "wifiOff" to Ic(listOf(El("M2 8.8a15 15 0 0 1 4.2-2.7M22 8.8a15 15 0 0 0-9-3.7M5 12.9a10 10 0 0 1 5-2.7M19 12.9a10 10 0 0 0-2.4-2.2M8.5 16.4a5 5 0 0 1 7 0M12 20h.01M3 3l18 18", 2.0f, false, true)), listOf(), null),
     "download" to Ic(listOf(El("M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14", 2.0f, false, true)), listOf(), null),
     "send" to Ic(listOf(El("M4 12l16-8-6 16-3-7z", 2.0f, false, true)), listOf(), null),
     "smile" to Ic(listOf(El("M3.0 12.0a9.0 9.0 0 1 0 18.0 0a9.0 9.0 0 1 0 -18.0 0z", 2.0f, false, true), El("M8 14c1 1.5 2.3 2.2 4 2.2s3-.7 4-2.2", 2.0f, false, true), El("M9 9.5h.01M15 9.5h.01", 2.0f, false, true)), listOf(), null),

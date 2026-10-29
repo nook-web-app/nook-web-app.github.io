@@ -152,7 +152,6 @@ const P = {
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21h4"/>',
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
   bellOff: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21h4"/><path d="M3 3l18 18"/>',
-  wifiOff: '<path d="M2 8.8a15 15 0 0 1 4.2-2.7M22 8.8a15 15 0 0 0-9-3.7M5 12.9a10 10 0 0 1 5-2.7M19 12.9a10 10 0 0 0-2.4-2.2M8.5 16.4a5 5 0 0 1 7 0M12 20h.01M3 3l18 18"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5"/>'
 };
 
@@ -292,7 +291,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.28.1";
+const APP_VERSION = "3.28.2";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -919,11 +918,13 @@ function cutText(text, n) {
   }
   return head;
 }
-function txBody(text, extra) {
+// edited: a post whose words were changed ends with a small "Edited" right after its text
+function txBody(text, extra, edited) {
   const box = h("div", { class: "tx" + extra });
   const LIMIT = 700;
-  if (String(text).length <= LIMIT) { box.append(...rich(text)); return box; }
-  const more = h("button", { class: "tbtn", type: "button", style: "padding:6px 0;color:var(--lnk)", onclick: e => { e.stopPropagation(); box.textContent = ""; box.append(...rich(text)); } }, "Show more");
+  const tag = () => (edited ? [" ", h("span", { class: "pe" }, "Edited")] : []);
+  if (String(text).length <= LIMIT) { box.append(...rich(text), ...tag()); return box; }
+  const more = h("button", { class: "tbtn", type: "button", style: "padding:6px 0;color:var(--lnk)", onclick: e => { e.stopPropagation(); box.textContent = ""; box.append(...rich(text), ...tag()); } }, "Show more");
   box.append(...rich(cutText(text, 600) + "…"), h("div", {}, more));
   return box;
 }
@@ -1605,9 +1606,9 @@ function postCard(p, o) {
   if (lab) col.append(h("div", { class: "rt" }, ic("repost", 14), lab));
   if (o.pin && p.pinned) col.append(h("div", { class: "rt" }, ic("pin", 14), "Pinned post"));
   const pname = p.ai ? "Zenith" : p.ra ? p.ra.name : S.profile.name, phand = p.ai ? "@zenith" : "@" + (p.ra ? p.ra.handle : S.profile.handle);
-  col.append(h("div", { class: "ph2" }, pname ? h("span", { class: "pn" }, pname) : null, p.edited ? h("span", { class: "pe" }, ic("edit", 13), "Edited") : null, h("span", { class: "pu" }, phand), h("span", { class: "pt" }, ago(p.t))));
+  col.append(h("div", { class: "ph2" }, pname ? h("span", { class: "pn" }, pname) : null, h("span", { class: "pu" }, phand), h("span", { class: "pt" }, ago(p.t))));
   if (o.replyTo && p.parent) { const par = byId(p.parent); col.append(h("div", { class: "rt" }, ic("reply", 14), "Replying to " + (!par ? "a post" : par.ai ? "@zenith" : "@" + (par.ra ? par.ra.handle : S.profile.handle)))); }
-  if (cardless(p)) col.append(txBody(cardless(p), ""));
+  if (cardless(p)) col.append(txBody(cardless(p), "", p.edited));
   if (p.imgs.length) col.append(imgGrid(p.imgs));
   else if (firstUrl(p.text)) col.append(linkCard(firstUrl(p.text)));
   if (!o.compact) col.append(acts(p, false, !!o.nc));
@@ -1832,9 +1833,9 @@ function mainPost(p) {
     h("div", { class: "mp" },
       p.pinned ? h("div", { class: "rt", style: "margin-bottom:8px" }, ic("pin", 14), "Pinned post") : null,
       h("div", { class: "mh" }, pfp, h("div", { class: "nm" }, h("b", {}, p.ai ? "Zenith" : p.ra ? p.ra.name : S.profile.name), h("span", {}, p.ai ? "@zenith" : "@" + (p.ra ? p.ra.handle : S.profile.handle)))),
-      cardless(p) ? txBody(cardless(p), " big") : null,
+      cardless(p) ? txBody(cardless(p), " big", p.edited) : null,
       p.imgs.length ? imgGrid(p.imgs) : firstUrl(p.text) ? linkCard(firstUrl(p.text)) : null,
-      h("div", { class: "when" }, new Date(p.t).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) + (p.edited ? " · edited" : ""))),
+      h("div", { class: "when" }, new Date(p.t).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }))),
     st.length ? h("div", { class: "stats" }, st) : null,
     h("div", { class: "mp", style: "padding-top:0" }, acts(p, true)));
 }
@@ -8327,7 +8328,7 @@ async function boot() {
     // no connection is not an age hold: the offline page is shown instead, and the check is made when the connection is back
     const noNet = navigator.onLine === false || (!!aerr && !acct && !aerr.status && !aerr.code);
     ageHeld = !!(acct && acct.age_hold) || (!!aerr && !acct && !ageKnown && !noNet);
-    if (noNet && !acct) offlineShow(ageKnown || verified, true);
+    if (noNet && !acct) offlineShow(true);
     if (ageHeld) dropPre();
     if (!aerr && (!acct || acct.deactivated)) { try { sessionStorage.setItem("nook-notice", acct ? "That account is deactivated. Sign in again to bring it back." : "Your account could not be loaded. Sign in again."); } catch (e) {} dropPre(); await sb.auth.signOut({ scope: "local" }).catch(() => {}); sbUser = null; }
     else if (sbUser && await foreignLocalData(acct)) {
@@ -8992,20 +8993,19 @@ boot();
 setInterval(zenTick, 10000);
 setInterval(retryUnsent, 45000);
 // ---- the offline page: only on screen while the phone has no connection ----
-let offEl = null, offSkip = false, offBoot = false;
-function offlineShow(canSkip, atBoot) {
+let offEl = null, offBoot = false;
+function offlineShow(atBoot) {
   if (atBoot) offBoot = true;
-  if (offEl || offSkip) return;
+  if (offEl) return;
   const retry = h("button", { class: "pri", onclick: () => { if (navigator.onLine === false) { toast("Still offline"); return; } location.reload(); } }, "Try again");
-  const keep = canSkip ? h("button", { class: "tbtn", onclick: () => { offSkip = true; offlineHide(); } }, "Keep using Nook offline") : null;
-  offEl = h("div", { id: "offline", role: "alert" }, h("div", { class: "empty" }, ic("wifiOff", 56), h("h1", { class: "pname", style: "margin:0;color:var(--fg)" }, "You are offline"), h("p", {}, "Nook needs Wi-Fi or mobile data. Turn it on and Nook opens again by itself."), retry, keep));
+  offEl = h("div", { id: "offline", role: "alert" }, h("div", { class: "empty" }, h("h1", { class: "pname", style: "margin:0;color:var(--fg)" }, "You are offline"), retry));
   document.body.append(offEl);
 }
 function offlineHide() { if (offEl) { offEl.remove(); offEl = null; } }
-window.addEventListener("offline", () => offlineShow(!!sbUser && !ageGate));
+window.addEventListener("offline", () => offlineShow());
 // back online: the page goes, and a start that could not be made is made again
-window.addEventListener("online", () => { const again = offBoot; offBoot = false; offSkip = false; offlineHide(); if (again) location.reload(); });
-if (navigator.onLine === false) offlineShow(false);
+window.addEventListener("online", () => { const again = offBoot; offBoot = false; offlineHide(); if (again) location.reload(); });
+if (navigator.onLine === false) offlineShow();
 window.addEventListener("online", () => setTimeout(() => { retryUnsent(); feedTries = 0; if (sbUser && S) loadFeed().catch(() => {}); }, 800));
 window.addEventListener("load", () => setTimeout(retryUnsent, 6000));
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") zenTick(); });

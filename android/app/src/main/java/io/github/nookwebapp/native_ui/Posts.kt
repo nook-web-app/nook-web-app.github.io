@@ -118,13 +118,20 @@ fun cutText(text: String, n: Int): String {
 
 // .tx: the words of a post; taps on a link or a tag open it, a tap anywhere else falls through to the post
 @Composable
-fun Tx(text: String, big: Boolean = false, modifier: Modifier = Modifier, onTap: (() -> Unit)? = null, onLong: (() -> Unit)? = null, color: Color? = null, linkColor: Color? = null, cut: Boolean = true) {
+fun Tx(text: String, big: Boolean = false, modifier: Modifier = Modifier, onTap: (() -> Unit)? = null, onLong: (() -> Unit)? = null, color: Color? = null, linkColor: Color? = null, cut: Boolean = true, edited: Boolean = false) {
     val app = LocalApp.current
     val c = LocalNook.current
     val uri = LocalUriHandler.current
     var full by remember(text) { mutableStateOf(!cut || text.length <= 700) }
     val shown = remember(text, full) { if (full) text else cutText(text, 600) + "…" }
-    val ann = remember(shown, c.accent, linkColor) { rich(shown, linkColor ?: c.accent) }
+    // a post whose words were changed ends with a small muted "Edited" right after its text
+    val ann = remember(shown, c.accent, c.muted, linkColor, edited) {
+        val base = rich(shown, linkColor ?: c.accent)
+        if (!edited) base else androidx.compose.ui.text.buildAnnotatedString {
+            append(base); append(" ")
+            withStyle(androidx.compose.ui.text.SpanStyle(color = c.muted, fontSize = Fs.sm)) { append("Edited") }
+        }
+    }
     val size = if (big) Fs.x2 else Fs.base
     val lh = if (big) (20 * 1.35).sp else (15 * 1.38).sp
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
@@ -295,13 +302,13 @@ fun PostCard(p: LPost, lab: String? = null, pin: Boolean = false, replyTo: Boole
             if (lab != null || (pin && p.pinned)) Row(Modifier.padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 NIcon(if (lab != null) "repost" else "pin", 14.dp, c.muted); T(lab ?: "Pinned post", Fs.sm, color = c.muted)
             }
-            PostHead(nameOf(app, p), handleOf(app, p), ago(p.t), p.id, p.edited)
+            PostHead(nameOf(app, p), handleOf(app, p), ago(p.t), p.id)
             if (replyTo && p.parent != null) Row(Modifier.padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 val par = app.store.byId(p.parent)
                 NIcon("reply", 14.dp, c.muted); T("Replying to " + if (par == null) "a post" else handleOf(app, par), Fs.sm, color = c.muted)
             }
             val txt = remember(p.text, p.imgs) { cardless(p) }
-            if (txt.isNotEmpty()) Tx(txt, modifier = Modifier.probe("text:" + p.id), onTap = open, onLong = hold)
+            if (txt.isNotEmpty()) Tx(txt, modifier = Modifier.probe("text:" + p.id), onTap = open, onLong = hold, edited = p.edited)
             if (p.imgs.isNotEmpty()) ImgGrid(p.imgs) else remember(p.text) { firstUrl(p.text) }?.let { LinkCard(it) }
             if (!compact) Acts(p, nc = nc)
         }
@@ -309,32 +316,26 @@ fun PostCard(p: LPost, lab: String? = null, pin: Boolean = false, replyTo: Boole
 }
 
 // .ph2: name (at most half the row), handle (cut when long) and time at the right, all on one baseline
-// .pe: a post whose words were changed shows a small "Edited" right after the name
 @Composable
-fun PostHead(name: String, handle: String, time: String, id: String, edited: Boolean = false) {
+fun PostHead(name: String, handle: String, time: String, id: String) {
     val c = LocalNook.current
     androidx.compose.ui.layout.Layout(content = {
         if (name.isNotEmpty()) T(name, weight = FontWeight.Bold, maxLines = 1, modifier = Modifier.probe("name:$id")) else Box(Modifier)
         T(handle, color = c.muted, maxLines = 1)
         T(time, Fs.md, color = c.muted, modifier = Modifier.probe("time:$id"))
-        if (edited) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) { NIcon("edit", 13.dp, c.muted); T("Edited", Fs.sm, color = c.muted, maxLines = 1) } else Box(Modifier)
     }, Modifier.fillMaxWidth()) { ms, cons ->
         val gap = 5.dp.roundToPx()
         val w = cons.maxWidth
         val tm = ms[2].measure(androidx.compose.ui.unit.Constraints())
         val nm = ms[0].measure(androidx.compose.ui.unit.Constraints(maxWidth = w / 2))
-        val em = ms[3].measure(androidx.compose.ui.unit.Constraints())
-        val eg = if (em.width > 0) em.width + gap else 0
-        val hm = ms[1].measure(androidx.compose.ui.unit.Constraints(maxWidth = maxOf(0, w - nm.width - eg - tm.width - gap * 2)))
+        val hm = ms[1].measure(androidx.compose.ui.unit.Constraints(maxWidth = maxOf(0, w - nm.width - tm.width - gap * 2)))
         val base = maxOf(nm[FirstBaseline].takeIf { it > 0 } ?: 0, hm[FirstBaseline], tm[FirstBaseline])
         val top = { p: androidx.compose.ui.layout.Placeable -> base - p[FirstBaseline].coerceAtLeast(0) }
         val h = listOf(nm, hm, tm).maxOf { top(it) + it.height }
         layout(w, h) {
             val nx = if (nm.width > 0) nm.width + gap else 0
             nm.place(0, top(nm))
-            // the little pencil and word sit on the middle of the name's line
-            if (em.width > 0) em.place(nx, top(nm) + (nm.height - em.height) / 2)
-            hm.place(nx + eg, top(hm)); tm.place(w - tm.width, top(tm))
+            hm.place(nx, top(hm)); tm.place(w - tm.width, top(tm))
         }
     }
 }
@@ -356,9 +357,9 @@ fun MainPost(p: LPost) {
             Column { T(nameOf(app, p), weight = FontWeight.Bold); T(handleOf(app, p), color = c.muted) }
         }
         val txt = cardless(p)
-        if (txt.isNotEmpty()) Tx(txt, big = true, modifier = Modifier.padding(top = 12.dp))
+        if (txt.isNotEmpty()) Tx(txt, big = true, modifier = Modifier.padding(top = 12.dp), edited = p.edited)
         if (p.imgs.isNotEmpty()) ImgGrid(p.imgs, whenText(p.t)) else firstUrl(p.text)?.let { LinkCard(it) }
-        T(whenText(p.t) + if (p.edited) " · edited" else "", Fs.md, color = c.muted, modifier = Modifier.padding(top = 12.dp, bottom = 12.dp))
+        T(whenText(p.t), Fs.md, color = c.muted, modifier = Modifier.padding(top = 12.dp, bottom = 12.dp))
     }
     if (p.saved) Row(Modifier.padding(horizontal = 16.dp).padding(bottom = 12.dp)) { T("1", Fs.md, FontWeight.Bold); T(" save", Fs.md, color = c.muted) }
     Box(Modifier.padding(horizontal = 16.dp)) { Acts(p, big = true) }

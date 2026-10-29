@@ -102,7 +102,7 @@ suspend fun Online.boot() {
         val noNet = !app.online || acct.error?.status == 0
         // when the account could not be read at all, only a phone that already passed the age check is let through
         ageHeld = !verified && !noNet
-        if (noNet) { app.canSkipOffline = verified; app.bootOffline = true; if (!verified) return }
+        if (noNet) { app.bootOffline = true; if (!verified) return }
     }
     if (acct.ok && (row == null || row.optBoolean("deactivated"))) {
         app.notice = if (row != null) "That account is deactivated. Sign in again to bring it back." else "Your account could not be loaded. Sign in again."

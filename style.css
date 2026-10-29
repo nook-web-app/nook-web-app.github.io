@@ -55,7 +55,7 @@ textarea{resize:none}
 .pu{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .pt{color:var(--muted);margin-left:auto;flex:none;font-size:var(--fs-md)}
 .rt{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:var(--fs-sm);margin-bottom:2px}
-.pe{display:inline-flex;align-items:center;gap:3px;flex:none;color:var(--muted);font-size:var(--fs-sm);align-self:center}
+.pe{color:var(--muted);font-size:var(--fs-sm)}
 .tx{white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--fs-base);line-height:1.38}
 .tx.big{font-size:var(--fs-2xl);line-height:1.35}
 .lk,.tag{color:var(--accent);background:none;border:0;padding:0;font:inherit;text-decoration:none;cursor:pointer}

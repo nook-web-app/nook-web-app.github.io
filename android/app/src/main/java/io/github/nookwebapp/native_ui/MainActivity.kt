@@ -117,8 +117,7 @@ class MainActivity : ComponentActivity() {
         fun set(on: Boolean) = runOnUiThread {
             if (on == app.online) return@runOnUiThread
             app.online = on
-            if (!on) { app.offlineSkip = false; return@runOnUiThread }
-            app.offlineSkip = false
+            if (!on) return@runOnUiThread
             if (app.bootOffline) { app.bootOffline = false; app.scope.launch { app.on.boot() } }
         }
         runCatching {

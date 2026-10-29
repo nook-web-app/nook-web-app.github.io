@@ -242,7 +242,7 @@ fun SettingsScreen() {
             Group {
                 SRow(ic("refresh", 22.dp), "Check for updates", "Version $APP_VERSION") { app.checkUpdate(true) }
                 val quiet = ctx?.let { Updater.allQuiet(it) } == true
-                SRow(ic("refresh", 22.dp), "Install updates in the background", if (quiet) "On" else "Off", last = true) {
+                SRow(ic("refresh", 22.dp), "Background updates", if (quiet) "On" else "Off", last = true) {
                     val c = ctx ?: return@SRow
                     Updater.setAllQuiet(c, !quiet); tick++
                     if (!quiet && !Updater.mayInstall(c)) { app.say("Allow Nook to install apps, then it can update by itself"); Updater.askInstallRight(c) }

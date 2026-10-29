@@ -64,9 +64,9 @@ fun UserScreen(id: String, fromMenu: Boolean = false) {
                         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (ownerOfZen) {
                                 val st = pg.st
-                                Pill("Edit Profile", Btn.Ghost, small = true) { app.panels.add(Panel.ZenEdit) }
-                                // the owner can follow Zenith like everybody else
+                                // the owner can follow Zenith like everybody else, the button first as on every profile
                                 if (st?.blocked != true) Pill(if (st?.following == true) "Following" else "Follow", if (st?.following == true) Btn.FOn else Btn.F, small = true, enabled = st != null) { on.toggleFollow(pg) }
+                                Pill("Edit Profile", Btn.Ghost, small = true) { app.panels.add(Panel.ZenEdit) }
                             } else {
                                 val st = pg.st
                                 if (st?.blocked != true) Pill(if (st?.following == true) "Following" else if (st?.followsMe == true) "Follow back" else "Follow", if (st?.following == true) Btn.FOn else Btn.F, small = true, enabled = st != null) { on.toggleFollow(pg) }

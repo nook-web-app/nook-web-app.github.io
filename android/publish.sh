@@ -3,7 +3,9 @@
 # updater looks for it. Needs ANDROID_HOME, NOOK_KS and NOOK_KS_PASS like g.sh.
 set -e
 cd "$(dirname "$0")"
-./g.sh :app:assembleRelease
+# g.sh exits 1 when gradle printed nothing (its output filter found no lines), so its exit code is not used
+./g.sh :app:assembleRelease || true
+test -f app/build/outputs/apk/release/app-release.apk
 code=$(grep -o "versionCode [0-9]*" app/build.gradle | grep -o "[0-9]*")
 name=$(grep -o "versionName '[^']*'" app/build.gradle | sed "s/versionName '//; s/'//")
 mkdir -p ../apk

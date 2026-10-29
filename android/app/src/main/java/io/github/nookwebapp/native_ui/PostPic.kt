@@ -14,13 +14,17 @@ import android.text.TextPaint
 // postPic() of app.js: a picture of a post (the avatar, name and handle, the text, the first photo and the time) on
 // the theme's background, 960 wide in its own units and about two million pixels in all
 object PostPic {
-    fun make(p: LPost, pr: Profile, c: NookColors): Bitmap {
+    fun make(p: LPost, pr: Profile, c: NookColors, zenPfp: String? = null): Bitmap {
+        // who wrote it: Zenith, somebody else, or the owner
+        val name = if (p.ai) "Zenith" else p.ra?.name ?: pr.name
+        val handle = if (p.ai) "zenith" else p.ra?.handle ?: pr.handle
+        val avSrc = if (p.ai) zenPfp else p.ra?.avatar?.takeIf { Photos.ownMedia(it) } ?: pr.avatar
         val W = 960f; val pad = 56f; val av = 80f; val fs = 34f; val lh = 48f
         val cw = W - pad * 2
         val txt = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { textSize = fs; typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL) }
         val lines = if (p.text.isNotEmpty()) wrap(txt, p.text, cw) else emptyList()
-        val pic = p.imgs.firstOrNull()?.let { runCatching { BitmapFactory.decodeFile(it) }.getOrNull() }
-        val me = pr.avatar?.let { runCatching { BitmapFactory.decodeFile(it) }.getOrNull() }
+        val pic = p.imgs.firstOrNull()?.let { src -> Photos.bytesOf(src)?.let { b -> Photos.decodeUpright(b, 1600) } }
+        val me = avSrc?.let { src -> Photos.bytesOf(src)?.let { b -> runCatching { BitmapFactory.decodeByteArray(b, 0, b.size) }.getOrNull() } }
         val picH = if (pic != null) minOf(Math.round(cw * pic.height / pic.width).toFloat(), 900f) else 0f
         val H = pad + av + 32 + lines.size * lh + (if (pic != null) picH + 32 else 0f) + 60 + pad
         val s = Math.sqrt(2_000_000.0 / (W * H)).toFloat()
@@ -29,21 +33,24 @@ object PostPic {
         x.scale(out.width / W, out.height / H)
         x.drawColor(c.bg.toArgb())
         val ax = pad + av / 2; val ay = pad + av / 2; val ar = av / 2
-        x.drawCircle(ax, ay, ar, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = c.accent.toArgb() })
+        x.drawCircle(ax, ay, ar, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            if (p.ai) shader = android.graphics.LinearGradient(ax - ar, ay - ar, ax + ar, ay + ar, 0xFF14466F.toInt(), 0xFF208BFE.toInt(), android.graphics.Shader.TileMode.CLAMP)
+            else color = (if (p.ra != null) hsl(hueOf(name.ifEmpty { handle }), .45f, .42f) else c.accent).toArgb()
+        })
         if (me != null) {
             x.save(); x.clipPath(Path().apply { addCircle(ax, ay, ar, Path.Direction.CW) })
             val k = maxOf(av / me.width, av / me.height)
             x.drawBitmap(me, null, RectF(ax - me.width * k / 2, ay - me.height * k / 2, ax + me.width * k / 2, ay + me.height * k / 2), Paint(Paint.FILTER_BITMAP_FLAG))
             x.restore()
         } else {
-            val lp = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.WHITE; textAlign = Paint.Align.CENTER; textSize = Math.round(av * 0.4f).toFloat(); typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD) }
+            val lp = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.WHITE; textAlign = Paint.Align.CENTER; textSize = Math.round(av * (if (p.ai) 0.5f else 0.4f)).toFloat(); typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD) }
             val fm = lp.fontMetrics
-            x.drawText(pr.name.ifBlank { pr.handle }.ifBlank { "?" }.trim().take(1).uppercase(), ax, ay + 1 - (fm.ascent + fm.descent) / 2, lp)
+            x.drawText(if (p.ai) "Z" else name.ifBlank { handle }.ifBlank { "?" }.trim().take(1).uppercase(), ax, ay + 1 - (fm.ascent + fm.descent) / 2, lp)
         }
         val bold = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = c.fg.toArgb(); textSize = fs; typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD) }
-        x.drawText(pr.name.ifBlank { pr.handle }.ifBlank { "user" }, pad + av + 20, pad + 36, bold)
+        x.drawText(name.ifBlank { handle }.ifBlank { "user" }, pad + av + 20, pad + 36, bold)
         val mu = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = c.muted.toArgb(); textSize = Math.round(fs * 0.85f).toFloat() }
-        x.drawText("@" + pr.handle, pad + av + 20, pad + 36 + 36, mu)
+        x.drawText("@$handle", pad + av + 20, pad + 36 + 36, mu)
         var y = pad + av + 32
         txt.color = c.fg.toArgb()
         lines.forEach { l -> y += lh; x.drawText(l, pad, y, txt) }

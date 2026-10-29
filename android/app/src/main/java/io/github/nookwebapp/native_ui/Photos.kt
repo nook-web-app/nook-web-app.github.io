@@ -30,6 +30,36 @@ import java.io.File
 object Photos {
     // the screenshot tests set this, so photos are read before the one frame they take
     var sync = false
+    // where the photos of other people (links to this app's storage) are kept once downloaded; set by the activity
+    var cacheDir: File? = null
+
+    // the bytes of any picture the app shows: a file on this phone, a data address (profile pictures on the server are
+    // kept that way) or a link to this app's own storage (downloaded once and kept in the cache)
+    fun bytesOf(src: String): ByteArray? = try {
+        when {
+            src.startsWith("data:") -> java.util.Base64.getDecoder().decode(src.substring(src.indexOf(',') + 1))
+            src.startsWith("http") -> {
+                val f = diskFile(src)
+                if (f != null && f.exists()) f.readBytes()
+                else fetch(src)?.also { b -> f?.let { runCatching { it.parentFile?.mkdirs(); File(it.parentFile, it.name + ".part").apply { writeBytes(b) }.renameTo(it) } } }
+            }
+            else -> File(src).takeIf { it.exists() }?.readBytes()
+        }
+    } catch (e: Exception) { null }
+
+    private fun diskFile(url: String): File? = cacheDir?.let { File(File(it, "img"), Crypto.sha1Hex(url).lowercase()) }
+    // pictures of other people are only loaded from this app's own storage or inline data, never from an address they chose
+    fun ownMedia(u: String?) = u != null && (u.startsWith("data:image/") || u.startsWith(SB_URL + "/storage/v1/object/public/media/") || u.startsWith("/"))
+    private fun fetch(url: String): ByteArray? = try {
+        Sb.http.newCall(okhttp3.Request.Builder().url(url).build()).execute().use { r -> if (r.isSuccessful) r.body?.bytes() else null }
+    } catch (e: Exception) { null }
+    // the cache of downloaded pictures is kept under 150 MB, the oldest go first
+    fun trimCache() {
+        val d = cacheDir?.let { File(it, "img") } ?: return
+        val fs = d.listFiles()?.sortedBy { it.lastModified() } ?: return
+        var total = fs.sumOf { it.length() }
+        for (f in fs) { if (total < 150L shl 20) break; total -= f.length(); f.delete() }
+    }
     fun intake(ctx: Context, dir: File, uri: Uri): String? = intakeOrNull(ctx, dir, uri)
     private fun intakeOrNull(ctx: Context, dir: File, uri: Uri): String? = try {
         val cr = ctx.contentResolver
@@ -84,12 +114,18 @@ object Photos {
     }
 
     // width/height of a saved photo, read without decoding it
-    private val dims = LruCache<String, Pair<Int, Int>>(512)
+    private val dims = LruCache<String, Pair<Int, Int>>(1024)
     fun size(path: String): Pair<Int, Int>? = dims.get(path) ?: run {
-        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(path, o)
-        if (o.outWidth <= 0) null else (o.outWidth to o.outHeight).also { dims.put(path, it) }
+        if (path.startsWith("http")) { val f = diskFile(path); if (f == null || !f.exists()) return null; return bounds(f.path)?.also { dims.put(path, it) } }
+        if (path.startsWith("data:")) return null
+        bounds(path)?.also { dims.put(path, it) }
     }
+    private fun bounds(file: String): Pair<Int, Int>? {
+        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file, o)
+        return if (o.outWidth <= 0) null else o.outWidth to o.outHeight
+    }
+    fun noteSize(path: String, w: Int, h: Int) { if (w > 0 && h > 0) dims.put(path, w to h) }
 
     private val cache = object : LruCache<String, ImageBitmap>(48 * 1024 * 1024) {
         override fun sizeOf(key: String, value: ImageBitmap) = value.width * value.height * 4
@@ -97,19 +133,24 @@ object Photos {
     fun cached(path: String, want: Int) = cache.get("$path@$want")
     suspend fun load(path: String, want: Int): ImageBitmap? = cached(path, want) ?: withContext(Dispatchers.IO) { loadNow(path, want) }
     fun loadNow(path: String, want: Int): ImageBitmap? = try {
-        val f = File(path)
-        if (!f.exists()) null else decodeUpright(f.readBytes(), want)?.asImageBitmap()?.also { cache.put("$path@$want", it) }
+        val b = bytesOf(path)
+        if (b == null) null else {
+            val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(b, 0, b.size, o)
+            noteSize(path, o.outWidth, o.outHeight)
+            decodeUpright(b, want)?.asImageBitmap()?.also { cache.put("$path@$want", it) }
+        }
     } catch (e: Exception) { null }
 }
 
 // one saved photo, cropped to fill its box (object-fit: cover) unless told otherwise; the box shows --bg2 while it loads
 @Composable
-fun Pic(path: String?, modifier: Modifier = Modifier, want: Int = 1280, scale: ContentScale = ContentScale.Crop, smooth: Boolean = false) {
+fun Pic(path: String?, modifier: Modifier = Modifier, want: Int = 1280, scale: ContentScale = ContentScale.Crop, smooth: Boolean = false, onLoad: ((Int, Int) -> Unit)? = null) {
     val c = LocalNook.current
     // previews and the screenshot tests draw one frame only, so there the photo is read at once
     val now = androidx.compose.ui.platform.LocalInspectionMode.current || Photos.sync
     var bm by remember(path, want) { mutableStateOf(path?.let { Photos.cached(it, want) ?: if (now) Photos.loadNow(it, want) else null }) }
-    LaunchedEffect(path, want) { if (bm == null && path != null) bm = Photos.load(path, want) }
+    LaunchedEffect(path, want) { if (bm == null && path != null) bm = Photos.load(path, want); bm?.let { b -> path?.let { Photos.size(it) }?.let { onLoad?.invoke(it.first, it.second) } ?: onLoad?.invoke(b.width, b.height) } }
     val b = bm
     if (b != null) Image(b, null, modifier, contentScale = scale, filterQuality = if (smooth) androidx.compose.ui.graphics.FilterQuality.High else androidx.compose.ui.graphics.FilterQuality.Low)
     else Box(modifier.background(c.bg2))

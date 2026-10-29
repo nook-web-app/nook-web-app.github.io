@@ -1,0 +1,54 @@
+{
+ "uid": "8a5d16ec-1050-40d2-8a7d-bcb75dc75bba",
+ "pw": "Ünïcode pass wörd 123",
+ "text": "hi from the web uwu ⁣Z⁣ ✨",
+ "a": {
+  "pub": "BE7I8wds0Ww83PfoxRpLLFMuytpEzqtHd6whnEUz88TivxMtXiScKGkjdbqxUMsfTS5lKyFTBx+sEGm8frg8N58=",
+  "jwk": {
+   "key_ops": [
+    "deriveKey"
+   ],
+   "ext": true,
+   "kty": "EC",
+   "x": "TsjzB2zRbDzc9-jFGkssUy7K2kTOq0d3rCGcRTPzxOI",
+   "y": "vxMtXiScKGkjdbqxUMsfTS5lKyFTBx-sEGm8frg8N58",
+   "crv": "P-256",
+   "d": "gdsEyMi5Yd3gu6dfkIuGpbrMwNQPOsJyuplWQahedYQ"
+  }
+ },
+ "b": {
+  "pub": "BEWTaeBC4+Jy/d7w6oNZoOILNZEYn+K6KOuJc0eX7EVqrhUCi7d2riGsQRSJxyE2Ib73nKtAXNRkeCJFGdmOm1Y=",
+  "jwk": {
+   "key_ops": [
+    "deriveKey"
+   ],
+   "ext": true,
+   "kty": "EC",
+   "x": "RZNp4ELj4nL93vDqg1mg4gs1kRif4roo64lzR5fsRWo",
+   "y": "rhUCi7d2riGsQRSJxyE2Ib73nKtAXNRkeCJFGdmOm1Y",
+   "crv": "P-256",
+   "d": "8C9pSoMWPmqBGssdZW-wASMpYiDZt51c4efVKcnDoyg"
+  }
+ },
+ "sealed": "e2e1:SEg7KAQSGhSuuQFm.aDu83gFo9gtPVsYyYJs0HhyrI9r/uIk14oMhxwrk97fuS/gnUzf2nheoK5ENycY=",
+ "sealedAad": "e2e1:7/LWFYVzwed2YpnW.ZsZ4WW0hZm6dHSHy6zfhJ46WTCt9WSxhvy4UMk/l34K/eLruMrzNwuiwIC+eyEw=",
+ "backup": {
+  "user_id": "8a5d16ec-1050-40d2-8a7d-bcb75dc75bba",
+  "mode": "login",
+  "salt": "haECfHcq1qTihXpVWL5pZQ==",
+  "iv": "UJDQQJyhArsKVmI/",
+  "ct": "TXVr5KM2/+aU8UlZpyTIgjXT9cN6c/L40C9vjZOOzp2DtAgpwRduVoSogfoEQwmcg0G2lUNBNDiOySX4/SvfVRaW78Cru50mOVMahu196UxqgfIiOM/I1AR+iVGau37KJLSWoFA4TQxZjuSx3uUu/sBDPrIHNcl5SRxm43VElYx5cgKEPBtzd/h/w6VlimywWkf3cPo0fULp4ZPzW0xT7i24HYLNxObw8gF4+ITyXLq4ppscV1U13mHgK3YOwwZYaLmP9o6weSHzLXY7eJDT4ze3hgmdzlETHPX/1nflhdYoJD4=",
+  "iters": 1000000,
+  "pub": "BE7I8wds0Ww83PfoxRpLLFMuytpEzqtHd6whnEUz88TivxMtXiScKGkjdbqxUMsfTS5lKyFTBx+sEGm8frg8N58="
+ },
+ "link": "3013 1679 7549 4454 3228",
+ "oldBackup": {
+  "user_id": "8a5d16ec-1050-40d2-8a7d-bcb75dc75bba",
+  "mode": "recovery",
+  "salt": "LxVk3IV27q3oNPGquYkGxQ==",
+  "iv": "EeepgmuuHBonh2L2",
+  "ct": "eZZOkH4IGkT+5yru1NhOsC5SLoPIXch21hzkvtYwNCSDADZInFnLV55LJPAKYox4wUhgiuI7sR/kGvPitSfBc8nIPoG8J+78viQmdxxT+mUQQJpqkzNGgPtUjNoDd9dLeihRoIAJdNUYepLehyJ+LZaEkvxg71i99jZEKqUc2DsFnZC6uj/fJnPIvknUWbFLKV0I7Z5eVSc36Z8GlBhsY/Nzv5XzBE/qtWkE1uibGzh9SdYqWlxegpDNSxcbwl3O0owOySNZmHzwBYP7PGhVNyhP8e4TrZFHVDF89SrrnwNLBkI=",
+  "iters": 600000,
+  "pub": "BE7I8wds0Ww83PfoxRpLLFMuytpEzqtHd6whnEUz88TivxMtXiScKGkjdbqxUMsfTS5lKyFTBx+sEGm8frg8N58="
+ }
+}

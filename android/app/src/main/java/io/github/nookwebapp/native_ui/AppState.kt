@@ -22,18 +22,25 @@ sealed interface Route {
     data object Notifs : Route
     data object Blocked : Route
     data object Hidden : Route
+    data object Banned : Route
+    data object Age : Route
+    // Zenith's own page, opened from the menu (his profile, as a first page)
+    data object Zen : Route
     data class Thread(val id: String) : Route
     data class Conv(val id: String) : Route
+    data class Dm(val id: String) : Route
+    data class User(val id: String) : Route
     data class Tag(val q: String) : Route
     data class ListPage(val id: String) : Route
-    data class Follows(val followers: Boolean) : Route
+    data class Follows(val id: String, val followers: Boolean) : Route
     data class Legal(val terms: Boolean) : Route
 }
 
-// one row of a sheet; cancel rows are drawn at the bottom as the bold Cancel button; keep rows leave the sheet open
+// one row of a sheet; cancel rows are drawn at the bottom as the bold Cancel button; keep rows leave the sheet open.
+// av puts a person's round picture in front instead of an icon, trail an icon at the end (the lock of a linked account)
 data class SheetItem(
     val label: String, val icon: String? = null, val danger: Boolean = false, val on: Boolean = false,
-    val cancel: Boolean = false, val left: Boolean = false, val keep: Boolean = false, val fn: () -> Unit = {},
+    val cancel: Boolean = false, val left: Boolean = false, val keep: Boolean = false, val av: Author? = null, val trail: String? = null, val fn: () -> Unit = {},
 )
 data class SheetSpec(val items: List<SheetItem>, val title: String? = null, val onDone: (() -> Unit)? = null)
 
@@ -44,39 +51,86 @@ sealed interface Panel {
     data class ListForm(val list: LList?, val after: ((LList) -> Unit)? = null) : Panel
     data class RenameChat(val chat: LChat) : Panel
     data class Crop(val src: String, val round: Boolean, val w: Int, val h: Int, val title: String, val done: (String?) -> Unit) : Panel
+    data object AddAccount : Panel
+    data object NewAccount : Panel
+    data class LinkedLogin(val x: SavedAcct) : Panel
+    data object NewPassword : Panel
+    data class Recover(val prefill: String) : Panel
+    data class RecoverCode(val prefill: String) : Panel
+    data object ChangePassword : Panel
+    data object ChangeEmail : Panel
+    data object TotpSetup : Panel
+    data object TotpOff : Panel
+    data object WaitApproval : Panel
+    data class RestoreKeys(val login: Boolean) : Panel
+    data class ApproveLink(val id: String, val pub: String) : Panel
+    data class BackupSetup(val changing: Boolean) : Panel
+    data object StartSaving : Panel
+    data class Nickname(val other: String, val name: String) : Panel
+    data object DeleteAccount : Panel
+    data object BanDownload : Panel
+    data object ZenEdit : Panel
+}
+
+// .sheet.warn: a notice that has to be read (a post taken down, posting paused, an email in a public post)
+class Warn(val title: String, val body: String, val mail: String? = null, val wait: Int = 0, val onDone: () -> Unit = {}) {
+    var extra by mutableStateOf("")
 }
 
 data class Toast(val msg: String, val label: String? = null, val fn: (() -> Unit)? = null, val n: Long = System.nanoTime())
-data class Viewer(val imgs: List<String>, val index: Int, val cap: String? = null, val del: ((Int) -> Unit)? = null)
+data class Viewer(val imgs: List<String>, val index: Int, val cap: String? = null, val del: (suspend (Int) -> Boolean)? = null)
 
 enum class Dir { Fwd, Back, Root }
 
 class AppState(val store: Store = Store(null), start: Route? = null) {
-    val stack = mutableStateListOf(start ?: if (store.signedIn || store.posts.isNotEmpty()) Route.Home else Route.Auth)
+    val stack = mutableStateListOf(start ?: if (store.signedIn) Route.Home else Route.Auth)
     var dir by mutableStateOf(Dir.Root)
     var sheet by mutableStateOf<SheetSpec?>(null)
     var drawer by mutableStateOf(false)
     val panels = mutableStateListOf<Panel>()
     var toast by mutableStateOf<Toast?>(null)
     var viewer by mutableStateOf<Viewer?>(null)
+    val warns = mutableStateListOf<Warn>()
+    // a post of Zenith opened from a chat
+    var zcard by mutableStateOf<ZPost?>(null)
     // the post that was just written slides in (.post.fresh)
     var fresh by mutableStateOf<String?>(null)
     var authUp by mutableStateOf(false)
+    // a line the sign in page shows once (the web app's nook-notice), and the email of a banned account for its download
+    var notice by mutableStateOf<String?>(null)
+    var banEmail by mutableStateOf("")
+    // posting is paused: the sheet that says so
+    var postLocked by mutableStateOf(false)
     // one prompt per start, like PH_NOW
     var ph: String = PH[(Math.random() * PH.size).toInt().coerceIn(0, PH.size - 1)]
     // what the phone does for the app (set by the activity): copy text, share or post a picture of a post, back up
     var clipboard: (String) -> Unit = {}
     var sharePicture: (LPost, Boolean) -> Unit = { _, _ -> }
+    var sharePictureTo: (LPost, (String) -> Unit) -> Unit = { _, _ -> }
     var backup: () -> Unit = {}
     var checkUpdate: (Boolean) -> Unit = {}
+    var askNotifs: () -> Unit = {}
+    var shareFile: (java.io.File, String) -> Unit = { _, _ -> }
+    var ctx: android.content.Context? = null
+    var foreground by mutableStateOf(true)
+    // bumped when notes or Zenith's chats changed from another phone, so the open pages draw again
+    var notesVersion by mutableIntStateOf(0)
+    var zenVersion by mutableIntStateOf(0)
+    // the answer of Zenith that is being typed out, per chat
+    val zenTyping = mutableStateMapOf<String, LMsg>()
     val settingsScroll = androidx.compose.foundation.ScrollState(0)
     // where each page on the stack was scrolled to, so going back lands on the same spot
     private val lists = mutableMapOf<Int, LazyListState>()
     fun listState(): LazyListState = lists.getOrPut(stack.size) { LazyListState() }
 
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    var dm by mutableStateOf(DmState())
+    val on = Online(this)
+
     val top: Route get() = stack.last()
     val rootRoute: Route get() = stack.first()
     val theme: ThemeMode get() = store.theme
+    val signedIn: Boolean get() = on.me != null
 
     // a post and one reply opened from it is as deep as it goes (MAX_OPEN_POSTS)
     fun go(r: Route) {
@@ -106,56 +160,95 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     fun confirm(msg: String, label: String, fn: () -> Unit) = open(listOf(SheetItem(label, danger = true, fn = fn), SheetItem("Cancel", cancel = true)), msg)
     fun say(msg: String, label: String? = null, fn: (() -> Unit)? = null) { toast = Toast(msg, label, fn) }
 
+    // alertMe(): a phone notification while the app is in the background, a toast while it is open
+    fun alert(title: String, body: String, open: String) {
+        val c = ctx
+        if (!foreground && c != null) Notify.show(c, title, body, open) else say("$title: $body")
+    }
+    // what the app does once somebody is signed in (set by the activity: notifications, the update check)
+    var onSignedIn: () -> Unit = {}
+
     // saving runs a moment after the last change, off the main thread, so many quick taps make one write
     private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var saveJob: Job? = null
     fun persist() {
         saveJob?.cancel()
-        saveJob = io.launch { delay(150); store.save() }
+        // the copy is taken on the main thread (where the state changes) and written on a background one
+        saveJob = scope.launch {
+            delay(150)
+            val snap = runCatching { store.toJson().toString() }.getOrNull() ?: return@launch
+            io.launch { store.filesDir?.let { d -> java.io.File(d, "state.json.tmp").apply { writeText(snap) }.renameTo(java.io.File(d, "state.json")) } }
+        }
+        if (on.me != null) { on.notesSoon(); on.zenSyncSoon() }
     }
 
-    // ---- what the web app's post functions do, on this phone only ----
+    // ---- what the web app's post functions do ----
     val s get() = store
+
+    fun canPost(): Boolean {
+        if (on.me != null && on.lockLeft() > 0) { postLocked = true; return false }
+        return true
+    }
 
     fun newPost(text: String, imgs: List<String>, parent: String?) {
         val p = LPost(uid(), text, System.currentTimeMillis(), imgs, parent)
         store.posts.add(p)
+        on.pushPost(p)
         if (parent == null) store.draft = null
         fresh = p.id
         persist()
         say(if (parent != null) "Reply sent" else "Posted")
     }
-    fun saveEdit(p: LPost, text: String, imgs: List<String>) { p.text = text; p.imgs = imgs; p.edited = true; persist(); say("Saved") }
+    // shown at once, and put back if the server refuses it
+    fun saveEdit(p: LPost, text: String, imgs: List<String>) {
+        val was = Triple(p.text, p.imgs, p.edited)
+        val origin = p.imgs
+        p.text = text; p.imgs = imgs; p.edited = true; persist(); say("Saved")
+        scope.launch { if (!on.syncEdit(p, text, origin, imgs)) { p.text = was.first; p.imgs = was.second; p.edited = was.third; persist() } }
+    }
 
-    fun toggleLike(p: LPost) { p.liked = !p.liked; persist() }
-    fun toggleRepost(p: LPost) { p.reposted = !p.reposted; p.rpAt = if (p.reposted) System.currentTimeMillis() else 0; persist() }
-    fun toggleSave(p: LPost) { p.saved = !p.saved; persist(); say(if (p.saved) "Saved" else "Removed from saved") }
+    fun toggleLike(p: LPost) { if (p.remote != null) on.toggleLike(p) else { p.liked = !p.liked; persist() } }
+    fun toggleRepost(p: LPost) { if (p.remote != null) on.toggleRepost(p) else { p.reposted = !p.reposted; p.rpAt = if (p.reposted) System.currentTimeMillis() else 0; persist() } }
+    fun toggleSave(p: LPost) { on.setSaved(p, !p.saved); persist(); say(if (p.saved) "Saved" else "Removed from saved") }
     fun togglePin(p: LPost) {
+        if (on.me != null) { on.togglePin(p); return }
         val was = p.pinned
         store.posts.forEach { it.pinned = false }
         p.pinned = !was
         persist(); say(if (p.pinned) "Pinned to your profile" else "Unpinned")
     }
 
-    // a post goes with all the replies under it; Undo puts everything back as it was, lists included
+    // a post goes with all the replies under it; Undo puts everything back as it was, lists included; the server copy
+    // goes six seconds later unless Undo was tapped
     fun deletePost(p: LPost) {
         if (store.posts.none { it.id == p.id }) return
         val gone = (listOf(p.id) + store.flat(p.id).map { it.first.id }).toSet()
         val removed = store.posts.filter { it.id in gone }
+        val rids = removed.filter { it.remote != null && it.mine }.map { it.remote!! }
+        store.pendDel.addAll(rids)
+        val zids = removed.filter { it.ai }.map { it.id }
+        if (zids.isNotEmpty()) store.zen.put("gone", org.json.JSONArray(((store.zen.optJSONArray("gone")?.strings() ?: emptyList()) + zids).takeLast(500)))
         val listSnap = store.lists.map { it to it.ids.toList() }
         store.posts.removeAll { it.id in gone }
         store.lists.forEach { l -> l.ids.removeAll { it in gone } }
         while (stack.size > 1 && (stack.last() as? Route.Thread)?.id in gone) pop()
         persist()
+        var undone = false
         say("Post deleted", "Undo") {
+            undone = true
             removed.forEach { x -> if (store.posts.none { it.id == x.id }) store.posts.add(x) }
+            store.pendDel.removeAll { it in rids }
+            if (zids.isNotEmpty()) store.zen.put("gone", org.json.JSONArray((store.zen.optJSONArray("gone")?.strings() ?: emptyList()).filter { it !in zids }))
             listSnap.forEach { (l, ids) -> if (l in store.lists) { l.ids.clear(); l.ids.addAll(ids) } }
             persist()
         }
+        scope.launch { delay(6000); if (!undone) { on.serverDelete(removed) } }
     }
 
-    // "less like this": the words go down a little and the post goes away now
+    // "less like this": the person goes down a lot, the words a little, and the post goes away now
     fun lessLikeThis(p: LPost) {
+        val who = whoOf(p)
+        if (who != "me") store.lessA[who] = minOf(2, (store.lessA[who] ?: 0) + 1)
         wordsOf(p.text).forEach { w -> store.lessWords[w] = minOf(3, (store.lessWords[w] ?: 0) + 1) }
         if (store.lessWords.size > 300) store.lessWords.entries.sortedBy { it.value }.take(store.lessWords.size - 300).forEach { store.lessWords.remove(it.key) }
         store.hidden.add(p.id); while (store.hidden.size > 300) store.hidden.removeAt(0)
@@ -176,6 +269,8 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
         } + SheetItem("New list", "plus") { panels.add(Panel.ListForm(null) { l -> l.ids.add(p.id); persist(); say("Added to " + l.name) }) }
         open(items, "Add to list")
     }
+
+    companion object { @Volatile var current: AppState? = null }
 }
 
 val LocalApp = staticCompositionLocalOf<AppState> { error("no app state") }

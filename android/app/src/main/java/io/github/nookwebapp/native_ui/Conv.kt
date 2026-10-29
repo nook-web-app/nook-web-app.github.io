@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -70,6 +71,8 @@ fun ConvScreen(id: String) {
             }
         }
     }) {
+        val typing = app.zenTyping[chat.id]
+        LaunchedEffect(typing?.text?.length) { if (typing != null) list.scrollToItem(chat.msgs.size - shownFrom + 2) }
         LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp), state = list, verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom), contentPadding = PaddingValues(vertical = 14.dp)) {
             if (chat.msgs.isEmpty()) item { Empty("smile", "Nothing here yet. Say something to yourself.", iconSize = 48.dp) }
             if (shownFrom > 0) item { Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) { Pill("Show earlier messages", Btn.Ghost) { shownFrom = maxOf(0, shownFrom - 80) } } }
@@ -81,9 +84,14 @@ fun ConvScreen(id: String) {
                     ))
                 }
             }
+            // his answer while it is still being typed out
+            if (typing != null) item(key = "zen-typing") {
+                if (typing.text.isEmpty()) Box(Modifier.fillMaxWidth()) { TypingBubble() } else Bubble(typing, false, {}) {}
+            }
         }
         // .cdock: the pending photos and the text box with its photo and send buttons
         Column(Modifier.fillMaxWidth().background(c.bg).lineAbove(c.line).navigationBarsPadding().padding(bottom = 10.dp)) {
+            if (zOn() && Regex("@\\w*$").containsMatchIn(text)) ZenPop { text = text.replace(Regex("@\\w*$"), "@zenith "); chat.draft = text; app.persist() }
             if (pend.isNotEmpty()) Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 pend.forEachIndexed { i, src ->
                     Box(Modifier.size(64.dp).clip(RoundedCornerShape(Rad.s))) {
@@ -103,27 +111,38 @@ fun ConvScreen(id: String) {
                 )
                 val can = text.isNotBlank() || pend.isNotEmpty()
                 Box(Modifier.size(42.dp).alpha(if (can) 1f else 0.45f).clip(CircleShape).background(c.fill).pressTap(CircleShape, enabled = can) {
-                    chat.msgs.add(LMsg(uid(), text.trim(), Clock.now(), pend.toList()))
+                    val m = LMsg(uid(), cleanText(text.trim()), Clock.now(), pend.toList())
+                    chat.msgs.add(m)
                     pend.clear(); text = ""; chat.draft = ""; app.persist()
+                    app.on.zAsk(chat, m)
                 }, contentAlignment = Alignment.Center) { NIcon("send", 20.dp, c.on) }
             }
         }
     }
 }
 
-// .mrow: my message on the right in an accent bubble (photos above it), and its time under it while it is open
+// .mrow: my message on the right in an accent bubble (photos above it), Zenith's on the left (.mrow.ai), and the time
+// under it while it is open
 @Composable
 private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onLong: () -> Unit) {
     val c = LocalNook.current
     val w = LocalConfiguration.current.screenWidthDp.dp - 32.dp
-    Column(Modifier.fillMaxWidth().pointerInput(m.id) { detectTapGestures(onTap = { onTap() }, onLongPress = { onLong() }) }, horizontalAlignment = Alignment.End) {
+    val left = m.ai
+    Column(Modifier.fillMaxWidth().pointerInput(m.id) { detectTapGestures(onTap = { onTap() }, onLongPress = { onLong() }) }, horizontalAlignment = if (left) Alignment.Start else Alignment.End) {
         if (m.imgs.isNotEmpty()) Box(Modifier.width(minOf(w * 0.82f, 320.dp)).clip(RoundedCornerShape(Rad.bubble))) { ImgGrid(m.imgs, whenText(m.t), framed = false) }
-        if (m.text.isNotEmpty()) Box(
-            Modifier.padding(top = if (m.imgs.isNotEmpty()) 4.dp else 0.dp).widthIn(max = w * 0.82f)
-                .clip(RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.xs, Rad.bubble)).background(c.accent).padding(horizontal = 14.dp, vertical = 9.dp),
-        ) { Tx(m.text, color = c.on, linkColor = Color.White, onTap = onTap, onLong = onLong) }
+        m.rpost?.let { Box(Modifier.padding(top = if (m.imgs.isNotEmpty()) 4.dp else 0.dp)) { RCard(it.id, it.u) } }
+        m.zpost?.let { Box(Modifier.padding(top = 4.dp)) { ZCard(it) } }
+        val url = firstUrl(m.text)
+        if (url != null) Box(Modifier.padding(top = if (m.imgs.isNotEmpty() || m.rpost != null) 4.dp else 0.dp)) { LinkCard(url, chat = true) }
+        if (m.text.isNotEmpty()) {
+            val shape = if (left) RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.bubble, Rad.xs) else RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.xs, Rad.bubble)
+            Box(
+                Modifier.padding(top = if (m.imgs.isNotEmpty() || url != null || m.rpost != null) 4.dp else 0.dp).widthIn(max = w * 0.82f)
+                    .clip(shape).background(if (left) c.bg2 else c.accent).then(if (left) Modifier.border(1.dp, c.line, shape) else Modifier).padding(horizontal = 14.dp, vertical = 9.dp),
+            ) { Tx(m.text, color = if (left) c.fg else c.on, linkColor = if (left) null else Color.White, onTap = onTap, onLong = onLong) }
+        }
         AnimatedVisibility(open, enter = expandVertically(tween(240)) + fadeIn(tween(200)), exit = shrinkVertically(tween(240)) + fadeOut(tween(200))) {
-            T(whenText(m.t), Fs.xs, color = c.muted, align = TextAlign.End, modifier = Modifier.fillMaxWidth().padding(top = 4.dp, end = 2.dp))
+            T(whenText(m.t), Fs.xs, color = c.muted, align = if (left) TextAlign.Start else TextAlign.End, modifier = Modifier.fillMaxWidth().padding(top = 4.dp, end = 2.dp, start = 2.dp))
         }
     }
 }

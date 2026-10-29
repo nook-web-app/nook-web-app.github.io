@@ -147,18 +147,27 @@ private fun Ab(icon: String, n: Int, on: Boolean, onColor: Color, big: Boolean, 
 
 // .acts: reply, repost, like, save, share, more. The first three share the room (at most 84dp each) and the
 // last three sit at the right, like margin-left:auto on the fourth does; in a thread they are spread out evenly.
-// A post on this phone only counts its replies (the like, repost and save numbers come from the server).
+// nc: inside an opened reply the list is flat and the numbers would only count down the chain, so the reply icon shows alone
 @Composable
 fun Acts(p: LPost, big: Boolean = false, nc: Boolean = false) {
     val app = LocalApp.current
     val c = LocalNook.current
-    val n = if (nc) 0 else app.store.replyTotal(p.id)
-    val items: List<@Composable (Modifier) -> Unit> = listOf(
-        { m -> Ab("reply", n, false, c.accent, big, false, m) { app.panels.add(Panel.Compose(parent = p.id)) } },
-        { m -> Ab("repost", 0, p.reposted, c.good, big, false, m) { app.toggleRepost(p) } },
-        { m -> Ab("heart", 0, p.liked, c.like, big, true, m) { app.toggleLike(p) } },
-        { m -> Ab("bookmark", 0, p.saved, c.accent, big, true, m) { app.toggleSave(p) } },
-        { m -> Ab("share", 0, false, c.accent, big, false, m) { shareSheet(app, p) } },
+    val n = if (nc) 0 else maxOf(if (p.ra != null) p.rp else 0, app.store.replyTotal(p.id))
+    val reply = { if (app.canPost()) app.panels.add(Panel.Compose(parent = p.id)) }
+    val save = { app.toggleSave(p) }
+    val items: List<@Composable (Modifier) -> Unit> = if (p.ra != null) listOf(
+        { m -> Ab("reply", n, false, c.accent, big, false, m, reply) },
+        { m -> Ab("repost", p.rpc, p.reposted, c.good, big, false, m) { app.on.toggleRepost(p) } },
+        { m -> Ab("heart", p.lc, p.liked, c.like, big, true, m) { app.on.toggleLike(p) } },
+        { m -> Ab("bookmark", p.svc, p.saved, c.accent, big, true, m, save) },
+        { m -> Ab("share", p.shc, false, c.accent, big, false, m) { app.on.sharePost(p) } },
+        { m -> Ab("dots", 0, false, c.accent, big, false, m) { otherSheet(app, p) } },
+    ) else listOf(
+        { m -> Ab("reply", n, false, c.accent, big, false, m, reply) },
+        { m -> Ab("repost", if (p.ai) 0 else p.rpc, p.reposted, c.good, big, false, m) { app.toggleRepost(p) } },
+        { m -> Ab("heart", if (p.ai) (if (p.zenLike) 1 else 0) else p.lc, p.liked, c.like, big, true, m) { app.toggleLike(p) } },
+        { m -> Ab("bookmark", p.svc, p.saved, c.accent, big, true, m, save) },
+        { m -> Ab("share", p.shc, false, c.accent, big, false, m) { app.on.sharePost(p) } },
         { m -> Ab("dots", 0, false, c.accent, big, false, m) { postSheet(app, p) } },
     )
     if (big) {
@@ -175,6 +184,16 @@ fun Acts(p: LPost, big: Boolean = false, nc: Boolean = false) {
             items.drop(3).forEach { it(Modifier) }
         }
     }
+}
+
+// the more sheet of somebody else's post: copy, not interested, and report (the owner deletes Zenith's posts instead)
+fun otherSheet(app: AppState, p: LPost) {
+    app.open(listOfNotNull(
+        if (p.text.isNotEmpty()) SheetItem("Copy post text", "copy") { app.clipboard(p.text) } else null,
+        SheetItem("Not interested", "eyeoff", danger = true) { app.lessLikeThis(p) },
+        if (app.on.zenithOfOwner(p)) SheetItem("Delete post", "trash", danger = true) { app.confirm("Delete this post of Zenith and its replies?", "Delete") { app.on.deleteZenithPost(p) } }
+        else SheetItem("Report post", "flag", danger = true) { app.on.reportPost(p) },
+    ))
 }
 
 // .imgs: one photo at its own shape (at most min(460dp, 60% of the screen) tall), two side by side, three with the first
@@ -228,10 +247,11 @@ private fun Modifier.freshIn(on: Boolean): Modifier {
 fun PostCard(p: LPost, lab: String? = null, pin: Boolean = false, replyTo: Boolean = false, rep: Boolean = false, d: Int = 0, line: Boolean = false, compact: Boolean = false, nc: Boolean = false) {
     val app = LocalApp.current
     val c = LocalNook.current
-    val pr = app.store.profile
     val isFresh = app.fresh == p.id
     LaunchedEffect(isFresh) { if (isFresh) { kotlinx.coroutines.delay(700); app.fresh = null } }
     val open = { app.go(Route.Thread(p.id)) }
+    // only one's own posts open their sheet with a hold
+    val hold: (() -> Unit)? = if (p.ra == null) ({ postSheet(app, p) }) else null
     Row(
         Modifier.fillMaxWidth().freshIn(isFresh).probe("post:" + p.id).then(if (line) Modifier else Modifier.lineBelow(c.line))
             // .post.line .avc::after: a 2dp line from 4dp under the avatar down to the next post of the thread
@@ -240,21 +260,23 @@ fun PostCard(p: LPost, lab: String? = null, pin: Boolean = false, replyTo: Boole
                 drawRoundRect(c.line, Offset(x, 56.dp.toPx()), androidx.compose.ui.geometry.Size(2.dp.toPx(), size.height - 56.dp.toPx()), androidx.compose.ui.geometry.CornerRadius(1.dp.toPx()))
             })
             .padding(start = (if (rep) (14 * minOf(d, 3)) else 0).dp)
-            .combinedTap(onClick = open, onLong = { postSheet(app, p) })
+            .combinedTap(onClick = open, onLong = { hold?.invoke() })
             .padding(start = 16.dp, end = 16.dp).vpad(12.dp, 2.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        MyAvatar(40.dp, modifier = Modifier.probe("av:" + p.id))
+        PostAv(p, 40.dp, Modifier.probe("av:" + p.id).then(when { p.ra != null -> Modifier.tap { app.go(Route.User(p.ra.id)) }; else -> Modifier }))
         Column(Modifier.weight(1f)) {
             if (lab != null || (pin && p.pinned)) Row(Modifier.padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 NIcon(if (lab != null) "repost" else "pin", 14.dp, c.muted); T(lab ?: "Pinned post", Fs.sm, color = c.muted)
             }
-            PostHead(pr.name, "@" + pr.handle, ago(p.t), p.id)
+            PostHead(nameOf(app, p), handleOf(app, p), ago(p.t), p.id)
             if (replyTo && p.parent != null) Row(Modifier.padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                NIcon("reply", 14.dp, c.muted); T("Replying to " + if (app.store.byId(p.parent) == null) "a post" else "@" + pr.handle, Fs.sm, color = c.muted)
+                val par = app.store.byId(p.parent)
+                NIcon("reply", 14.dp, c.muted); T("Replying to " + if (par == null) "a post" else handleOf(app, par), Fs.sm, color = c.muted)
             }
-            if (p.text.isNotEmpty()) Tx(p.text, modifier = Modifier.probe("text:" + p.id), onTap = open, onLong = { postSheet(app, p) })
-            if (p.imgs.isNotEmpty()) ImgGrid(p.imgs)
+            val txt = cardless(p)
+            if (txt.isNotEmpty()) Tx(txt, modifier = Modifier.probe("text:" + p.id), onTap = open, onLong = hold)
+            if (p.imgs.isNotEmpty()) ImgGrid(p.imgs) else firstUrl(p.text)?.let { LinkCard(it) }
             if (!compact) Acts(p, nc = nc)
         }
     }
@@ -293,15 +315,15 @@ fun Modifier.combinedTap(onClick: () -> Unit, onLong: () -> Unit) = this.pointer
 fun MainPost(p: LPost) {
     val app = LocalApp.current
     val c = LocalNook.current
-    val pr = app.store.profile
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 12.dp)) {
         if (p.pinned) Row(Modifier.padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) { NIcon("pin", 14.dp, c.muted); T("Pinned post", Fs.sm, color = c.muted) }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            MyAvatar(48.dp)
-            Column { T(pr.name, weight = FontWeight.Bold); T("@" + pr.handle, color = c.muted) }
+            PostAv(p, 48.dp, when { p.ai -> Modifier.tap { app.go(Route.Zen) }; p.ra != null -> Modifier.tap { app.go(Route.User(p.ra.id)) }; else -> Modifier })
+            Column { T(nameOf(app, p), weight = FontWeight.Bold); T(handleOf(app, p), color = c.muted) }
         }
-        if (p.text.isNotEmpty()) Tx(p.text, big = true, modifier = Modifier.padding(top = 12.dp))
-        if (p.imgs.isNotEmpty()) ImgGrid(p.imgs, whenText(p.t))
+        val txt = cardless(p)
+        if (txt.isNotEmpty()) Tx(txt, big = true, modifier = Modifier.padding(top = 12.dp))
+        if (p.imgs.isNotEmpty()) ImgGrid(p.imgs, whenText(p.t)) else firstUrl(p.text)?.let { LinkCard(it) }
         T(whenText(p.t) + if (p.edited) " · edited" else "", Fs.md, color = c.muted, modifier = Modifier.padding(top = 12.dp, bottom = 12.dp))
     }
     if (p.saved) Row(Modifier.padding(horizontal = 16.dp).padding(bottom = 12.dp)) { T("1", Fs.md, FontWeight.Bold); T(" save", Fs.md, color = c.muted) }
@@ -316,9 +338,9 @@ fun ComposerRow() {
     val c = LocalNook.current
     Row(Modifier.fillMaxWidth().lineBelow(c.line).padding(horizontal = 16.dp).vpad(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         MyAvatar(40.dp)
-        Box(Modifier.weight(1f).tap { app.panels.add(Panel.Compose()) }.vpad(8.dp)) { T(app.ph, Fs.lg, color = c.muted, maxLines = 1) }
-        IB("camera", box = 36.dp, height = 44.dp) { app.panels.add(Panel.Compose(pick = "camera")) }
-        IB("image", box = 36.dp, height = 44.dp) { app.panels.add(Panel.Compose(pick = "image")) }
+        Box(Modifier.weight(1f).tap { if (app.canPost()) app.panels.add(Panel.Compose()) }.vpad(8.dp)) { T(app.ph, Fs.lg, color = c.muted, maxLines = 1) }
+        IB("camera", box = 36.dp, height = 44.dp) { if (app.canPost()) app.panels.add(Panel.Compose(pick = "camera")) }
+        IB("image", box = 36.dp, height = 44.dp) { if (app.canPost()) app.panels.add(Panel.Compose(pick = "image")) }
     }
 }
 
@@ -337,19 +359,5 @@ fun postSheet(app: AppState, p: LPost) {
     ))
 }
 
-// Share post: as a new post (a picture of it), into a notes chat, or to another app as a picture
-fun shareSheet(app: AppState, p: LPost) {
-    val targets = app.store.chats.toList()
-    app.open(listOfNotNull(
-        SheetItem("Post", "edit") { app.say("Making picture..."); app.sharePicture(p, true) },
-        if (targets.isNotEmpty()) SheetItem("Message", "chat") {
-            app.open(targets.map { t ->
-                SheetItem(t.name + " (notes)", "edit") {
-                    t.msgs.add(LMsg(uid(), p.text, Clock.now(), p.imgs)); app.persist(); app.say("Saved in " + t.name)
-                }
-            } + SheetItem("Cancel", cancel = true), "Send to")
-        } else null,
-        SheetItem("Another app", "share") { app.say("Making picture..."); app.sharePicture(p, false) },
-        SheetItem("Cancel", cancel = true),
-    ), "Share post")
-}
+// Share post (sharePost in Dm.kt): as a new post (a picture of it), to a person or into notes, or to another app
+fun shareSheet(app: AppState, p: LPost) = app.on.sharePost(p)

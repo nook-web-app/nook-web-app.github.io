@@ -91,15 +91,17 @@ fun SheetHost(app: AppState) {
 private fun SheetRow(i: SheetItem, onClick: () -> Unit) {
     val c = LocalNook.current
     val col = if (i.danger) c.danger else c.fg
-    val plain = i.icon == null && !i.left
+    val plain = i.icon == null && i.av == null && !i.left
     val shape = RoundedCornerShape(Rad.m)
     Row(
         Modifier.fillMaxWidth().pressBg(shape, on = i.on && !i.left, onClick = onClick)
             .padding(horizontal = if (i.left) 16.dp else 14.dp).vpad(if (plain) 15.dp else if (i.left) 14.dp else 12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = if (plain) Arrangement.Center else Arrangement.spacedBy(14.dp),
     ) {
-        if (i.icon != null) Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { NIcon(i.icon, 20.dp, if (i.danger) c.danger else c.accent) }
+        if (i.av != null) Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { AuthorAv(i.av, 32.dp) }
+        else if (i.icon != null) Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { NIcon(i.icon, 20.dp, if (i.danger) c.danger else c.accent) }
         T(i.label, Fs.lg, if (i.on) FontWeight.Bold else if (plain) FontWeight.SemiBold else FontWeight.Medium, col)
+        if (i.trail != null) { Spacer(Modifier.weight(1f)); NIcon(i.trail, 18.dp, c.muted) }
         if (i.keep && i.on) { Spacer(Modifier.weight(1f)); NIcon("check", 18.dp, c.accent) }
     }
 }
@@ -121,6 +123,10 @@ fun DrawerHost(app: AppState) {
             T(pr.name.ifEmpty { "@" + pr.handle }, Fs.x2, FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
             T("@" + pr.handle, color = c.muted)
             Spacer(Modifier.height(18.dp))
+            // Zenith sits first for the owner
+            if (zOn() && app.rootRoute != Route.Zen) Row(Modifier.fillMaxWidth().tap { app.drawer = false; scope.launch { delay(170); app.root(Route.Zen) } }.vpad(13.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                ZenAv(28.dp); T("Zenith", Fs.x2)
+            }
             // the page that is already open is left out of the menu
             listOf(Triple("search", "Search", Route.Search), Triple("list", "Lists", Route.Lists), Triple("sliders", "Settings", Route.Settings))
                 .filter { it.third != app.rootRoute }.forEach { (i, l, r) -> DrawerItem(app, i, l, r) }
@@ -190,6 +196,25 @@ fun PanelHost(app: AppState) {
                         is Panel.ListForm -> ListFormPanel(app, p)
                         is Panel.RenameChat -> RenamePanel(app, p)
                         is Panel.Crop -> CropPanel(app, p)
+                        Panel.AddAccount -> AddAccountPanel(app, p)
+                        Panel.NewAccount -> NewAccountPanel(app, p)
+                        is Panel.LinkedLogin -> LinkedLoginPanel(app, p)
+                        Panel.NewPassword -> NewPasswordPanel(app, p)
+                        is Panel.Recover -> RecoverPanel(app, p)
+                        is Panel.RecoverCode -> RecoverCodePanel(app, p)
+                        Panel.ChangePassword -> ChangePasswordPanel(app, p)
+                        Panel.ChangeEmail -> ChangeEmailPanel(app, p)
+                        Panel.TotpSetup -> TotpSetupPanel(app, p)
+                        Panel.TotpOff -> TotpOffPanel(app, p)
+                        Panel.WaitApproval -> WaitApprovalPanel(app, p)
+                        is Panel.RestoreKeys -> RestoreKeysPanel(app, p)
+                        is Panel.ApproveLink -> ApproveLinkPanel(app, p)
+                        is Panel.BackupSetup -> BackupSetupPanel(app, p)
+                        Panel.StartSaving -> StartSavingPanel(app, p)
+                        is Panel.Nickname -> NicknamePanel(app, p)
+                        Panel.DeleteAccount -> DeleteAccountPanel(app, p)
+                        Panel.BanDownload -> BanDownloadPanel(app, p)
+                        Panel.ZenEdit -> ZenEditPanel(app, p)
                     }
                 }
             }
@@ -273,6 +298,11 @@ fun ViewerHost(app: AppState) {
             Box(Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(12.dp).size(44.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.14f)).pressTap(CircleShape) { app.viewer = null }, contentAlignment = Alignment.Center) {
                 NIcon("close", 22.dp, Color.White)
             }
+            // a photo of one's own message can be deleted from the viewer
+            val del = v.del
+            if (del != null) Box(Modifier.align(Alignment.TopStart).statusBarsPadding().padding(12.dp).size(44.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.14f)).pressTap(CircleShape) {
+                app.confirm("Delete this photo?", "Delete") { app.scope.launch { if (del(pager.currentPage)) app.viewer = null } }
+            }, contentAlignment = Alignment.Center) { NIcon("trash", 22.dp, Color.White) }
             if (v.cap != null) T(v.cap, Fs.sm, color = Color.White.copy(alpha = 0.8f), align = TextAlign.Center, modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(bottom = 18.dp))
         }
     }
@@ -282,4 +312,54 @@ fun ViewerHost(app: AppState) {
 @Composable
 fun PickBtn(modifier: Modifier, icon: Dp = 18.dp, onClick: () -> Unit) {
     Box(modifier.size(32.dp).clip(CircleShape).background(Color(0xA6000000)).tap(CircleShape, onClick = onClick), contentAlignment = Alignment.Center) { NIcon("camera", icon, Color.White) }
+}
+
+// .sheet.warn: a notice that has to be read; the button may wait a few seconds before it can be pressed
+@Composable
+fun WarnHost(app: AppState) {
+    val c = LocalNook.current
+    val w = app.warns.firstOrNull()
+    var shown by remember { mutableStateOf<Warn?>(null) }
+    if (w != null) shown = w
+    Scrim(w != null) {}
+    Box(Modifier.fillMaxSize().navigationBarsPadding(), contentAlignment = Alignment.BottomCenter) {
+        AnimatedVisibility(w != null, enter = slideInVertically(tween(220, easing = Snappy)) { it }, exit = slideOutVertically(tween(160)) { it }) {
+            val x = shown ?: return@AnimatedVisibility
+            var left by remember(x) { mutableIntStateOf(x.wait) }
+            LaunchedEffect(x) { while (left > 0) { delay(1000); left-- } }
+            Column(
+                Modifier.padding(8.dp).widthIn(max = 584.dp).fillMaxWidth().clip(RoundedCornerShape(Rad.sheet)).background(c.bg).border(1.dp, c.line, RoundedCornerShape(Rad.sheet))
+                    .clickable(remember { MutableInteractionSource() }, null) {}.padding(start = 18.dp, end = 18.dp, bottom = 18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Box(Modifier.fillMaxWidth().vpad(10.dp, 2.dp), contentAlignment = Alignment.Center) { Box(Modifier.size(38.dp, 4.dp).clip(RoundedCornerShape(Rad.xs)).background(c.line)) }
+                T(x.title, Fs.x2, FontWeight.Bold, align = TextAlign.Center)
+                T(x.body, Fs.md, color = c.muted, align = TextAlign.Center, lineHeight = (14 * 1.5).sp)
+                if (x.mail != null) T(x.mail, Fs.md, FontWeight.Bold, align = TextAlign.Center)
+                if (x.extra.isNotEmpty()) T(x.extra, Fs.md, color = c.muted, align = TextAlign.Center)
+                Pill(if (left > 0) "I understand ($left)" else "I understand", Btn.Pri, enabled = left <= 0, modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) { app.warns.remove(x); x.onDone() }
+                if (x.mail != null) Pill("Change my email", Btn.Ghost, enabled = left <= 5, modifier = Modifier.fillMaxWidth()) { app.panels.add(Panel.ChangeEmail) }
+            }
+        }
+    }
+}
+
+// postLockedSheet(): posting is paused after posts were taken down
+@Composable
+fun PostLockedHost(app: AppState) {
+    LaunchedEffect(app.postLocked) {
+        if (app.postLocked) {
+            app.postLocked = false
+            app.warns.add(Warn("Posting is paused", "Some of your posts were removed for breaking the rules. You can post again in " + lockText(app.on.lockLeft()) + ". More removed posts mean a longer pause and then a ban."))
+        }
+    }
+}
+
+// viewZPost(): a post of Zenith from a chat, opened big
+@Composable
+fun ZCardHost(app: AppState) {
+    val z = app.zcard ?: return
+    Box(Modifier.fillMaxSize().background(LocalNook.current.bg).statusBarsPadding().navigationBarsPadding()) {
+        Modal("Post", "Close", top = true, onCancel = { app.zcard = null }, onAction = { app.zcard = null }) { ZCard(z, big = true) }
+    }
 }

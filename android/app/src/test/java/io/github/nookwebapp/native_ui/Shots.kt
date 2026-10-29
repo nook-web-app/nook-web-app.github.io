@@ -27,6 +27,14 @@ class Shots {
         paparazzi.snapshot(name) { NookApp(app) }
     }
     private fun AppState.post(i: Int) = store.posts[i]
+    // posts of other people the way the feed brings them in (ra), with counts and a repost by somebody followed
+    private fun others(app: AppState) {
+        val a = Author("00000000-0000-4000-8000-0000000000b1", "Mika", "mika.k", null)
+        app.store.posts.add(LPost("r00000000-0000-4000-8000-0000000000a1", "the moon looks unreal tonight, go outside https://example.com/moon", Sample.NOW - 5 * 60000, emptyList(), null, remote = "00000000-0000-4000-8000-0000000000a1", ra = a).apply { lc = 3; rpc = 1; svc = 2; shc = 1; rp = 1; liked = true })
+        app.store.posts.add(LPost("r00000000-0000-4000-8000-0000000000a2", "replying :3", Sample.NOW - 4 * 60000, emptyList(), "r00000000-0000-4000-8000-0000000000a1", remote = "00000000-0000-4000-8000-0000000000a2", ra = Author("00000000-0000-4000-8000-0000000000b2", "", "zed", null)))
+        app.store.posts.add(LPost("r00000000-0000-4000-8000-0000000000a3", "reposted by mika", Sample.NOW - 600 * 60000, emptyList(), null, remote = "00000000-0000-4000-8000-0000000000a3", ra = Author("00000000-0000-4000-8000-0000000000b3", "Rae", "rae", null)).apply { rpBy = RpBy(a.id, "Mika", Sample.NOW - 2 * 60000) })
+        app.store.previews["https://example.com/moon"] = org.json.JSONObject().put("t", "The moon tonight").put("d", "A full moon over the city").put("i", "").put("s", "example.com").put("v", 2)
+    }
 
     @Test fun pages() {
         shot("00-auth", start = Route.Auth)
@@ -47,12 +55,20 @@ class Shots {
         shot("29-lists") { root(Route.Lists) }
         shot("30-search") { root(Route.Search) }
         shot("32-confirm") { confirm("Delete this post?", "Delete") {} }
-        shot("34-followers") { root(Route.Profile); go(Route.Follows(true)) }
+        shot("34-followers") { root(Route.Profile); go(Route.Follows("me", true)) }
         shot("35-blocked") { root(Route.Settings); go(Route.Blocked) }
         shot("36-list-form") { root(Route.Lists); panels.add(Panel.ListForm(null)) }
         shot("37-conv") { root(Route.Chats); newChat() }
         shot("38-terms") { root(Route.Settings); go(Route.Legal(true)) }
         shot("39-reply") { panels.add(Panel.Compose(parent = post(0).id)) }
+        shot("40-feed-others") { others(this) }
+        shot("41-thread-other") { others(this); go(Route.Thread("r00000000-0000-4000-8000-0000000000a1")) }
+        shot("42-other-sheet") { others(this); otherSheet(this, store.byId("r00000000-0000-4000-8000-0000000000a1")!!) }
+        shot("43-warn") { warns.add(Warn("Post removed", "Reason: text that is not allowed.")) }
+        shot("44-banned", start = Route.Banned)
+        shot("45-age", start = Route.Age)
+        shot("46-add-account") { root(Route.Settings); panels.add(Panel.AddAccount) }
+        shot("47-totp") { root(Route.Settings); panels.add(Panel.TotpSetup) }
         shot("55-light-home", dark = false)
         shot("56-light-drawer", dark = false) { drawer = true }
         shot("58-light-settings", dark = false) { root(Route.Settings) }

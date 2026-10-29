@@ -20,7 +20,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
 // The whole app: the page on top of the stack, the bottom bar, and the layers over them in the web app's order
-// (panels, the menu, the photo viewer, sheets, the toast).
+// (panels, the menu, the photo viewer, sheets, notices, the toast).
 @Composable
 fun NookApp(app: AppState) {
     NookTheme(app.theme) {
@@ -33,7 +33,15 @@ fun NookApp(app: AppState) {
                 else androidx.activity.SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
                 activity?.enableEdgeToEdge(bars, bars)
             }
-            BackHandler(app.viewer != null || app.sheet != null || app.drawer || app.panels.isNotEmpty() || app.stack.size > 1) { app.back() }
+            // screenshots and screen recordings are blocked in chats with people, in the chat list and in Zenith's chats;
+            // notes to self stay free to capture
+            val top = app.top
+            val secure = top is Route.Dm || top == Route.Chats || top == Route.Hidden || (top is Route.Conv && app.store.chats.firstOrNull { it.id == top.id }?.isNotes == false)
+            LaunchedEffect(secure) {
+                val w = activity?.window ?: return@LaunchedEffect
+                if (secure) w.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE) else w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+            }
+            BackHandler(app.viewer != null || app.sheet != null || app.drawer || app.panels.isNotEmpty() || app.stack.size > 1 || app.zcard != null) { if (app.zcard != null) app.zcard = null else app.back() }
             Box(Modifier.fillMaxSize().background(c.bg)) {
                 Column(Modifier.fillMaxSize().statusBarsPadding().imePadding()) {
                     val slide = with(LocalDensity.current) { 14.dp.roundToPx() }
@@ -48,14 +56,16 @@ fun NookApp(app: AppState) {
                             }
                         },
                     ) { (r, _) -> PageFor(r) }
-                    val top = app.top
-                    // the bottom bar goes away on the sign in page, inside a chat, and on the legal pages before signing in
-                    if (top != Route.Auth && top !is Route.Conv && !(top is Route.Legal && !app.store.signedIn)) NavBar(app)
+                    // the bottom bar goes away on the sign in, banned and age pages, inside a chat, and on the legal pages before signing in
+                    if (top != Route.Auth && top != Route.Banned && top != Route.Age && top !is Route.Conv && top !is Route.Dm && !(top is Route.Legal && !app.signedIn)) NavBar(app)
                 }
                 PanelHost(app)
                 DrawerHost(app)
+                ZCardHost(app)
                 ViewerHost(app)
                 SheetHost(app)
+                WarnHost(app)
+                PostLockedHost(app)
                 ToastHost(app)
             }
         }
@@ -75,30 +85,39 @@ private fun PageFor(r: Route) = when (r) {
     Route.Notifs -> NotifsScreen()
     Route.Blocked -> BlockedScreen()
     Route.Hidden -> HiddenScreen()
+    Route.Banned -> BannedScreen()
+    Route.Age -> AgeScreen()
+    Route.Zen -> ZenScreen()
     is Route.Thread -> ThreadScreen(r.id)
     is Route.Conv -> ConvScreen(r.id)
+    is Route.Dm -> DmScreen(r.id)
+    is Route.User -> UserScreen(r.id)
     is Route.Tag -> TagScreen(r.q)
     is Route.ListPage -> ListScreen(r.id)
     is Route.Follows -> FollowsScreen(r)
     is Route.Legal -> LegalScreen(r.terms)
 }
 
-// #nav: home, chats, saved, and the own picture for the profile; the page the stack started from is lit, and a tap on
-// the lit one at its top scrolls back up
+// #nav: home, chats (with the number of people who wrote), saved, and the own picture for the profile; the page the stack
+// started from is lit, a tap on the lit one at its top scrolls back up, and two quick taps on the picture switch accounts
 @Composable
 private fun NavBar(app: AppState) {
     val c = LocalNook.current
     val first = app.rootRoute
     val scope = rememberCoroutineScope()
+    var lastProfileTap by remember { mutableLongStateOf(0L) }
     Row(Modifier.fillMaxWidth().background(c.bg).lineAbove(c.line).navigationBarsPadding().height(54.dp)) {
         listOf(Route.Home to "home", Route.Chats to "chat", Route.Saved to "bookmark", Route.Profile to "user").forEach { (r, icon) ->
             val on = first == r
             Box(Modifier.weight(1f).fillMaxHeight().pressTap {
+                if (r == Route.Profile && System.currentTimeMillis() - lastProfileTap < 350) { lastProfileTap = 0; app.on.quickSwitch(); return@pressTap }
+                if (r == Route.Profile) lastProfileTap = System.currentTimeMillis()
                 if (on && app.stack.size == 1) scope.launch { app.listState().animateScrollToItem(0) } else app.root(r)
             }, contentAlignment = Alignment.Center) {
                 // the lit picture gets a 2dp ring outside it (box-shadow: 0 0 0 2px)
                 if (r == Route.Profile) Box(Modifier.size(32.dp).then(if (on) Modifier.border(2.dp, c.fg, CircleShape) else Modifier), contentAlignment = Alignment.Center) { MyAvatar(28.dp) }
                 else NIcon(icon, 26.dp, if (on) c.fg else c.muted, fill = on)
+                if (r == Route.Chats && app.on.unreadPeople > 0) Badge(app.on.unreadPeople, Modifier.align(Alignment.TopCenter).padding(top = 4.dp).offset(x = 16.dp))
             }
         }
     }

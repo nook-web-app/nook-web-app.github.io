@@ -74,9 +74,12 @@ fun ComposePanel(app: AppState, o: Panel.Compose) {
         if (dirty) app.open(listOf(SheetItem("Discard", danger = true) { s.draft = null; app.persist(); app.closePanel(o) }, SheetItem("Keep editing", cancel = true)), "Discard this post?")
         else app.closePanel(o)
     }, onAction = {
-        val t = text.trim()
-        if (ed != null) app.saveEdit(ed, t, imgs.toList()) else app.newPost(t, imgs.toList(), parent?.id)
-        app.closePanel(o)
+        val t = cleanText(text.trim())
+        if (bannedHit(t) != null) app.say("That post has a banned word")
+        else {
+            if (ed != null) app.saveEdit(ed, t, imgs.toList()) else app.newPost(t, imgs.toList(), parent?.id)
+            app.closePanel(o)
+        }
     }, foot = {
         // .cfoot: the camera and gallery buttons in the accent color, dimmed once four photos are in
         Row(Modifier.fillMaxWidth().lineAbove(c.line).padding(horizontal = 16.dp).vpad(6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -85,7 +88,7 @@ fun ComposePanel(app: AppState, o: Panel.Compose) {
         }
     }) {
         if (parent != null) Row(Modifier.fillMaxWidth().padding(bottom = 12.dp).clip(RoundedCornerShape(Rad.m)).border(1.dp, c.line, RoundedCornerShape(Rad.m)).padding(horizontal = 12.dp, vertical = 10.dp)) {
-            T(s.profile.name.ifEmpty { "@" + s.profile.handle }, Fs.md, FontWeight.Bold)
+            T(if (parent.ai) "Zenith" else parent.ra?.let { it.name.ifEmpty { "@" + it.handle } } ?: s.profile.name.ifEmpty { "@" + s.profile.handle }, Fs.md, FontWeight.Bold)
             T(" " + if (parent.text.isNotEmpty()) parent.text.take(140) else "Photo post", Fs.md, color = c.muted)
         }
         // .crow: the avatar and the text box (17px, at least 130dp tall)
@@ -122,6 +125,8 @@ fun EditProfilePanel(app: AppState, me: Panel) {
     var name by remember { mutableStateOf(pr.name) }
     var handle by remember { mutableStateOf(pr.handle) }
     var bio by remember { mutableStateOf(pr.bio) }
+    var saving by remember { mutableStateOf(false) }
+    val lockDays = pr.handleChangedAt?.let { val t = parseIso(it) + 7 * 86_400_000 - System.currentTimeMillis(); if (t > 0) Math.ceil(t / 86_400_000.0).toInt() else 0 } ?: 0
     val crop: (Boolean, Int, Int, String, (String) -> Unit) -> (List<String>) -> Unit = { round, w, h, title, set ->
         { got -> got.firstOrNull()?.let { src -> if (src.endsWith(".gif")) set(src) else app.panels.add(Panel.Crop(src, round, w, h, title) { out -> if (out != null) set(out) }) }; Unit }
     }
@@ -132,16 +137,11 @@ fun EditProfilePanel(app: AppState, me: Panel) {
         if (dirty) app.open(listOf(SheetItem("Discard changes", danger = true) { app.closePanel(me) }, SheetItem("Keep editing", cancel = true)), "Discard your changes?")
         else app.closePanel(me)
     }, onAction = {
-        val nh = handle.trim().lowercase()
-        when {
-            nh != pr.handle && nh.isEmpty() -> app.say("Your handle can not be empty")
-            nh != pr.handle && !Regex("^[a-z0-9._]{1,15}$").matches(nh) -> app.say("Handle: letters, numbers, dots or underscores, up to 15")
-            else -> {
-                pr.handle = nh; pr.name = name.trim().take(15); pr.bio = bio; pr.avatar = avatar; pr.banner = banner; pr.bannerTheme = theme
-                app.persist(); app.closePanel(me); app.say("Profile saved")
-            }
+        if (!saving) {
+            saving = true
+            app.scope.launch { val r = app.on.saveProfile(name, handle, bio, avatar, banner, theme); saving = false; if (r == null) app.closePanel(me) else app.say(r) }
         }
-    }) {
+    }, enabled = !saving) {
         // .ebanner: the banner as it will look, with its photo button
         Box(Modifier.fillMaxWidth().aspectRatio(1000f / 330f).clip(RoundedCornerShape(Rad.m)).background(Brush.linearGradient(listOf(c.b1, c.b2), Offset.Zero, Offset.Infinite))) {
             BannerPic(banner, avatar, theme)
@@ -154,7 +154,12 @@ fun EditProfilePanel(app: AppState, me: Panel) {
         }
         Fld("Banner style") { Seg(listOf("Default", "Blurred photo"), if (theme == "avatar") 1 else 0, Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 14.dp)) { theme = if (it == 1) "avatar" else "default" } }
         Fld("Display name") { Field(name, { if (it.length <= 15) name = it }, "") }
-        Fld("Handle") { Field(handle, { if (it.length <= 15) handle = it }, "") }
+        Fld("Handle") {
+            Column {
+                Field(handle, { if (it.length <= 15 && lockDays == 0) handle = it }, "")
+                if (lockDays > 0) T("You changed your handle recently. You can change it again in $lockDays" + (if (lockDays == 1) " day." else " days."), Fs.sm, color = c.muted, modifier = Modifier.padding(top = 6.dp))
+            }
+        }
         Fld("Bio") { Field(bio, { if (it.length <= 500) bio = it }, "", lines = 3) }
     }
 }

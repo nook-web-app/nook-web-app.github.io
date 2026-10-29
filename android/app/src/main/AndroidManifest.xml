@@ -1,14 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- only for updates: the version check and the new apk come from the Nook site -->
+    <!-- the Nook server, and the updates (the version check and the new apk come from the Nook site) -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application android:icon="@mipmap/ic_launcher" android:label="Nook" android:supportsRtl="true" android:theme="@style/Theme.Nook">
         <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize" android:launchMode="singleTask">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
             <!-- like the web app's share target: text, links and photos shared to Nook open in a new post -->
             <intent-filter><action android:name="android.intent.action.SEND" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="text/plain" /><data android:mimeType="image/*" /></intent-filter>
             <intent-filter><action android:name="android.intent.action.SEND_MULTIPLE" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="image/*" /></intent-filter>
+            <!-- the link of a password reset email opens the app, which checks that it was asked for on this phone -->
+            <intent-filter android:autoVerify="true"><action android:name="android.intent.action.VIEW" /><category android:name="android.intent.category.DEFAULT" /><category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="nook-web-app.github.io" android:pathPrefix="/reset" /></intent-filter>
         </activity>
         <!-- the camera writes its photo here, and shared post pictures are handed to other apps from here -->
         <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.files" android:exported="false" android:grantUriPermissions="true">

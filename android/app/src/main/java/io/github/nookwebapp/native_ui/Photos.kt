@@ -168,7 +168,7 @@ fun Pic(path: String?, modifier: Modifier = Modifier, want: Int = 1280, scale: C
         coil.request.ImageRequest.Builder(ctx).data(Img.model(path)).apply { if (small) size(want) }.build()
     }
     coil.compose.AsyncImage(
-        req, null, modifier = if (ok || bare) modifier else modifier.background(c.bg2), imageLoader = Img.loader(ctx), contentScale = scale,
+        req, null, modifier = if (ok || bare) modifier else modifier.background(c.bg2).shimmer(), imageLoader = Img.loader(ctx), contentScale = scale,
         filterQuality = if (smooth) androidx.compose.ui.graphics.FilterQuality.High else androidx.compose.ui.graphics.FilterQuality.Low,
         onSuccess = { st: coil.compose.AsyncImagePainter.State.Success ->
             ok = true

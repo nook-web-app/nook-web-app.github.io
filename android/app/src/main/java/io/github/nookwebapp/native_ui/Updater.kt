@@ -1,11 +1,13 @@
 package io.github.nookwebapp.native_ui
 
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInstaller
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
-import androidx.core.content.FileProvider
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -61,14 +63,49 @@ object Updater {
         mine.isNotEmpty() && certs(ctx, theirs).any { it in mine }
     }.getOrDefault(false)
 
-    // Android asks once whether Nook may install apps; after that the installer's own Update button is all it takes
+    // a patch (same first two numbers, like 3.27.4 to 3.27.5) installs by itself; a new minor or major version asks first
+    fun isPatch(r: Release): Boolean {
+        val a = r.name.split("."); val b = APP_VERSION.split(".")
+        return a.size >= 2 && b.size >= 2 && a[0] == b[0] && a[1] == b[1]
+    }
+
+    fun mayInstall(ctx: Context): Boolean = Build.VERSION.SDK_INT < 26 || ctx.packageManager.canRequestPackageInstalls()
+
+    // Android asks once whether Nook may install apps. The apk goes in through a session that asks for no tap: on Android 12
+    // and up, once Nook itself has installed an update, the next ones are applied quietly. When the phone still wants a tap
+    // (the first time), UpdateReceiver shows the installer's own screen.
     fun install(ctx: Context, apk: File): Boolean {
-        if (Build.VERSION.SDK_INT >= 26 && !ctx.packageManager.canRequestPackageInstalls()) {
+        if (!mayInstall(ctx)) {
             ctx.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + ctx.packageName)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             return false
         }
-        val uri = FileProvider.getUriForFile(ctx, ctx.packageName + ".files", apk)
-        ctx.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK))
+        val pi = ctx.packageManager.packageInstaller
+        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
+            setAppPackageName(ctx.packageName)
+            if (Build.VERSION.SDK_INT >= 31) setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+        }
+        val id = pi.createSession(params)
+        pi.openSession(id).use { s ->
+            apk.inputStream().use { i -> s.openWrite("nook.apk", 0, apk.length()).use { o -> i.copyTo(o); s.fsync(o) } }
+            val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+            val done = PendingIntent.getBroadcast(ctx, id, Intent(ctx, UpdateReceiver::class.java).setPackage(ctx.packageName), flags)
+            s.commit(done.intentSender)
+        }
         return true
+    }
+}
+
+// the installer's answer: when it needs the person's tap it hands over its own screen, and a failure is said once
+class UpdateReceiver : BroadcastReceiver() {
+    override fun onReceive(ctx: Context, i: Intent) {
+        when (i.getIntExtra(PackageInstaller.EXTRA_STATUS, -1)) {
+            PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                @Suppress("DEPRECATION")
+                val next = if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java) else i.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
+                next?.let { ctx.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            }
+            PackageInstaller.STATUS_SUCCESS -> {}
+            else -> AppState.current?.say("The update could not be installed")
+        }
     }
 }

@@ -98,10 +98,10 @@ fun ChatsScreen() {
 private fun SkelRow() {
     val c = LocalNook.current
     Row(Modifier.fillMaxWidth().lineBelow(c.line).padding(horizontal = 16.dp).vpad(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        Box(Modifier.size(48.dp).clip(CircleShape).background(c.bg2))
+        Box(Modifier.size(48.dp).clip(CircleShape).background(c.bg2).shimmer())
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Box(Modifier.fillMaxWidth(0.45f).height(14.dp).clip(RoundedCornerShape(Rad.s)).background(c.bg2))
-            Box(Modifier.fillMaxWidth(0.75f).height(12.dp).clip(RoundedCornerShape(Rad.s)).background(c.bg2))
+            Box(Modifier.fillMaxWidth(0.45f).height(14.dp).clip(RoundedCornerShape(Rad.s)).background(c.bg2).shimmer())
+            Box(Modifier.fillMaxWidth(0.75f).height(12.dp).clip(RoundedCornerShape(Rad.s)).background(c.bg2).shimmer())
         }
     }
 }
@@ -322,7 +322,7 @@ private fun DmMedia(md: JSONObject, other: String, m: DmMsg, i: Int, modifier: M
     val dims = path?.let { Photos.size(it) } ?: if (md.optInt("w") > 0) md.optInt("w") to md.optInt("h") else null
     val ar = dims?.let { it.first.toFloat() / it.second }
     val maxW = minOf(conf.screenWidthDp * 0.72f, 360f).let { if (ar != null) minOf(it, conf.screenHeightDp * 0.56f * ar) else it }.dp
-    Box(modifier.width(maxW).then(if (ar != null) Modifier.aspectRatio(ar) else Modifier.heightIn(min = 140.dp)).clip(RoundedCornerShape(Rad.m)).background(c.bg2)) {
+    Box(modifier.width(maxW).then(if (ar != null) Modifier.aspectRatio(ar) else Modifier.heightIn(min = 140.dp)).clip(RoundedCornerShape(Rad.m)).background(c.bg2).then(if (path == null) Modifier.shimmer() else Modifier)) {
         val p = path
         if (p != null) Pic(p, Modifier.matchParentSize().tap {
             app.scope.launch {

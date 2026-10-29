@@ -26,6 +26,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -324,5 +326,21 @@ fun Badge(n: Int, modifier: Modifier = Modifier) {
     val c = LocalNook.current
     Box(modifier.defaultMinSize(minWidth = 20.dp).height(20.dp).clip(RoundedCornerShape(Rad.pill)).background(c.accent).padding(horizontal = 6.dp), contentAlignment = Alignment.Center) {
         T(n.toString(), Fs.xs, FontWeight.SemiBold, c.on)
+    }
+}
+
+// .skel::after: a soft light band sweeps across a placeholder every 1.2 s until the real thing is drawn. Previews and the
+// screenshot tests draw one still frame.
+fun Modifier.shimmer(): Modifier = composed {
+    val c = LocalNook.current
+    if (androidx.compose.ui.platform.LocalInspectionMode.current) return@composed this
+    val t by androidx.compose.animation.core.rememberInfiniteTransition(label = "shimmer").animateFloat(
+        0f, 1f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(1200, easing = androidx.compose.animation.core.LinearEasing)), label = "t",
+    )
+    drawWithContent {
+        drawContent()
+        val w = size.width
+        val x = (t * 2f - 1f) * w
+        drawRect(Brush.horizontalGradient(0.3f to Color.Transparent, 0.5f to c.line, 0.7f to Color.Transparent, startX = x, endX = x + w))
     }
 }

@@ -212,6 +212,8 @@ class MainActivity : ComponentActivity() {
                 when {
                     r.isFailure -> if (manual) app.say("Could not check. Check your connection and try again")
                     rel == null -> if (manual) app.say("Up to date")
+                    // a patch installs by itself when the phone lets Nook install apps; anything bigger asks
+                    !manual && Updater.isPatch(rel) && Updater.mayInstall(this) -> getUpdate(quiet = true)
                     else -> app.open(listOf(
                         SheetItem("Update now") { getUpdate() },
                         SheetItem("Stay on current version", cancel = true),
@@ -221,12 +223,12 @@ class MainActivity : ComponentActivity() {
         }.start()
     }
 
-    private fun getUpdate() {
-        app.say("Downloading the update...")
+    private fun getUpdate(quiet: Boolean = false) {
+        if (!quiet) app.say("Downloading the update...")
         Thread {
             val f = runCatching { Updater.download(this) }.getOrNull()
             runOnUiThread {
-                if (f == null) app.say("Could not download the update. Try again")
+                if (f == null) { if (!quiet) app.say("Could not download the update. Try again") }
                 else if (!Updater.install(this, f)) app.say("Allow Nook to install the update, then tap Update now again")
             }
         }.start()

@@ -86,7 +86,7 @@ fun LinkCard(url0: String, chat: Boolean = false) {
             .then(if (chat) Modifier else Modifier.border(1.dp, c.line, shape)).tap { runCatching { uri.openUri(url) } },
     ) {
         val dd = d
-        if (loading && dd == null) { Box(Modifier.fillMaxWidth().height(150.dp).background(c.bg2)); return@Column }
+        if (loading && dd == null) { Box(Modifier.fillMaxWidth().height(150.dp).background(c.bg2).shimmer()); return@Column }
         val (title, cap) = cardText(dd, url)
         val img = dd?.optString("i")?.ifEmpty { null }
         if (img != null) {

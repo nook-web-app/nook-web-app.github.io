@@ -239,7 +239,16 @@ fun SettingsScreen() {
             Sec("Your data")
             Group { SRow(ic("copy", 22.dp), "Download backup", "Posts, notes and media", last = true) { app.backup() } }
             Sec("Updates")
-            Group { SRow(ic("refresh", 22.dp), "Check for updates", "Version $APP_VERSION", last = true) { app.checkUpdate(true) } }
+            Group {
+                SRow(ic("refresh", 22.dp), "Check for updates", "Version $APP_VERSION") { app.checkUpdate(true) }
+                val quiet = ctx?.let { Updater.allQuiet(it) } == true
+                SRow(ic("refresh", 22.dp), "Install updates in the background", if (quiet) "On" else "Off", last = true) {
+                    val c = ctx ?: return@SRow
+                    Updater.setAllQuiet(c, !quiet); tick++
+                    if (!quiet && !Updater.mayInstall(c)) { app.say("Allow Nook to install apps, then it can update by itself"); Updater.askInstallRight(c) }
+                    else app.say(if (quiet) "Updates will ask first" else "Updates will install in the background")
+                }
+            }
             Sec("Legal")
             Group {
                 SRow(ic("eyeoff", 22.dp), "Privacy Policy", "What we collect") { app.go(Route.Legal(false)) }

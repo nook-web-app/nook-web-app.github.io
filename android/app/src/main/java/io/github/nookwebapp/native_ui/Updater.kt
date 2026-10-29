@@ -69,16 +69,21 @@ object Updater {
         return a.size >= 2 && b.size >= 2 && a[0] == b[0] && a[1] == b[1]
     }
 
+    // opt in from Settings: every update, not only patches, installs by itself
+    fun allQuiet(ctx: Context): Boolean = ctx.getSharedPreferences("updates", Context.MODE_PRIVATE).getBoolean("all_quiet", false)
+    fun setAllQuiet(ctx: Context, on: Boolean) { ctx.getSharedPreferences("updates", Context.MODE_PRIVATE).edit().putBoolean("all_quiet", on).apply() }
+
     fun mayInstall(ctx: Context): Boolean = Build.VERSION.SDK_INT < 26 || ctx.packageManager.canRequestPackageInstalls()
 
     // Android asks once whether Nook may install apps. The apk goes in through a session that asks for no tap: on Android 12
     // and up, once Nook itself has installed an update, the next ones are applied quietly. When the phone still wants a tap
     // (the first time), UpdateReceiver shows the installer's own screen.
+    fun askInstallRight(ctx: Context) {
+        ctx.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + ctx.packageName)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
     fun install(ctx: Context, apk: File): Boolean {
-        if (!mayInstall(ctx)) {
-            ctx.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + ctx.packageName)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            return false
-        }
+        if (!mayInstall(ctx)) { askInstallRight(ctx); return false }
         val pi = ctx.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
             setAppPackageName(ctx.packageName)

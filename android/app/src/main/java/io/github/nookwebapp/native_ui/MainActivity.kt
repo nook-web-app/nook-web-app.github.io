@@ -213,7 +213,7 @@ class MainActivity : ComponentActivity() {
                     r.isFailure -> if (manual) app.say("Could not check. Check your connection and try again")
                     rel == null -> if (manual) app.say("Up to date")
                     // a patch installs by itself when the phone lets Nook install apps; anything bigger asks
-                    !manual && Updater.isPatch(rel) && Updater.mayInstall(this) -> getUpdate(quiet = true)
+                    !manual && (Updater.isPatch(rel) || Updater.allQuiet(this)) && Updater.mayInstall(this) -> getUpdate(quiet = true)
                     else -> app.open(listOf(
                         SheetItem("Update now") { getUpdate() },
                         SheetItem("Stay on current version", cancel = true),

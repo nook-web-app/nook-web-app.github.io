@@ -151,6 +151,7 @@ const P = {
   smile: '<circle cx="12" cy="12" r="9"/><path d="M8 14c1 1.5 2.3 2.2 4 2.2s3-.7 4-2.2"/><path d="M9 9.5h.01M15 9.5h.01"/>',
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21h4"/>',
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
+  cloudOff: '<path d="M2 2l20 20M5.78 5.78A7 7 0 0 0 9 19h8.5a4.5 4.5 0 0 0 1.31-.19M21.53 16.5A4.5 4.5 0 0 0 17.5 10h-1.79A7 7 0 0 0 10 5.07"/>',
   bellOff: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21h4"/><path d="M3 3l18 18"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5"/>'
 };
@@ -291,7 +292,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.28.2";
+const APP_VERSION = "3.28.3";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -8998,7 +8999,7 @@ function offlineShow(atBoot) {
   if (atBoot) offBoot = true;
   if (offEl) return;
   const retry = h("button", { class: "pri", onclick: () => { if (navigator.onLine === false) { toast("Still offline"); return; } location.reload(); } }, "Try again");
-  offEl = h("div", { id: "offline", role: "alert" }, h("div", { class: "empty" }, h("h1", { class: "pname", style: "margin:0;color:var(--fg)" }, "You are offline"), retry));
+  offEl = h("div", { id: "offline", role: "alert" }, h("div", { class: "empty" }, ic("cloudOff", 56), h("h1", { class: "pname", style: "margin:0;color:var(--fg)" }, "You are offline"), retry));
   document.body.append(offEl);
 }
 function offlineHide() { if (offEl) { offEl.remove(); offEl = null; } }

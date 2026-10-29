@@ -22,6 +22,7 @@ fun OfflineHost(app: AppState) {
         Modifier.fillMaxSize().background(c.bg).pointerInput(Unit) { detectTapGestures { } }.statusBarsPadding().navigationBarsPadding().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
     ) {
+        NIcon("cloudOff", 56.dp, c.muted)
         T("You are offline", Fs.x3, FontWeight.Bold, align = TextAlign.Center)
         Pill("Try again") {
             if (!app.online) app.say("Still offline")

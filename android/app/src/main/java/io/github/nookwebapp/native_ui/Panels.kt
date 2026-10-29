@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
@@ -89,9 +90,17 @@ fun ComposePanel(app: AppState, o: Panel.Compose) {
             IB("image", tint = c.accent, enabled = !full) { picker.gallery() }
         }
     }) {
-        if (parent != null) Row(Modifier.fillMaxWidth().padding(bottom = 12.dp).clip(RoundedCornerShape(Rad.m)).border(1.dp, c.line, RoundedCornerShape(Rad.m)).padding(horizontal = 12.dp, vertical = 10.dp)) {
-            T(if (parent.ai) "Zenith" else parent.ra?.let { it.name.ifEmpty { "@" + it.handle } } ?: s.profile.name.ifEmpty { "@" + s.profile.handle }, Fs.md, FontWeight.Bold)
-            T(" " + if (parent.text.isNotEmpty()) parent.text.take(140) else "Photo post", Fs.md, color = c.muted)
+        if (parent != null) Box(Modifier.fillMaxWidth().padding(bottom = 12.dp).clip(RoundedCornerShape(Rad.m)).border(1.dp, c.line, RoundedCornerShape(Rad.m)).padding(horizontal = 12.dp, vertical = 10.dp)) {
+            // .quote: the name and the words are one block of text, the words flowing on after the name
+            val who = if (parent.ai) "Zenith" else parent.ra?.let { it.name.ifEmpty { "@" + it.handle } } ?: s.profile.name.ifEmpty { "@" + s.profile.handle }
+            val body = if (parent.text.isNotEmpty()) parent.text.take(140) else "Photo post"
+            androidx.compose.material3.Text(
+                androidx.compose.ui.text.buildAnnotatedString {
+                    withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold, color = c.fg)) { append(who) }
+                    withStyle(androidx.compose.ui.text.SpanStyle(color = c.muted)) { append(" $body") }
+                },
+                style = LocalTextStyle.current.copy(fontSize = Fs.md, lineHeight = (Fs.md.value * 1.4f).sp),
+            )
         }
         // .crow: the avatar and the text box (17px, at least 130dp tall)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

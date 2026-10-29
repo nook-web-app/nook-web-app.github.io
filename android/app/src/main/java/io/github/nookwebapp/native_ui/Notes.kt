@@ -15,7 +15,17 @@ import java.io.File
 private fun h(s: String): String { var a = 0x811c9dc5.toInt(); var b = 0x5bd1e995; s.forEachIndexed { i, c -> a = (a xor c.code) * 16777619; b = ((b xor c.code) * 0x01000193) + i }; return s.length.toString(36) + "-" + Integer.toUnsignedString(a, 36) + "-" + Integer.toUnsignedString(b, 36) }
 private fun cSig(c: LChat) = h("c|" + c.name + "|" + c.t)
 private fun imgSig(m: LMsg) = m.imgs.joinToString(",") { h(it) }
-private fun mSig(m: LMsg) = h("m|" + m.text + "|" + m.t + "|" + imgSig(m) + "|" + (m.rpost?.let { "${it.id}/${it.u}" } ?: "") + (m.zpost?.let { "${it.x}/${it.t}/${it.a}" } ?: ""))
+// the signature of a message is worked out again only when the message changed
+private class SigMemo(val text: String, val t: Long, val imgs: List<String>, val rp: RPost?, val zp: ZPost?, val sig: String)
+private val sigMemo = java.util.WeakHashMap<LMsg, SigMemo>()
+private fun mSig(m: LMsg): String {
+    val text = m.text; val t = m.t; val imgs = m.imgs; val rp = m.rpost; val zp = m.zpost
+    synchronized(sigMemo) { sigMemo[m]?.let { if (it.text == text && it.t == t && it.imgs == imgs && it.rp == rp && it.zp == zp) return it.sig } }
+    val sig = mSigOf(m)
+    synchronized(sigMemo) { sigMemo[m] = SigMemo(text, t, imgs.toList(), rp, zp, sig) }
+    return sig
+}
+private fun mSigOf(m: LMsg) = h("m|" + m.text + "|" + m.t + "|" + imgSig(m) + "|" + (m.rpost?.let { "${it.id}/${it.u}" } ?: "") + (m.zpost?.let { "${it.x}/${it.t}/${it.a}" } ?: ""))
 private fun pSig(p: LPost) = h("p|" + p.text + "|" + p.t + "|" + (p.parent ?: "") + "|" + (if (p.liked) 1 else 0) + (if (p.reposted) 1 else 0) + (if (p.saved) 1 else 0))
 
 private var notesOn = false
@@ -105,7 +115,13 @@ suspend fun Online.notePicOut(key: ByteArray, src: String): JSONObject {
     return JSONObject().put("url", Sb.publicUrl("dm-media", path)).put("iv", Crypto.b64(iv)).put("type", mimeOf(b))
 }
 
-private fun Online.findMsg(rid: String): Pair<LChat, LMsg>? { for (c in s.chats) c.msgs.firstOrNull { it.id == rid }?.let { return c to it }; return null }
+// while rows are pulled, the messages are found by their id in a map made for each page of rows
+private var msgIdx: HashMap<String, Pair<LChat, LMsg>>? = null
+private fun Online.findMsg(rid: String): Pair<LChat, LMsg>? {
+    msgIdx?.let { ix -> return ix[rid]?.takeIf { hit -> s.chats.any { it === hit.first } } }
+    for (c in s.chats) c.msgs.firstOrNull { it.id == rid }?.let { return c to it }
+    return null
+}
 
 // noteTake(): one row from the server into the notes on this phone; true when something changed
 private suspend fun Online.noteTake(ns: JSONObject, key: ByteArray, r: JSONObject): Boolean {
@@ -121,7 +137,7 @@ private suspend fun Online.noteTake(ns: JSONObject, key: ByteArray, r: JSONObjec
             if (c != null && c.isNotes && pushed.optString(rowId) == cSig(c)) { s.chats.remove(c); pushed.put(rowId, "gone"); return true }
         } else {
             val f = findMsg(rid)
-            if (f != null && f.first.isNotes && pushed.optString(rowId) == mSig(f.second)) { f.first.msgs.remove(f.second); pushed.put(rowId, "gone"); pm.remove(rowId); return true }
+            if (f != null && f.first.isNotes && pushed.optString(rowId) == mSig(f.second)) { f.first.msgs.remove(f.second); pushed.put(rowId, "gone"); pm.remove(rowId); msgIdx?.remove(rid); return true }
         }
         if (!here) pushed.remove(rowId)
         return false
@@ -161,6 +177,7 @@ private suspend fun Online.noteTake(ns: JSONObject, key: ByteArray, r: JSONObjec
         m = LMsg(rid, text, t, imgs, rpost = rp, zpost = zp)
         val at = c.msgs.indexOfFirst { it.t > t }
         if (at < 0) c.msgs.add(m) else c.msgs.add(at, m)
+        msgIdx?.put(rid, c to m)
     } else { m.text = text; m.t = t; m.imgs = imgs; m.rpost = rp; m.zpost = zp }
     pushed.put(rowId, mSig(m))
     pm.put(rowId, JSONObject().put("h", imgSig(m)).put("e", media))
@@ -208,7 +225,9 @@ private fun Online.notePriv(ns: JSONObject, key: ByteArray, r: JSONObject): Bool
 }
 
 // notesPull(): every row changed since the last pull (with a little overlap), page by page
-private suspend fun Online.notesPull(ns: JSONObject, key: ByteArray): Boolean {
+private suspend fun Online.notesPull(ns: JSONObject, key: ByteArray): Boolean = try { notesPullRows(ns, key) } finally { msgIdx = null }
+
+private suspend fun Online.notesPullRows(ns: JSONObject, key: ByteArray): Boolean {
     var changed = false; var stuck = false; var okRows = 0
     ns.put("pullOk", false)
     val cursor = ns.optString("cursor")
@@ -218,6 +237,7 @@ private suspend fun Online.notesPull(ns: JSONObject, key: ByteArray): Boolean {
         val r = Sb.get(Q("notes_self").select("id, body, media, deleted, updated_at").gte("updated_at", from).order("updated_at").order("id").range(off, off + 499))
         if (!r.ok) throw IllegalStateException(r.error?.message)
         signBatch(r.rows.flatMap { it.optJSONArray("media")?.objs() ?: emptyList() }.filter { it.has("iv") }.take(24))
+        msgIdx = HashMap<String, Pair<LChat, LMsg>>().also { ix -> s.chats.forEach { c -> c.msgs.forEach { ix[it.id] = c to it } } }
         for (row in r.rows) {
             val id = row.optString("id")
             try { if (noteTake(ns, key, row)) changed = true; noteBad.remove(id); okRows++ }

@@ -18,6 +18,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 
 // userV: somebody else's profile. The page shows what this phone remembers at once and is brought up to date
@@ -49,13 +50,17 @@ fun UserScreen(id: String, fromMenu: Boolean = false) {
                 return@Page
             }
         }
-        val mine = s.posts.filter { it.ra?.id == id }.sortedByDescending { it.t }
+        // worked out again only when a post it reads changes, not on every recomposition of the page
+        val mine by remember(id) { derivedStateOf { s.posts.filter { it.ra?.id == id }.sortedByDescending { it.t } } }
+        val byRem by remember { derivedStateOf { HashMap<String, LPost>().also { m -> s.posts.forEach { p -> p.remote?.let { m.putIfAbsent(it, p) } } } } }
+        // the lists of reposts and likes are fetched again each time the tab opens, not each time its row scrolls into view
+        LaunchedEffect(id, tab) { if (tab == "reposts" || tab == "likes") on.idsTab(pg, tab) }
         LazyColumn(Modifier.fillMaxSize(), state = app.listStateFor(LocalPage.current)) {
             item(key = "head") {
                 BannerBox(acc?.optStr("banner"), avatar, acc?.optString("banner_theme") ?: "default")
                 Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 8.dp)) {
                     Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                        Box(Modifier.layoutOffsetUp(44.dp).size(88.dp).clip(CircleShape).background(c.bg).padding(4.dp)) { RAv(name, handle, avatar, 80.dp, id) }
+                        Box(Modifier.layoutOffsetUp(44.dp).size(88.dp).clip(CircleShape).background(c.bg).padding(4.dp)) { RAv(name, handle, avatar, 80.dp, id, letter = 34.sp) }
                         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (ownerOfZen) Pill("Edit Profile", Btn.Ghost, small = true) { app.panels.add(Panel.ZenEdit) }
                             else {
@@ -90,10 +95,9 @@ fun UserScreen(id: String, fromMenu: Boolean = false) {
                 "media" -> mediaTiles(app, mine)
                 "reposts", "likes" -> {
                     val ids = pg.tabIds[tab]
-                    if (ids == null && tab !in pg.tabFail) item { LaunchedEffect(tab) { on.idsTab(pg, tab) }; Loading() }
+                    if (ids == null && tab !in pg.tabFail) item { Loading() }
                     else if (ids == null) item { Fail("Could not load this list. Check your connection.") { pg.tabFail.remove(tab); pg.version++; app.scope.launch { on.idsTab(pg, tab) } } }
                     else {
-                        item(key = "load-$tab") { LaunchedEffect(tab) { on.idsTab(pg, tab) } }
                         val set = ids.toSet()
                         postList(s.posts.filter { it.remote != null && it.remote in set }.sortedByDescending { it.t }, { if (tab == "reposts") Empty("repost", "No reposts yet.") else Empty("heart", "No likes yet.") })
                     }
@@ -103,7 +107,7 @@ fun UserScreen(id: String, fromMenu: Boolean = false) {
                     val items = mine.filter { it.parent == null }.map { Triple(it, it.t, if (it.pinned) 1 else 0) }.toMutableList()
                     val had = items.map { it.first.remote }.toSet()
                     val reposted = HashSet<String>()
-                    pg.theirReposts.forEach { (pid, t) -> val p = s.byRemote(pid); if (p != null && p.parent == null && p.remote !in had && p.ra?.id != id) { items.add(Triple(p, t, 0)); reposted.add(p.id) } }
+                    pg.theirReposts.forEach { (pid, t) -> val p = byRem[pid]; if (p != null && p.parent == null && p.remote !in had && p.ra?.id != id) { items.add(Triple(p, t, 0)); reposted.add(p.id) } }
                     postList(items.sortedWith(compareByDescending<Triple<LPost, Long, Int>> { it.third }.thenByDescending { it.second }).map { it.first }, { Empty("smile", "No posts yet.") },
                         lab = { p -> if (p.id in reposted) name.ifEmpty { "They" } + " reposted" else null }, pin = true)
                 }
@@ -326,7 +330,7 @@ fun AuthScreen() {
                 Box(Modifier.padding(top = 2.dp).size(20.dp).clip(RoundedCornerShape(6.dp)).background(if (agree) c.fill else c.bg2).border(1.5.dp, if (agree) c.fill else c.muted, RoundedCornerShape(6.dp)).tap { agree = !agree }, contentAlignment = Alignment.Center) {
                     if (agree) NIcon("check", 14.dp, Color.White)
                 }
-                Row { T("I am 18+ and agree to the ", Fs.md, color = c.muted); Box(Modifier.tap { app.go(Route.Legal(true)) }) { T("Terms", Fs.md, FontWeight.SemiBold, c.lnk) }; T(" and ", Fs.md, color = c.muted); Box(Modifier.tap { app.go(Route.Legal(false)) }) { T("Privacy", Fs.md, FontWeight.SemiBold, c.lnk) } }
+                Row(Modifier.tap { agree = !agree }) { T("I am 18+ and agree to the ", Fs.md, color = c.muted); Box(Modifier.tap { app.go(Route.Legal(true)) }) { T("Terms", Fs.md, FontWeight.SemiBold, c.lnk) }; T(" and ", Fs.md, color = c.muted); Box(Modifier.tap { app.go(Route.Legal(false)) }) { T("Privacy", Fs.md, FontWeight.SemiBold, c.lnk) } }
             }
             if (msg.isNotEmpty()) T(msg, Fs.md, color = c.muted, align = TextAlign.Center, modifier = Modifier.fillMaxWidth())
             Pill(if (up) "Create account" else "Sign in", Btn.Pri, enabled = !busy, modifier = Modifier.fillMaxWidth()) { go() }
@@ -351,10 +355,15 @@ fun AuthScreen() {
 fun BannedScreen() {
     val app = LocalApp.current
     val c = LocalNook.current
+    // .empty p: at most 30 characters wide (max-width: 30ch, the width of thirty zeros), like Empty()
+    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+    val style = androidx.compose.material3.LocalTextStyle.current
+    val ch = remember(style) { measurer.measure("0".repeat(30), style.copy(fontSize = Fs.base)).size.width }
+    val maxW = with(androidx.compose.ui.platform.LocalDensity.current) { ch.toDp() }
     Column(Modifier.fillMaxSize().background(c.bg).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = (LocalConfigurationHeight() * 0.18f).dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         NIcon("lock", 56.dp, c.muted)
         T("You're banned", Fs.x3, FontWeight.Bold, align = TextAlign.Center)
-        T("Your account was banned and removed. A backup of your data is kept for 30 days.", color = c.muted, align = TextAlign.Center)
+        T("Your account was banned and removed. A backup of your data is kept for 30 days.", color = c.muted, align = TextAlign.Center, modifier = Modifier.widthIn(max = maxW))
         Pill("Download my data", Btn.Pri) { app.panels.add(Panel.BanDownload) }
         Pill("Use a different account", Btn.Ghost) {
             app.confirm("This clears Nook from this device. Download your data first if you want it.", "Use a different account") { app.store.wipe(); app.on.dropMyKeys(); app.banEmail = ""; app.root(Route.Auth) }
@@ -375,7 +384,7 @@ fun AgeScreen() {
     Column(Modifier.fillMaxSize().background(c.bg).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = (LocalConfigurationHeight() * 0.14f).dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         T("One quick question", Fs.x3, FontWeight.Bold, align = TextAlign.Center)
         T("How old are you?", color = c.muted)
-        Box(Modifier.widthIn(max = 320.dp)) { Field(age, { age = it.filter { ch -> ch.isDigit() }.take(3) }, "Your age") }
+        Box(Modifier.widthIn(max = 320.dp).vpad(8.dp)) { Box(Modifier.padding(top = 6.dp)) { Field(age, { age = it.filter { ch -> ch.isDigit() }.take(3) }, "Your age") } }
         Pill("Continue", Btn.Pri, enabled = !busy) {
             val y = age.toIntOrNull()
             when {
@@ -385,6 +394,6 @@ fun AgeScreen() {
             }
         }
         if (msg.isNotEmpty()) T(msg, Fs.md, color = c.muted, align = TextAlign.Center)
-        Box(Modifier.tap { app.confirm("Sign out of this account?", "Sign out") { app.on.signOutNow() } }.vpad(8.dp)) { T("Sign out", Fs.md, color = c.muted) }
+        Box(Modifier.tap { app.confirm("Sign out of this account?", "Sign out") { app.on.signOutNow() } }.vpad(8.dp)) { T("Sign out", Fs.base, color = c.fg) }
     }
 }

@@ -15,6 +15,16 @@ object Gif {
 
     fun isGif(b: ByteArray) = b.size > 3 && b[0] == 'G'.code.toByte() && b[1] == 'I'.code.toByte() && b[2] == 'F'.code.toByte()
 
+    // the picture of a GIF; null when the size in its header (bytes 6 to 9) is empty or over 16 million pixels, so a
+    // crafted file can not make the decoder work on a huge canvas
+    private fun movie(b: ByteArray): Movie? {
+        if (b.size < 10) return null
+        val w = (b[6].toInt() and 255) or ((b[7].toInt() and 255) shl 8)
+        val h = (b[8].toInt() and 255) or ((b[9].toInt() and 255) shl 8)
+        if (w == 0 || h == 0 || w.toLong() * h > 16_000_000L) return null
+        return Movie.decodeByteArray(b, 0, b.size)
+    }
+
     // the frames of a GIF at 12 a second, each drawn on white into w x h pixels from the part src (x, y, w, h) of the
     // picture; at most maxFrames of them
     private fun frames(mv: Movie, sx: Float, sy: Float, sw: Float, sh: Float, w: Int, h: Int, maxFrames: Int): List<IntArray> {
@@ -44,7 +54,7 @@ object Gif {
     fun compress(b: ByteArray): ByteArray? {
         if (b.size <= 1_572_864) return b
         val made = runCatching {
-            val mv = Movie.decodeByteArray(b, 0, b.size) ?: return@runCatching null
+            val mv = movie(b) ?: return@runCatching null
             if (mv.duration() <= 0) return@runCatching null
             val vw = mv.width(); val vh = mv.height()
             val k = minOf(1f, 480f / maxOf(vw, vh))
@@ -60,7 +70,7 @@ object Gif {
     // cropGif(): the part (x, y, w, h, in the GIF's own pixels) of every frame, at most 256 (round picture) or 360 pixels
     fun crop(b: ByteArray, x: Float, y: Float, w: Float, h: Float, outW: Int, outH: Int, round: Boolean): ByteArray? = runCatching {
         if (b.size > MAX) return null
-        val mv = Movie.decodeByteArray(b, 0, b.size) ?: return null
+        val mv = movie(b) ?: return null
         val k = minOf(1f, (if (round) 256f else 360f) / maxOf(outW, outH))
         val W = maxOf(2, Math.round(outW * k)); val H = maxOf(2, Math.round(outH * k))
         // a larger crop keeps fewer frames (about 48 MB at most)
@@ -69,7 +79,7 @@ object Gif {
     }.getOrNull()
 
     // the size of a GIF's picture (its first frame)
-    fun size(b: ByteArray): Pair<Int, Int>? = runCatching { Movie.decodeByteArray(b, 0, b.size)?.let { it.width() to it.height() } }.getOrNull()
+    fun size(b: ByteArray): Pair<Int, Int>? = runCatching { movie(b)?.let { it.width() to it.height() } }.getOrNull()
 
     // ---- the encoder (gifEncode, medianCut and lzw of app.js) ----
 
@@ -103,6 +113,7 @@ object Gif {
         out.write(w and 255); out.write(w shr 8); out.write(h and 255); out.write(h shr 8); out.write(247); out.write(0); out.write(0)
         for (k in 0 until 256) { val c = pal.getOrNull(k) ?: intArrayOf(0, 0, 0); out.write(c[0]); out.write(c[1]); out.write(c[2]) }
         out.write(byteArrayOf(33, -1, 11, 78, 69, 84, 83, 67, 65, 80, 69, 50, 46, 48, 3, 1, 0, 0, 0))
+        val table = IntArray(1 shl 20)
         val shown = IntArray(P)
         val idx = ByteArray(P)
         val dl = maxOf(2, Math.round(100.0 / fps).toInt())
@@ -124,7 +135,7 @@ object Gif {
                 else { idx[p] = q.toByte(); shown[p] = q }
             }
             out.write(byteArrayOf(33, -7, 4, 5, (dl and 255).toByte(), (dl shr 8).toByte(), -1, 0, 44, 0, 0, 0, 0, (w and 255).toByte(), (w shr 8).toByte(), (h and 255).toByte(), (h shr 8).toByte(), 0))
-            out.write(lzw(idx))
+            out.write(lzw(idx, table))
         }
         out.write(59)
         return out.toByteArray()
@@ -155,8 +166,9 @@ object Gif {
         return bx.map { b -> val t = LongArray(3); for (i in b.ix) for (c in 0..2) t[c] += ch(i, c).toLong(); IntArray(3) { c -> Math.round(t[c].toDouble() / b.ix.size).toInt() } }
     }
 
-    private fun lzw(ix: ByteArray): ByteArray {
-        val table = IntArray(1 shl 20)
+    // table is shared by all frames of one file and cleared here
+    private fun lzw(ix: ByteArray, table: IntArray): ByteArray {
+        java.util.Arrays.fill(table, 0)
         val raw = java.io.ByteArrayOutputStream()
         var acc = 0; var nb = 0; var size = 9; var mx = 511; var nx = 258
         fun emit(c: Int, reset: Boolean = false) {

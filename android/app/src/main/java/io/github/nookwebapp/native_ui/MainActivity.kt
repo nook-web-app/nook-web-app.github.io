@@ -12,6 +12,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -20,6 +21,9 @@ import java.util.zip.ZipOutputStream
 
 class MainActivity : ComponentActivity() {
     private lateinit var app: AppState
+    // loads the saved state off the main thread, then builds the app
+    private val boot = kotlinx.coroutines.MainScope()
+    private var closeRt: Runnable? = null
 
     // the phone asks once whether Nook may show notifications; a yes turns them on
     private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
@@ -35,9 +39,26 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         Photos.cacheDir = cacheDir
-        Cache.open(File(filesDir, "cache.json"))
         Notify.channel(this)
-        app = AppState(Store.open(this))
+        // the start screen stays until the first page is fully drawn, so the app never shows up in pieces
+        var ready = false
+        val root = findViewById<android.view.View>(android.R.id.content)
+        root.viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean { if (!ready) return false; root.viewTreeObserver.removeOnPreDrawListener(this); return true }
+        })
+        root.postDelayed({ ready = true; root.invalidate() }, 1500)
+        // the cache file and the state file are read and parsed on a background thread
+        boot.launch {
+            val store = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                Cache.open(File(filesDir, "cache.json"))
+                Store.open(this@MainActivity)
+            }
+            start(store, root) { ready = true }
+        }
+    }
+
+    private fun start(store: Store, root: android.view.View, show: () -> Unit) {
+        app = AppState(store)
         AppState.current = app
         app.ctx = applicationContext
         app.activity = java.lang.ref.WeakReference(this)
@@ -46,7 +67,10 @@ class MainActivity : ComponentActivity() {
             resultWait?.cancel(); resultWait = d
             runCatching { forResult.launch(androidx.activity.result.IntentSenderRequest.Builder(pi).build()) }.fold({ d.await() }, { null })
         }
-        app.clipboard = { t -> (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Nook", t)) }
+        app.clipboard = { t -> (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Nook", t).apply {
+            // private text stays out of the clipboard previews of Android 13 and later
+            description.extras = android.os.PersistableBundle().apply { putBoolean("android.content.extra.IS_SENSITIVE", true) }
+        }) }
         app.sharePicture = { p, toCompose -> sharePicture(p, toCompose) }
         app.sharePictureTo = { p, done -> picture(p) { f -> f?.let { done(it.absolutePath) } ?: app.say("Could not make picture") } }
         app.backup = { backup() }
@@ -74,28 +98,27 @@ class MainActivity : ComponentActivity() {
                 if (n % 3 == 0) app.on.retryUnsent()
             }
         }
-        // the start screen stays until the first page is fully drawn, so the app never shows up in pieces
-        var ready = false
-        val root = findViewById<android.view.View>(android.R.id.content)
-        root.viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
-            override fun onPreDraw(): Boolean { if (!ready) return false; root.viewTreeObserver.removeOnPreDrawListener(this); return true }
-        })
-        root.postDelayed({ ready = true; root.invalidate() }, 1500)
         setContent {
             NookApp(app)
             androidx.compose.runtime.LaunchedEffect(Unit) {
                 // a few frames: the page, its pictures already in memory, and the lists measured
                 repeat(3) { androidx.compose.runtime.withFrameNanos { } }
-                ready = true; root.invalidate()
+                show(); root.invalidate()
             }
         }
     }
 
-    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); app.scope.launch { take(intent) } }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // before the app is built, boot picks the intent up
+        setIntent(intent)
+        if (this::app.isInitialized) app.scope.launch { take(intent) }
+    }
 
     override fun onStart() {
         super.onStart()
         if (!this::app.isInitialized) return
+        closeRt?.let { window.decorView.removeCallbacks(it) }
         val was = app.foreground
         app.foreground = true
         if (!was && app.signedIn) app.scope.launch {
@@ -106,10 +129,28 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        if (!this::app.isInitialized) return
         app.foreground = false
-        app.store.save()
+        app.saveNow()
         Cache.flush()
-        Thread { app.store.sweepMedia(); Photos.trimCache() }.start()
+        // the copies made for sharing (the backup, pictures of posts, the exported data) do not stay on the phone; files
+        // from the last minutes are kept, as the app they were handed to may still be reading them
+        val share = File(cacheDir, "share")
+        Thread {
+            app.store.sweepMedia(); Photos.trimCache()
+            share.listFiles()?.forEach { if (System.currentTimeMillis() - it.lastModified() > 600_000) it.delete() }
+        }.start()
+        // a minute in the background closes the live connection (the phone's push messages cover the time away); coming
+        // back opens it again
+        val r = Runnable { if (!app.foreground) app.on.stopRealtime() }
+        closeRt = r
+        window.decorView.postDelayed(r, 60_000)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        boot.cancel()
+        if (this::app.isInitialized) { app.scope.cancel(); notesStop(); if (AppState.current === app) AppState.current = null }
     }
 
     private fun askNotifs() {
@@ -184,11 +225,16 @@ class MainActivity : ComponentActivity() {
     private fun picture(p: LPost, done: (File?) -> Unit) {
         val colors = colors()
         val zp = app.store.zen.optStr("pfp")
-        Thread {
-            val bm = runCatching { PostPic.make(p, app.store.profile, colors, zp) }.getOrNull()
+        // like the web app, the card of the first link is waited for at most 4.5 s
+        val link = if (p.imgs.isEmpty()) firstUrl(cleanText(p.text)) else null
+        app.scope.launch {
+            val pv = link?.let { kotlinx.coroutines.withTimeoutOrNull(4500) { runCatching { app.on.getPreview(it) }.getOrNull() } }
+            Thread {
+            val bm = runCatching { PostPic.make(p, app.store.profile, colors, zp, pv) }.getOrNull()
             val f = bm?.let { b -> runCatching { File(File(cacheDir, "share").apply { mkdirs() }, "nook-post-" + uid() + ".png").apply { outputStream().use { b.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } } }.getOrNull() }
             runOnUiThread { done(f) }
-        }.start()
+            }.start()
+        }
     }
 
     // Share post: the picture of the post goes into a new post, or out to another app

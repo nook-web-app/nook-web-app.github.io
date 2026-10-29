@@ -31,21 +31,26 @@ fun PwField(value: String, onChange: (String) -> Unit, placeholder: String) {
 
 // a form whose button runs some work: the button is off while it runs, and an answer is shown under the fields
 @Composable
-private fun Form(p: Panel, title: String, action: String, top: Boolean = false, onCancel: (() -> Unit)? = null, run: suspend () -> String?, body: @Composable ColumnScope.(String) -> Unit) {
+private fun Form(p: Panel, title: String, action: String, top: Boolean = false, onCancel: (() -> Unit)? = null, inline: Boolean = false, run: suspend () -> String?, body: @Composable ColumnScope.(String) -> Unit) {
     val app = LocalApp.current
     var busy by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf("") }
-    Modal(title, action, enabled = !busy, top = top, onCancel = { onCancel?.invoke(); app.closePanel(p) }, onAction = {
-        if (!busy) { busy = true; msg = ""; app.scope.launch { val r = run(); if (r == null) app.closePanel(p) else msg = r; busy = false } }
-    }) { body(msg); Msg(msg) }
+    val fire = { if (!busy) { busy = true; msg = ""; app.scope.launch { val r = run(); if (r == null) app.closePanel(p) else msg = r; busy = false } }; Unit }
+    // inline: the button is placed by the form itself (FormAction), not under the last field
+    Modal(title, action, enabled = !busy, top = top, onCancel = { onCancel?.invoke(); app.closePanel(p) }, onAction = fire, showAction = !inline) {
+        CompositionLocalProvider(LocalFormRun provides FormRun(busy, fire)) { body(msg); Msg(msg) }
+    }
 }
+
+private class FormRun(val busy: Boolean, val fire: () -> Unit)
+private val LocalFormRun = compositionLocalOf { FormRun(false) {} }
 
 // the sign in screen of an account added next to the open one (addAccountModal)
 @Composable
 fun AddAccountPanel(app: AppState, p: Panel) {
     var email by remember { mutableStateOf("") }
     var pw by remember { mutableStateOf("") }
-    Form(p, "", "Sign in", run = {
+    Form(p, "", "Sign in", inline = true, run = {
         val e = email.trim()
         if (e.isEmpty() || pw.isEmpty()) "Enter the email and password"
         else app.on.addAccount(e, pw)?.let { it } ?: run { app.say("Account added"); app.scope.launch { delay(350); app.on.openAccounts() }; null }
@@ -54,6 +59,9 @@ fun AddAccountPanel(app: AppState, p: Panel) {
         T("Sign in to continue", color = LocalNook.current.muted, align = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp))
         Field(email, { email = it }, "Email", border = true); Gap()
         PwField(pw, { pw = it }, "Password"); Gap()
+        val form = LocalFormRun.current
+        Pill("Sign in", Btn.Pri, enabled = !form.busy, modifier = Modifier.fillMaxWidth()) { form.fire() }
+        Gap()
         if (Passkey.ok()) {
             var busy by remember { mutableStateOf(false) }
             LaunchedEffect(Unit) { app.on.passkeyWarm() }
@@ -79,7 +87,7 @@ fun NewAccountPanel(app: AppState, p: Panel) {
     var user by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var pw by remember { mutableStateOf("") }
-    Form(p, "", "Create", run = {
+    Form(p, "", "Create account", run = {
         val n = dn.trim(); val u = user.trim(); val e = email.trim()
         when {
             n.isEmpty() -> "Enter a display name"

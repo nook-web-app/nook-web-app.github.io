@@ -24,14 +24,17 @@ import kotlinx.coroutines.launch
 @Composable
 fun NookApp(app: AppState) {
     NookTheme(app.theme) {
-        CompositionLocalProvider(LocalApp provides app) {
+        val shimmer = remember { ShimmerClock() }
+        RunShimmerClock(shimmer)
+        CompositionLocalProvider(LocalApp provides app, LocalShimmer provides shimmer) {
             val c = LocalNook.current
             // the status and navigation bar icons follow the app's own theme, not only the phone's
             val activity = androidx.compose.ui.platform.LocalContext.current as? androidx.activity.ComponentActivity
-            SideEffect {
+            DisposableEffect(c.dark) {
                 val bars = if (c.dark) androidx.activity.SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
                 else androidx.activity.SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
                 activity?.enableEdgeToEdge(bars, bars)
+                onDispose { }
             }
             // screenshots and screen recordings are blocked only inside a chat with another person; one's own chats on this
             // phone (notes, also the ones Zenith answers in) and every other page stay free to capture

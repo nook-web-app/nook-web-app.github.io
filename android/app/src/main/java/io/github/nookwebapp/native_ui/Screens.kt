@@ -3,6 +3,8 @@ package io.github.nookwebapp.native_ui
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -93,8 +95,13 @@ fun HomeScreen() {
         Bar("Nook", { MenuBtn() }, { BellBtn() })
         Tabs(listOf("For you", "Media"), if (photos) 1 else 0) { s.homeTab = if (it == 1) "photos" else "latest"; app.persist() }
     }) {
-        val feed = s.posts.filter { it.parent == null && (!photos || it.imgs.isNotEmpty()) }.sortedByDescending { ft(it) }
-        val ranked = rankFeed(s, app.on.follows, feed, if (photos) "photos" else "latest")
+        // worked out again only when something it reads changes, not on every recomposition of the page
+        val ranked by remember(photos, app.on.follows, app.on.follows.size, s.lessA.size, s.lessWords.size) {
+            derivedStateOf {
+                val feed = s.posts.filter { it.parent == null && (!photos || it.imgs.isNotEmpty()) }.sortedByDescending { ft(it) }
+                rankFeed(s, app.on.follows, feed, if (photos) "photos" else "latest")
+            }
+        }
         LazyColumn(Modifier.fillMaxSize(), state = app.listStateFor(LocalPage.current)) {
             item { ComposerRow() }
             postList(ranked, { FeedEmpty(photos) }, lab = { p -> p.rpBy?.let { it.name + " reposted" } })
@@ -127,10 +134,15 @@ fun ThreadScreen(id: String) {
             val r = p.remote ?: return@LaunchedEffect
             if (app.signedIn && p.ra != null) app.on.mapRemotePosts(app.on.postsGet("id, user_id, body, created_at, parent_id, media_url") { Q("posts").select(it).eq("parent_id", r).order("created_at").limit(100) }.rows)
         }
-        val anc = mutableListOf<LPost>()
-        var q = s.byId(p.parent)
-        while (q != null && q !== p && anc.size < 60 && q !in anc) { anc.add(0, q); q = s.byId(q.parent) }
-        val reps = if (p.parent != null) s.flat(p.id) else s.kids(p.id).sortedBy { it.t }.map { it to 0 }
+        val anc by remember(p) {
+            derivedStateOf {
+                val out = mutableListOf<LPost>()
+                var q = s.byId(p.parent)
+                while (q != null && q !== p && out.size < 60 && q !in out) { out.add(0, q); q = s.byId(q.parent) }
+                out
+            }
+        }
+        val reps by remember(p) { derivedStateOf { if (p.parent != null) s.flat(p.id) else s.kids(p.id).sortedBy { it.t }.map { it to 0 } } }
         LazyColumn(Modifier.fillMaxSize(), state = app.listStateFor(LocalPage.current)) {
             items(anc, key = { "a" + it.id }) { PostCard(it, line = true, compact = true) }
             item(key = "main") { MainPost(p) }
@@ -141,10 +153,11 @@ fun ThreadScreen(id: String) {
 
 // the banner of a profile: its photo, the blurred profile picture, or the gradient
 @Composable
-fun BannerBox(banner: String?, avatar: String?, theme: String) {
+fun BannerBox(banner: String?, avatar: String?, theme: String, own: Boolean = false) {
     val c = LocalNook.current
     Box(Modifier.fillMaxWidth().aspectRatio(1000f / 330f)) {
-        BannerPic(banner?.takeIf { Photos.ownMedia(it) }, avatar?.takeIf { Photos.ownMedia(it) }, theme)
+        // the pictures of somebody else are checked, the owner's own (also local files) are shown as they are
+        BannerPic(banner?.takeIf { own || Photos.ownMedia(it) }, avatar?.takeIf { own || Photos.ownMedia(it) }, theme)
     }
 }
 
@@ -163,9 +176,27 @@ fun ProfileScreen() {
     val me = app.on.me?.id
     LaunchedEffect(me) { if (me != null) app.on.countsOf(me) { a, b -> fol = a; fng = b } }
     Page({ Bar("Profile", { Lead() }) }) {
+        // the lists of the tabs are worked out again only when a post they read changes
+        val postCount by remember { derivedStateOf { s.posts.count { it.mine } } }
+        val shown by remember(tab) {
+            derivedStateOf {
+                when (tab) {
+                    "replies" -> s.posts.filter { it.parent != null && it.mine }.sortedByDescending { it.t }
+                    "reposts" -> s.posts.filter { it.reposted && it.parent == null && !it.ai }.sortedByDescending { it.t }
+                    "media" -> s.posts.filter { it.ra == null }.sortedByDescending { it.t }
+                    "likes" -> s.posts.filter { it.liked }.sortedByDescending { it.t }
+                    else -> {
+                        // a post you repost sits in your posts too, at the time you reposted it
+                        val items = s.posts.filter { it.parent == null && it.mine }.map { Triple(it, it.t, if (it.pinned) 1 else 0) } +
+                            s.posts.filter { (it.ra != null || it.ai) && it.reposted && it.parent == null }.map { Triple(it, if (it.rpAt > 0) it.rpAt else it.t, 0) }
+                        items.sortedWith(compareByDescending<Triple<LPost, Long, Int>> { it.third }.thenByDescending { it.second }).map { it.first }
+                    }
+                }
+            }
+        }
         LazyColumn(Modifier.fillMaxSize(), state = app.listStateFor(LocalPage.current)) {
             item(key = "head") {
-                BannerBox(pr.banner, pr.avatar, pr.bannerTheme)
+                BannerBox(pr.banner, pr.avatar, pr.bannerTheme, own = true)
                 Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 8.dp)) {
                     Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
                         MyAvatar(88.dp, ring = c.bg, modifier = Modifier.layoutOffsetUp(44.dp))
@@ -178,7 +209,7 @@ fun ProfileScreen() {
                     }
                     if (pr.name.isNotEmpty()) T(pr.name, Fs.x3, FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
                     T("@" + pr.handle, color = c.muted)
-                    val n = s.posts.count { it.mine }
+                    val n = postCount
                     Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         Stat(n, "post", "posts") {}
                         Stat(fol, "followers", "followers") { if (me != null) app.go(Route.Follows(me, true)) }
@@ -189,16 +220,13 @@ fun ProfileScreen() {
             }
             stickyHeader(key = "tabs") { Box(Modifier.background(c.bg).lineBelow(c.line)) { Tabs(tabs.map { it.second }, tabs.indexOfFirst { it.first == tab }.coerceAtLeast(0), scroll = true) { s.profTab = tabs[it].first; app.persist() } } }
             when (tab) {
-                "replies" -> postList(s.posts.filter { it.parent != null && it.mine }.sortedByDescending { it.t }, { Empty("reply", "No replies yet. Reply to one of your own posts.") }, replyTo = true)
-                "reposts" -> postList(s.posts.filter { it.reposted && it.parent == null && !it.ai }.sortedByDescending { it.t }, { Empty("repost", "Posts you repost show up here.") })
-                "media" -> mediaTiles(app, s.posts.filter { it.ra == null }.sortedByDescending { it.t })
-                "likes" -> postList(s.posts.filter { it.liked }.sortedByDescending { it.t }, { Empty("heart", "Posts you like show up here.") }, replyTo = true)
+                "replies" -> postList(shown, { Empty("reply", "No replies yet. Reply to one of your own posts.") }, replyTo = true)
+                "reposts" -> postList(shown, { Empty("repost", "Posts you repost show up here.") })
+                "media" -> mediaTiles(app, shown)
+                "likes" -> postList(shown, { Empty("heart", "Posts you like show up here.") }, replyTo = true)
                 else -> {
                     item(key = "cr") { ComposerRow() }
-                    // a post you repost sits in your posts too, at the time you reposted it
-                    val items = s.posts.filter { it.parent == null && it.mine }.map { Triple(it, it.t, if (it.pinned) 1 else 0) } +
-                        s.posts.filter { (it.ra != null || it.ai) && it.reposted && it.parent == null }.map { Triple(it, if (it.rpAt > 0) it.rpAt else it.t, 0) }
-                    postList(items.sortedWith(compareByDescending<Triple<LPost, Long, Int>> { it.third }.thenByDescending { it.second }).map { it.first }, { Empty("smile", "No posts yet.") },
+                    postList(shown, { Empty("smile", "No posts yet.") },
                         lab = { p -> if (p.ra != null || p.ai) "You reposted" else null }, pin = true)
                 }
             }
@@ -236,7 +264,10 @@ fun Modifier.layoutOffsetUp(by: Dp) = this.then(Modifier.layout { m, cons ->
 @Composable
 fun Stat(n: Int, one: String, many: String, onClick: () -> Unit) {
     val c = LocalNook.current
-    Row(Modifier.tap(onClick = onClick)) { T(n.toString(), weight = FontWeight.Bold); T(" " + if (n == 1) one else many, color = c.muted) }
+    // .pstat .lk:active: the count dims to 60% while it is pressed
+    val src = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val down by src.collectIsPressedAsState()
+    Row(Modifier.alpha(if (down) 0.6f else 1f).clickable(src, null, onClick = onClick)) { T(n.toString(), weight = FontWeight.Bold); T(" " + if (n == 1) one else many, color = c.muted) }
 }
 
 // savedV
@@ -254,10 +285,11 @@ fun SavedScreen() {
 @Composable
 fun TagScreen(q: String) {
     val app = LocalApp.current
-    val re = Regex("(^|[^\\p{L}\\p{N}_])" + Regex.escape(q) + "(?![\\p{L}\\p{N}_])", RegexOption.IGNORE_CASE)
+    val re = remember(q) { Regex("(^|[^\\p{L}\\p{N}_])" + Regex.escape(q) + "(?![\\p{L}\\p{N}_])", RegexOption.IGNORE_CASE) }
     Page({ Bar(q, { BackBtn() }) }) {
+        val found by remember(q) { derivedStateOf { app.store.posts.filter { it.parent == null && re.containsMatchIn(it.text) }.sortedByDescending { ft(it) } } }
         LazyColumn(Modifier.fillMaxSize(), state = app.listStateFor(LocalPage.current)) {
-            postList(app.store.posts.filter { it.parent == null && re.containsMatchIn(it.text) }.sortedByDescending { ft(it) }, { Empty("smile", "No posts use $q yet.") })
+            postList(found, { Empty("smile", "No posts use $q yet.") })
         }
     }
 }
@@ -267,11 +299,13 @@ fun TagScreen(q: String) {
 fun ListsScreen() {
     val app = LocalApp.current
     val s = app.store
+    // the ids of the posts this phone has, so counting a list is a lookup
+    val have by remember { derivedStateOf { s.posts.mapTo(HashSet()) { it.id } } }
     Page({ Bar("Lists", { Lead() }) }, fab = if (s.lists.isNotEmpty()) ({ Fab("plus") { app.panels.add(Panel.ListForm(null)) } }) else null) {
         LazyColumn(Modifier.fillMaxSize(), state = app.listStateFor(LocalPage.current), contentPadding = PaddingValues(bottom = if (s.lists.isNotEmpty()) 88.dp else 0.dp)) {
             if (s.lists.isEmpty()) item { Empty("list", "Make your first list.") { Pill("New list") { app.panels.add(Panel.ListForm(null)) } } }
             items(s.lists, key = { it.id }) { l ->
-                val n = l.ids.count { s.byId(it) != null }
+                val n = l.ids.count { it in have }
                 LRow({ Sq("list") }, l.name, "$n " + (if (n == 1) "post" else "posts") + if (l.desc.isNotEmpty()) " · " + l.desc else "") { app.go(Route.ListPage(l.id)) }
             }
         }
@@ -303,9 +337,11 @@ fun ListScreen(id: String) {
 
 // a person in a list: their picture, name and handle (or a line about them)
 @Composable
-fun PersonRow(id: String, a: JSONObject?, sub: String? = null, trail: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
+fun PersonRow(id: String, a: JSONObject?, sub: String? = null, trail: (@Composable () -> Unit)? = null, nick: Boolean = true, onClick: () -> Unit) {
     val app = LocalApp.current
-    val nm = app.on.nickOf(id).ifEmpty { a?.optString("display_name")?.ifEmpty { null } ?: a?.optString("username") ?: "user" }
+    // search and followers lists show the name the person chose; a nickname set on this phone only applies elsewhere
+    val own = a?.optString("display_name")?.ifEmpty { null } ?: a?.optString("username") ?: "user"
+    val nm = if (nick) app.on.nickOf(id).ifEmpty { own } else own
     LRow({ RAv(nm, a?.optString("username") ?: "", a?.optStr("avatar"), 48.dp, id) }, nm, sub ?: ("@" + (a?.optString("username") ?: "user")), trail = trail, onClick = onClick)
 }
 
@@ -342,7 +378,7 @@ fun SearchScreen() {
             if (r == null) item { Loading() }
             else if (r.isEmpty()) item { Empty("user", empty) }
             else items(r, key = { it.optString("id") }) { a ->
-                PersonRow(a.optString("id"), a, "@" + a.optString("username") + (a.optString("bio").takeIf { it.isNotEmpty() }?.let { " · " + it.take(60) } ?: "")) { app.go(Route.User(a.optString("id"))) }
+                PersonRow(a.optString("id"), a, "@" + a.optString("username") + (a.optString("bio").takeIf { it.isNotEmpty() }?.let { " · " + it.take(60) } ?: ""), nick = false) { app.go(Route.User(a.optString("id"))) }
             }
         }
     }
@@ -368,7 +404,9 @@ fun NotifsScreen() {
                 else -> items(n, key = { it.id }) { x ->
                     val a = app.on.acctCache[x.actor]
                     SwipeRow({ app.on.deleteNote(x.id) }, { notes = notes?.filter { it.id != x.id } }) {
-                        Box(Modifier.background(if (x.read) c.bg else c.accent.copy(alpha = 0.09f).compositeOver(c.bg))) {
+                        Box(Modifier.background(c.bg)) {
+                            // an unread row has an inset rounded tint (inset 3px 6px), the rest of the row stays plain
+                            if (!x.read) Box(Modifier.matchParentSize().padding(horizontal = 6.dp, vertical = 3.dp).clip(RoundedCornerShape(Rad.m)).background(c.accent.copy(alpha = 0.09f)))
                             LRow({ RAv(a?.optString("name") ?: "user", a?.optString("username") ?: "", a?.optStr("avatar"), 40.dp, x.actor) }, app.on.nickOf(x.actor).ifEmpty { a?.optString("name") ?: "user" }, NOTE_WHAT[x.kind] ?: "", ago(parseIso(x.created))) { app.on.openNote(x) }
                         }
                     }
@@ -378,8 +416,6 @@ fun NotifsScreen() {
     }
 }
 
-private fun Color.compositeOver(bg: Color): Color { val a = alpha; return Color(red * a + bg.red * (1 - a), green * a + bg.green * (1 - a), blue * a + bg.blue * (1 - a), 1f) }
-
 // swipeRow(): drag a row to the left to delete it; del() says whether the server removed it, gone() runs after the row is out
 @Composable
 fun SwipeRow(del: suspend () -> Boolean, gone: () -> Unit, content: @Composable () -> Unit) {
@@ -387,13 +423,20 @@ fun SwipeRow(del: suspend () -> Boolean, gone: () -> Unit, content: @Composable 
     val scope = rememberCoroutineScope()
     var dx by remember { mutableFloatStateOf(0f) }
     var w by remember { mutableFloatStateOf(1f) }
+    // once the server removed the row it folds away over .2s before it leaves the list
+    var out by remember { mutableStateOf(false) }
+    LaunchedEffect(out) { if (out) { delay(200); gone() } }
+    androidx.compose.animation.AnimatedVisibility(
+        visible = !out, exit = androidx.compose.animation.shrinkVertically(androidx.compose.animation.core.tween(200)) + androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(160)),
+    ) {
     Box(Modifier.fillMaxWidth().background(c.danger).onSizeChanged { w = it.width.toFloat() }) {
         Box(Modifier.matchParentSize().padding(end = 22.dp), contentAlignment = Alignment.CenterEnd) { NIcon("trash", 22.dp, Color.White) }
         Box(Modifier.offset { IntOffset(dx.roundToInt(), 0) }.background(c.bg).pointerInput(Unit) {
             detectHorizontalDragGestures(onDragEnd = {
-                if (dx < -minOf(120.dp.toPx(), w * 0.35f)) { dx = -w; scope.launch { if (del()) gone() else dx = 0f } } else dx = 0f
+                if (dx < -minOf(120.dp.toPx(), w * 0.35f)) { dx = -w; scope.launch { if (del()) out = true else dx = 0f } } else dx = 0f
             }, onDragCancel = { dx = 0f }) { _, d -> dx = minOf(0f, dx + d) }
         }) { content() }
+    }
     }
 }
 
@@ -418,7 +461,7 @@ fun FollowsScreen(r: Route.Follows) {
                 l == null && fail -> item { Fail("Could not load this list. Check your connection.") { fail = false; tries++ } }
                 l == null -> item { Loading() }
                 l.isEmpty() -> item { Empty("user", if (r.followers) "No followers yet." else "Not following anyone yet.") }
-                else -> items(l, key = { it }) { id -> PersonRow(id, accts[id]) { app.go(Route.User(id)) } }
+                else -> items(l, key = { it }) { id -> PersonRow(id, accts[id], nick = false) { app.go(Route.User(id)) } }
             }
         }
     }
@@ -533,6 +576,6 @@ fun Hinted(value: String, max: Int, rule: String? = null, min: Int = 0, field: @
     }
     Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
         field()
-        if (text.isNotEmpty()) T(text, Fs.sm, color = if (bad) c.danger else c.muted)
+        if (text.isNotEmpty()) T(text, Fs.sm, color = if (bad) c.danger else c.muted, align = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 12.dp))
     }
 }

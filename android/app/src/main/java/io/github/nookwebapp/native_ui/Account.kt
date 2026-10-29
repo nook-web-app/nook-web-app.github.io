@@ -155,10 +155,13 @@ fun Online.showBanned(email: String?) {
     if (app.top == Route.Banned) return
     app.banEmail = email ?: Sb.user?.email ?: ""
     app.scope.launch {
+        val id = Sb.user?.id
         Rt.removeAll()
         Sb.signOut()
         me = null
         s.wipe()
+        // the saved copy of the account, its login entry and the cached copies of its profile and inbox go too
+        if (id != null) { forgetAccount(id); Cache.drop { it.contains(id) } }
         app.root(Route.Banned)
     }
 }
@@ -252,6 +255,8 @@ suspend fun Online.signIn(email: String, pw: String): String? {
 
 suspend fun Online.signUp(name: String, user: String, email: String, pw: String): String? {
     if (pwned(pw)) return PWNED_MSG
+    // the name of the AI is not for anybody else, in any letter case
+    if (user.lowercase() == "zenith") return "That username is taken"
     if (Sb.get(Q("accounts").select("id").eq("username", user)).one != null) return "That username is taken"
     val sr = Sb.fn("signin", JSONObject().put("action", "signup").put("email", email).put("password", pw))
     if (!sr.ok) return if (sr.body.optString("error") == "signup_failed") authMsg(sr.body.optString("code"), sr.body.optString("message"), sr.body.optInt("status")) else signinMsg(sr)

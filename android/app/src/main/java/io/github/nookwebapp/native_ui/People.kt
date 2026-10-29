@@ -26,13 +26,13 @@ import kotlin.math.roundToInt
 
 // rAv(): the person's picture, or the first letter of their name on a color that comes from the name
 @Composable
-fun RAv(name: String, handle: String, avatar: String?, size: Dp, id: String? = null, modifier: Modifier = Modifier) {
+fun RAv(name: String, handle: String, avatar: String?, size: Dp, id: String? = null, modifier: Modifier = Modifier, letter: androidx.compose.ui.unit.TextUnit? = null) {
     val app = LocalApp.current
     val seed = name.ifEmpty { handle }.ifEmpty { "?" }
-    val isZen = !Photos.ownMedia(avatar) && (handle.lowercase() == "zenith" || (id != null && id == app.on.zenId()))
+    val isZen = !Photos.ownMedia(avatar) && (id != null && id == app.on.zenId())
     if (isZen) { ZenAv(size, modifier); return }
     RoundPic(avatar?.takeIf { Photos.ownMedia(it) }, size, androidx.compose.ui.graphics.SolidColor(hsl(hueOf(seed), .45f, .42f)), modifier) {
-        T(seed.trim().take(1).uppercase().ifEmpty { "?" }, size = (size.value * 0.4f).roundToInt().sp, weight = FontWeight.Bold, color = Color.White, lineHeight = (size.value * 0.5f).sp)
+        T(seed.trim().take(1).uppercase().ifEmpty { "?" }, size = letter ?: (size.value * 0.4f).roundToInt().sp, weight = FontWeight.Bold, color = Color.White, lineHeight = (size.value * 0.5f).sp)
     }
 }
 
@@ -63,10 +63,13 @@ fun PostAv(p: LPost, size: Dp, modifier: Modifier = Modifier) {
 fun nameOf(app: AppState, p: LPost) = if (p.ai) "Zenith" else p.ra?.name ?: app.store.profile.name
 fun handleOf(app: AppState, p: LPost) = if (p.ai) "@zenith" else "@" + (p.ra?.handle ?: app.store.profile.handle)
 
+private val CARD_URL_RE = Regex("https?://[^\\s<>\"]+", RegexOption.IGNORE_CASE)
+private val CARD_GAPS_RE = Regex("[ \\t]{2,}")
+
 // cardless(): a post that shows a link card does not also print the link
 fun cardless(p: LPost): String {
     if (p.text.isEmpty() || p.imgs.isNotEmpty() || firstUrl(p.text) == null) return p.text
-    return p.text.replaceFirst(Regex("https?://[^\\s<>\"]+", RegexOption.IGNORE_CASE), "").replace(Regex("[ \\t]{2,}"), " ").trim()
+    return p.text.replaceFirst(CARD_URL_RE, "").replace(CARD_GAPS_RE, " ").trim()
 }
 
 // .lc: the card of a link: its picture (placed on the main thing in it, outside chats), title, a line and the site
@@ -75,19 +78,19 @@ fun LinkCard(url0: String, chat: Boolean = false) {
     val app = LocalApp.current
     val c = LocalNook.current
     val uri = LocalUriHandler.current
-    val url = cleanUrl(url0)
+    val url = remember(url0) { cleanUrl(url0) }
     var d by remember(url) { mutableStateOf(app.store.previews[url]?.takeIf { it.has("v") }) }
     var loading by remember(url) { mutableStateOf(d == null) }
     LaunchedEffect(url) { if (d == null) { d = runCatching { app.on.getPreview(url) }.getOrNull(); loading = false } }
     val shape = RoundedCornerShape(if (chat) Rad.bubble else Rad.m)
-    val host = hostOf(url)
+    val host = remember(url) { hostOf(url) }
     Column(
         (if (chat) Modifier.fillMaxWidth(0.82f).widthIn(max = 320.dp) else Modifier.fillMaxWidth().padding(top = 8.dp)).clip(shape).background(c.bg2)
             .then(if (chat) Modifier else Modifier.border(1.dp, c.line, shape)).tap { runCatching { uri.openUri(url) } },
     ) {
         val dd = d
         if (loading && dd == null) { Box(Modifier.fillMaxWidth().height(150.dp).background(c.bg2).shimmer()); return@Column }
-        val (title, cap) = cardText(dd, url)
+        val (title, cap) = remember(dd, url) { cardText(dd, url) }
         val img = dd?.optString("i")?.ifEmpty { null }
         if (img != null) {
             var focus by remember(url) { mutableStateOf<Pair<Float, Float>?>(null) }

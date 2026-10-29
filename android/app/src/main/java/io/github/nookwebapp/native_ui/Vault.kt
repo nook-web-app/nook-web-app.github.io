@@ -24,14 +24,18 @@ object Vault {
         }.getOrNull()
     }
 
+    // only the unit tests on a computer (no Android key store there) switch this on
+    @Volatile var plainForTests = false
+
     fun seal(plain: ByteArray): ByteArray {
-        val k = key ?: return byteArrayOf(0) + plain
+        val k = key ?: if (plainForTests) return byteArrayOf(0) + plain else throw IllegalStateException("no key store")
         val c = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, k) }
         return byteArrayOf(1) + c.iv + c.doFinal(plain)
     }
 
     fun open(b: ByteArray): ByteArray? = runCatching {
         when (b[0].toInt()) {
+            // files written before the key store was required; they are sealed again at their next write
             0 -> b.copyOfRange(1, b.size)
             1 -> {
                 val k = key ?: return null
@@ -45,7 +49,9 @@ object Vault {
     fun write(f: File, text: String?) {
         if (text == null) { f.delete(); return }
         val tmp = File(f.parentFile, f.name + ".tmp")
-        tmp.writeBytes(seal(text.toByteArray()))
+        // without a key store nothing is written, never the plain text
+        val sealed = runCatching { seal(text.toByteArray()) }.getOrNull() ?: return
+        tmp.writeBytes(sealed)
         tmp.renameTo(f)
     }
 

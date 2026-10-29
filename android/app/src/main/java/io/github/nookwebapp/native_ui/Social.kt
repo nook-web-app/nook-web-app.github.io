@@ -218,12 +218,15 @@ fun cleanUrl(u: String): String {
     val kept = qs.split("&").filter { kv -> val k = kv.split("=")[0].lowercase(); kv.isNotEmpty() && !k.startsWith("utm_") && k !in TRACKING }
     return u.substring(0, i) + (if (kept.isNotEmpty()) "?" + kept.joinToString("&") else "") + hash
 }
-fun cleanText(t: String): String = Regex("https?://[^\\s<>\"]+", RegexOption.IGNORE_CASE).replace(t) { m ->
-    val tail = Regex("[.,!?)\\]]+$").find(m.value)?.value ?: ""
+private val TEXT_URL_RE = Regex("https?://[^\\s<>\"]+", RegexOption.IGNORE_CASE)
+private val TEXT_URL_TAIL = Regex("[.,!?)\\]]+$")
+fun cleanText(t: String): String = TEXT_URL_RE.replace(t) { m ->
+    val tail = TEXT_URL_TAIL.find(m.value)?.value ?: ""
     cleanUrl(m.value.dropLast(tail.length)) + tail
 }
 fun hostOf(u: String) = runCatching { (java.net.URI(u).host ?: u).removePrefix("www.") }.getOrDefault(u)
-private fun ytId(u: String) = Regex("(?:youtube\\.com/(?:watch\\?(?:.*&)?v=|shorts/|embed/|live/)|youtu\\.be/)([\\w-]{6,})", RegexOption.IGNORE_CASE).find(u)?.groupValues?.get(1)
+private val YT_RE = Regex("(?:youtube\\.com/(?:watch\\?(?:.*&)?v=|shorts/|embed/|live/)|youtu\\.be/)([\\w-]{6,})", RegexOption.IGNORE_CASE)
+private fun ytId(u: String) = YT_RE.find(u)?.groupValues?.get(1)
 
 private val pvMem = HashMap<String, kotlinx.coroutines.Deferred<JSONObject?>>()
 // getPreview(): a card for a link: the title, a line, a picture and the site; kept for the 150 newest links
@@ -243,7 +246,6 @@ suspend fun Online.getPreview(url: String): JSONObject? {
         if (got != null) {
             s.previews[url] = got
             while (s.previews.size > 150) s.previews.remove(s.previews.keys.first())
-            app.persist()
         } else app.scope.launch { kotlinx.coroutines.delay(600_000); pvMem.remove(url) }
         got
     }.also { pvMem[url] = it }
@@ -258,25 +260,36 @@ suspend fun Online.getFocus(url: String, img: String): Pair<Float, Float>? {
     if (!r.ok || !r.body.has("x") || !r.body.has("y")) return null
     val f = r.body.optDouble("x").toFloat() to r.body.optDouble("y").toFloat()
     s.previews[url]?.put("f", JSONObject().put("x", f.first).put("y", f.second))
-    app.persist()
     return f
 }
+
+private val IG_HOST = Regex("(^|\\.)instagram\\.com$", RegexOption.IGNORE_CASE)
+private val IG_WHO = Regex("\\(@([\\w.]+)\\)")
+private val IG_WHO2 = Regex("\\s-\\s([\\w.]+) on ")
+private val IG_CAP = Regex(":\\s*[\"\\u201c]([\\s\\S]*)$")
+private val IG_CAP_END = Regex("[\"\\u201d]\\.?\\s*$")
+private val IG_TAG = Regex("#[\\p{L}\\p{N}_]+")
+private val SPACES = Regex("\\s+")
+private val ELLIPSIS = Regex("(\\u2026|\\.\\.\\.)$")
+private val IG_SENT = Regex("^([\\s\\S]*[.!?])(\\s|$)")
+private val IG_TITLE = Regex("\\s*[\\u2022\\u00b7|-]\\s*Instagram.*$", RegexOption.IGNORE_CASE)
+private val IG_PLAIN = Regex("\\s*[\\u2022\\u00b7]\\s*Instagram (photo|video|reel)s?$", RegexOption.IGNORE_CASE)
 
 // cardText(): for Instagram only the @username and the caption without hashtags, for everything else just the page title
 fun cardText(d: JSONObject?, url: String): Pair<String, String> {
     val t = d?.optString("t") ?: ""
     val desc = d?.optString("d") ?: ""
-    if (Regex("(^|\\.)instagram\\.com$", RegexOption.IGNORE_CASE).containsMatchIn(hostOf(url))) {
-        val who = Regex("\\(@([\\w.]+)\\)").find(t)?.groupValues?.get(1) ?: Regex("\\s-\\s([\\w.]+) on ").find(desc)?.groupValues?.get(1)
-        var cap = Regex(":\\s*[\"\\u201c]([\\s\\S]*)$").find(desc)?.groupValues?.get(1)?.replace(Regex("[\"\\u201d]\\.?\\s*$"), "")?.replace(Regex("#[\\p{L}\\p{N}_]+"), "")?.replace(Regex("\\s+"), " ")?.trim() ?: ""
-        if (Regex("(\\u2026|\\.\\.\\.)$").containsMatchIn(cap)) {
-            val body = cap.replace(Regex("(\\u2026|\\.\\.\\.)$"), "").trim()
-            val full = Regex("^([\\s\\S]*[.!?])(\\s|$)").find(body)?.groupValues?.get(1)
+    if (IG_HOST.containsMatchIn(hostOf(url))) {
+        val who = IG_WHO.find(t)?.groupValues?.get(1) ?: IG_WHO2.find(desc)?.groupValues?.get(1)
+        var cap = IG_CAP.find(desc)?.groupValues?.get(1)?.replace(IG_CAP_END, "")?.replace(IG_TAG, "")?.replace(SPACES, " ")?.trim() ?: ""
+        if (ELLIPSIS.containsMatchIn(cap)) {
+            val body = cap.replace(ELLIPSIS, "").trim()
+            val full = IG_SENT.find(body)?.groupValues?.get(1)
             cap = if (full != null && full.length >= 12) full else "$body…"
         }
-        return (if (who != null) "@$who" else t.replace(Regex("\\s*[\\u2022\\u00b7|-]\\s*Instagram.*$", RegexOption.IGNORE_CASE), "")) to cap
+        return (if (who != null) "@$who" else t.replace(IG_TITLE, "")) to cap
     }
-    return t.replace(Regex("\\s*[\\u2022\\u00b7]\\s*Instagram (photo|video|reel)s?$", RegexOption.IGNORE_CASE), "") to ""
+    return t.replace(IG_PLAIN, "") to ""
 }
 
 // the banned words a post may not have (bannedHit)

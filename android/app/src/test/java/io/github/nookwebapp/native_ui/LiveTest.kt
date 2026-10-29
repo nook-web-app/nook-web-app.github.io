@@ -25,6 +25,7 @@ class LiveTest {
 
     @Test fun live() {
         assumeTrue(System.getenv("NOOK_LIVE") == "1")
+        Vault.plainForTests = true
         Dispatchers.setMain(Executors.newSingleThreadExecutor().asCoroutineDispatcher())
         runBlocking(Dispatchers.Main) { run() }
         if (fails.isNotEmpty()) throw AssertionError("failed: " + fails.joinToString())
@@ -42,6 +43,8 @@ class LiveTest {
         val ra = a.on.signUp("Live A", "lva_$tag", ea, pw)
         check("sign up A", ra == null && Sb.user != null, ra)
         val aId = Sb.user!!.id; val aS = Sb.session!!
+        // the message key is made while this account's session is the active one, so the sign up's own background call cannot race with the switches below
+        runCatching { a.on.ensureE2E() }.onFailure { println("A keys: $it") }
         check("A row", row("accounts", "id", aId, "username")?.optString("username") == "lva_$tag")
 
         a.newPost("hello from the live test $tag", emptyList(), null)
@@ -81,6 +84,7 @@ class LiveTest {
         val rb = b.on.signUp("Live B", "lvb_$tag", eb, pw)
         check("sign up B", rb == null && Sb.user?.id != aId, rb)
         val bId = Sb.user!!.id; val bS = Sb.session!!
+        runCatching { b.on.ensureE2E() }.onFailure { println("B keys: $it") }
 
         val pgA = UserPage(aId)
         b.on.loadUser(pgA)

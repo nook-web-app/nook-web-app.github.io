@@ -125,7 +125,7 @@ fun DrawerHost(app: AppState) {
             T("@" + pr.handle, color = c.muted)
             Spacer(Modifier.height(18.dp))
             // Zenith sits first for the owner
-            if (zOn() && app.rootRoute != Route.Zen) Row(Modifier.fillMaxWidth().tap { app.drawer = false; scope.launch { delay(170); app.root(Route.Zen) } }.vpad(13.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+            if (zOn()) Row(Modifier.fillMaxWidth().tap { app.drawer = false; scope.launch { delay(170); app.root(Route.Zen) } }.vpad(13.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                 ZenAv(28.dp); T("Zenith", Fs.x2)
             }
             // the page that is already open is left out of the menu
@@ -227,7 +227,7 @@ fun PanelHost(app: AppState) {
 // main button under the fields (.mact) or a footer
 @Composable
 fun Modal(
-    title: String, action: String, enabled: Boolean = true, top: Boolean = false, onCancel: () -> Unit, onAction: () -> Unit,
+    title: String, action: String, enabled: Boolean = true, top: Boolean = false, onCancel: () -> Unit, onAction: () -> Unit, showAction: Boolean = true,
     foot: (@Composable () -> Unit)? = null, body: @Composable ColumnScope.() -> Unit,
 ) {
     val c = LocalNook.current
@@ -239,7 +239,7 @@ fun Modal(
         }
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).vpad(12.dp)) {
             body()
-            if (!top && foot == null) Pill(action, Btn.Pri, enabled = enabled, modifier = Modifier.padding(top = 20.dp).fillMaxWidth(), onClick = onAction)
+            if (!top && foot == null && showAction) Pill(action, Btn.Pri, enabled = enabled, modifier = Modifier.padding(top = 20.dp).fillMaxWidth(), onClick = onAction)
         }
         foot?.invoke()
     }
@@ -302,7 +302,14 @@ fun ViewerHost(app: AppState) {
             // a photo of one's own message can be deleted from the viewer
             val del = v.del
             if (del != null) Box(Modifier.align(Alignment.TopStart).statusBarsPadding().padding(12.dp).size(44.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.14f)).pressTap(CircleShape) {
-                app.confirm("Delete this photo?", "Delete") { app.scope.launch { if (del(pager.currentPage)) app.viewer = null } }
+                app.confirm("Delete this photo?", "Delete") { app.scope.launch {
+                    val at = pager.currentPage
+                    if (del(at)) {
+                        // only that photo goes; the viewer closes when none is left
+                        val left = v.imgs.filterIndexed { k, _ -> k != at }
+                        if (left.isEmpty()) app.viewer = null else app.viewer = v.copy(imgs = left, index = minOf(at, left.size - 1))
+                    }
+                } }
             }, contentAlignment = Alignment.Center) { NIcon("trash", 22.dp, Color.White) }
             if (v.cap != null) T(v.cap, Fs.sm, color = Color.White.copy(alpha = 0.8f), align = TextAlign.Center, modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(bottom = 18.dp))
         }
@@ -333,10 +340,12 @@ fun WarnHost(app: AppState) {
                     .clickable(remember { MutableInteractionSource() }, null) {}.padding(start = 18.dp, end = 18.dp, bottom = 18.dp),
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Box(Modifier.fillMaxWidth().vpad(10.dp, 2.dp), contentAlignment = Alignment.Center) { Box(Modifier.size(38.dp, 4.dp).clip(RoundedCornerShape(Rad.xs)).background(c.line)) }
+                Box(Modifier.fillMaxWidth().vpad(10.dp, 12.dp), contentAlignment = Alignment.Center) { Box(Modifier.size(38.dp, 4.dp).clip(RoundedCornerShape(Rad.xs)).background(c.line)) }
                 T(x.title, Fs.x2, FontWeight.Bold, align = TextAlign.Center)
                 T(x.body, Fs.md, color = c.muted, align = TextAlign.Center, lineHeight = (14 * 1.5).sp)
-                if (x.mail != null) T(x.mail, Fs.md, FontWeight.Bold, align = TextAlign.Center)
+                if (x.mail != null) Box(Modifier.clip(RoundedCornerShape(Rad.m)).background(c.bg2).border(1.dp, c.line, RoundedCornerShape(Rad.m)).padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    T(x.mail, Fs.md, FontWeight.Bold, align = TextAlign.Center)
+                }
                 if (x.extra.isNotEmpty()) T(x.extra, Fs.md, color = c.muted, align = TextAlign.Center)
                 Pill(if (left > 0) "I understand ($left)" else "I understand", Btn.Pri, enabled = left <= 0, modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) { app.warns.remove(x); x.onDone() }
                 if (x.mail != null) Pill("Change my email", Btn.Ghost, enabled = left <= 5, modifier = Modifier.fillMaxWidth()) { app.panels.add(Panel.ChangeEmail) }

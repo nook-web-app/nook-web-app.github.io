@@ -2,6 +2,7 @@ package io.github.nookwebapp.native_ui
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CompletableDeferred
@@ -76,11 +77,15 @@ class DmState {
     val muteSet = HashMap<String, Long>()
     val hideSet = HashSet<String>()
     var mutesAt = 0L
+    var targetsAt = 0L
+    var targetsUser = ""
+    var targetIds: List<String> = emptyList()
     var live by mutableStateOf<LiveDm?>(null)
     var inbox by mutableStateOf<List<Convo>?>(null)
     var inboxN by mutableStateOf(-1)
     val typingIn = HashMap<String, Long>()
-    var typingVersion by mutableStateOf(0)
+    // true while that person is typing, so only the row of that person redraws
+    val typingFlag = mutableStateMapOf<String, Boolean>()
     val typeOut = HashMap<String, Pair<Rt.Ch, LongArray>>()
     var rtChan: Rt.Ch? = null
     var delChan: Rt.Ch? = null
@@ -495,7 +500,8 @@ suspend fun Online.encMedia(md: JSONObject, keyOf: suspend () -> ByteArray): Str
     val signed = signedFor(url) ?: return null
     val raw = Sb.bytes(signed) ?: return null
     val iv = md.optStr("iv")
-    val plain = if (iv != null) runCatching { Crypto.open(keyOf(), Crypto.unb64(iv), raw) }.getOrNull() ?: return null else raw
+    // opening a full photo is heavy work, so it runs off the main thread
+    val plain = if (iv != null) runCatching { val k = keyOf(); withContext(kotlinx.coroutines.Dispatchers.Default) { Crypto.open(k, Crypto.unb64(iv), raw) } }.getOrNull() ?: return null else raw
     withContext(kotlinx.coroutines.Dispatchers.IO) { File(dir, f.name + ".part").apply { writeBytes(plain) }.renameTo(f) }
     md.optInt("w").takeIf { it > 0 }?.let { w -> Photos.noteSize(f.path, w, md.optInt("h")) }
     return f.path
@@ -566,10 +572,15 @@ fun dmGist(text: String, media: JSONArray?, mine: Boolean): String {
     return if (t.isNotEmpty()) (if (mine) "You: " else "") + t else ""
 }
 
-fun Online.markRead(ids: List<Long>) {
+fun Online.markRead(ids: List<Long>, other: String) {
     val me = uid ?: return
     if (ids.isEmpty()) return
-    app.scope.launch { Sb.update(Q("messages").inList("id", ids).eq("recipient_id", me), JSONObject().put("read_at", isoNow())); refreshBadge(true) }
+    app.scope.launch {
+        Sb.update(Q("messages").inList("id", ids).eq("recipient_id", me), JSONObject().put("read_at", isoNow()))
+        refreshBadge(true)
+        // the chat list shows no unread number for this person right away, like inboxStale() of the web app
+        dm.inbox = dm.inbox?.map { if (it.other == other && it.unread > 0) Convo(it.other, it.name, it.avatar, 0, it.last) else it }
+    }
 }
 
 // dmStatus(): messaging needs both people to follow each other and nobody to have blocked the other
@@ -649,6 +660,8 @@ fun Online.deleteDm(m: DmMsg, other: String) {
         threadDrop(other, id); inboxDrop(other, id)
         if (paths.isNotEmpty()) Sb.remove("dm-media", paths)
     }
+    // the opened copies of its photos do not stay on the phone
+    Photos.cacheDir?.let { dir -> (0 until m.media.length()).forEach { i -> m.media.optJSONObject(i)?.optString("url")?.let { u -> runCatching { File(dir, "dm/" + Crypto.sha1Hex(u).lowercase()).delete() } } } }
 }
 
 // deleteDmMedia(): one photo of a message of mine goes; the message goes too when nothing is left in it
@@ -711,7 +724,7 @@ suspend fun Online.syncRows(l: LiveDm, rows0: List<JSONObject>, prune: Boolean, 
     }
     l.loaded = true; l.failed = false
     val unread = rows.filter { it.recipient == me && it.readAt == null }.mapNotNull { it.id }
-    if (unread.isNotEmpty()) markRead(unread)
+    if (unread.isNotEmpty()) markRead(unread, l.id)
 }
 
 // dmV(): opening a chat shows what this phone has at once, then the newest from the server, and polls as a safety net
@@ -814,14 +827,18 @@ fun Online.onTyping(from: String?, on: Boolean?) {
     if (now - (typeSeen[from] ?: 0) < 400) return
     typeSeen[from] = now
     if (dm.muteSet.containsKey(from) || from in dm.hideSet) return
-    if (on == false) { if (dm.typingIn.containsKey(from)) { dm.typingIn[from] = now + 1600; dm.typingVersion++ }; return }
-    dm.typingIn[from] = now + 4500; dm.typingVersion++
-    dm.live?.let { if (it.id == from) it.typing = true }
-    app.scope.launch {
-        delay(4600)
-        val until = dm.typingIn[from] ?: return@launch
-        if (System.currentTimeMillis() >= until) { dm.typingIn.remove(from); dm.typingVersion++; dm.live?.let { if (it.id == from) it.typing = false } }
+    // an off signal hides the dots 1.6 s later, like the web app
+    if (on == false) {
+        if (dm.typingIn.containsKey(from)) { dm.typingIn[from] = now + 1600; app.scope.launch { delay(1650); typingExpire(from) } }
+        return
     }
+    dm.typingIn[from] = now + 4500; dm.typingFlag[from] = true
+    dm.live?.let { if (it.id == from) it.typing = true }
+    app.scope.launch { delay(4600); typingExpire(from) }
+}
+private fun Online.typingExpire(from: String) {
+    val until = dm.typingIn[from] ?: return
+    if (System.currentTimeMillis() >= until) { dm.typingIn.remove(from); dm.typingFlag.remove(from); dm.live?.let { if (it.id == from) it.typing = false } }
 }
 fun Online.isTyping(id: String): Boolean = (dm.typingIn[id] ?: 0) > System.currentTimeMillis()
 
@@ -930,13 +947,18 @@ suspend fun Online.messageTargets(): List<Target> {
     val out = ArrayList<Target>()
     s.chats.filter { it.isNotes }.forEach { out.add(Target(true, it.id, it.name, null)) }
     val me = uid ?: return out
-    val a = Sb.pageAll { Q("follows").select("followee_id").eq("follower_id", me).order("followee_id") }
-    val b = Sb.pageAll { Q("follows").select("follower_id").eq("followee_id", me).order("follower_id") }
-    val k1 = Sb.pageAll { Q("blocks").select("blocked_id").eq("blocker_id", me).order("blocked_id") }
-    val k2 = Sb.pageAll { Q("blocks").select("blocker_id").eq("blocked_id", me).order("blocker_id") }
-    val mineF = a.rows.map { it.optString("followee_id") }.toSet()
-    val hidden = k1.rows.map { it.optString("blocked_id") }.toSet() + k2.rows.map { it.optString("blocker_id") }
-    val ids = b.rows.map { it.optString("follower_id") }.filter { it in mineF && it !in hidden }
+    // the follow and block lists are kept for a minute, so sharing again at once does not fetch them again
+    if (dm.targetsUser != me || System.currentTimeMillis() - dm.targetsAt > 60_000) {
+        val a = Sb.pageAll { Q("follows").select("followee_id").eq("follower_id", me).order("followee_id") }
+        val b = Sb.pageAll { Q("follows").select("follower_id").eq("followee_id", me).order("follower_id") }
+        val k1 = Sb.pageAll { Q("blocks").select("blocked_id").eq("blocker_id", me).order("blocked_id") }
+        val k2 = Sb.pageAll { Q("blocks").select("blocker_id").eq("blocked_id", me).order("blocker_id") }
+        val mineF = a.rows.map { it.optString("followee_id") }.toSet()
+        val hidden = k1.rows.map { it.optString("blocked_id") }.toSet() + k2.rows.map { it.optString("blocker_id") }
+        dm.targetIds = b.rows.map { it.optString("follower_id") }.filter { it in mineF && it !in hidden }
+        if (a.ok && b.ok && k1.ok && k2.ok) { dm.targetsAt = System.currentTimeMillis(); dm.targetsUser = me }
+    }
+    val ids = dm.targetIds
     if (ids.isNotEmpty()) {
         loadSocial()
         val m = cachedAccounts(ids)

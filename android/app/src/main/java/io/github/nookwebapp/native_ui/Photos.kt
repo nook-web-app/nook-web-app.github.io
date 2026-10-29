@@ -46,10 +46,21 @@ object Photos {
     } catch (e: Exception) { null }
 
     // pictures of other people are only loaded from this app's own storage or inline data, never from an address they chose
-    fun ownMedia(u: String?) = u != null && (u.startsWith("data:image/") || u.startsWith(SB_URL + "/storage/v1/object/public/media/") || u.startsWith("/"))
+    // (a local file path is never accepted here: somebody else's profile row must not make this phone read its own files)
+    fun ownMedia(u: String?) = u != null && ((u.startsWith("data:image/") && u.length <= MAX_INLINE) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"))
+    // the longest inline picture of a profile row that is drawn
+    const val MAX_INLINE = 400_000
     private fun fetch(url: String): ByteArray? = try {
-        Sb.http.newCall(okhttp3.Request.Builder().url(url).build()).execute().use { r -> if (r.isSuccessful) r.body?.bytes() else null }
+        Sb.http.newCall(okhttp3.Request.Builder().url(url).build()).execute().use { r -> if (r.isSuccessful) r.body?.let { b -> readCapped(b) } else null }
     } catch (e: Exception) { null }
+    // a response over 30 MB is dropped, also when the server did not say its length
+    private fun readCapped(b: okhttp3.ResponseBody): ByteArray? {
+        val max = 30L shl 20
+        if (b.contentLength() > max) return null
+        val src = b.source()
+        src.request(max + 1)
+        return if (src.buffer.size > max) null else src.readByteArray()
+    }
     // the old cache of downloaded pictures (before Coil kept them) is removed
     fun trimCache() { cacheDir?.let { File(it, "img") }?.takeIf { it.exists() }?.deleteRecursively() }
     fun intake(ctx: Context, dir: File, uri: Uri): String? = intakeOrNull(ctx, dir, uri)
@@ -57,7 +68,18 @@ object Photos {
         val cr = ctx.contentResolver
         val type = cr.getType(uri) ?: ""
         if (type.startsWith("video/")) throw IllegalArgumentException("video")
-        val bytes = cr.openInputStream(uri)!!.use { it.readBytes() }
+        // a stream over 40 MB is refused while it is read, before it can fill the memory
+        val bytes = cr.openInputStream(uri)!!.use { ins ->
+            val buf = ByteArrayOutputStream(); val chunk = ByteArray(64 * 1024); var total = 0L
+            while (true) {
+                val n = ins.read(chunk)
+                if (n < 0) break
+                total += n
+                if (total > (40L shl 20)) throw IllegalArgumentException("too big")
+                buf.write(chunk, 0, n)
+            }
+            buf.toByteArray()
+        }
         if (type == "image/gif" || Gif.isGif(bytes)) {
             // a big one is made again smaller; one over 12 MB that cannot be made smaller is refused
             val g = Gif.compress(bytes) ?: throw IllegalArgumentException("gif over 12 MB")
@@ -236,6 +258,7 @@ object Img {
 class DataSrc(val s: String) {
     class Fetcher(private val d: DataSrc, private val o: coil.request.Options) : coil.fetch.Fetcher {
         override suspend fun fetch(): coil.fetch.FetchResult {
+            if (d.s.length > Photos.MAX_INLINE) throw IllegalArgumentException("too big")
             val comma = d.s.indexOf(',')
             val bytes = java.util.Base64.getMimeDecoder().decode(d.s.substring(comma + 1))
             val type = d.s.substring(5, d.s.indexOf(';').takeIf { it in 0 until comma } ?: comma)

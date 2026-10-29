@@ -42,7 +42,8 @@ suspend fun zStream(history: JSONArray, onText: (String) -> Unit): String {
 // zGen(): one answer at once (posts, replies, chats with people)
 suspend fun zGen(system: String, text: String, imgs: List<String> = emptyList(), pics: List<String> = emptyList()): String {
     val parts = JSONArray().put(JSONObject().put("text", text))
-    imgs.forEach { src -> inline(src)?.let { parts.put(it) } }
+    // reading and encoding the photos is work for a background thread
+    withContext(kotlinx.coroutines.Dispatchers.IO) { imgs.mapNotNull { inline(it) } }.forEach { parts.put(it) }
     val body = JSONObject().put("system", zNow(system)).put("history", JSONArray().put(JSONObject().put("role", "user").put("parts", parts)))
     if (pics.isNotEmpty()) body.put("imageUrls", JSONArray(pics.take(2)))
     val (code, txt) = Sb.fnRaw("zenith", body, 25)
@@ -178,14 +179,17 @@ suspend fun Online.zenSync() {
     try {
         val me = uid!!
         val now = zenDocs()
-        val up = now.filter { (k, d) -> zenSeen[k] != canonJson(d) }
+        // comparing every document is work for a background thread; it reads a copy of what was sent
+        val seen = HashMap(zenSeen)
+        val up = withContext(kotlinx.coroutines.Dispatchers.Default) { now.filter { (k, d) -> seen[k] != canonJson(d) } }
         val del = if (s.posts.isNotEmpty() || s.chats.isNotEmpty()) zenSeen.filter { (k, j) -> k !in now && !j.contains("\"pub\":") }.keys.toList() else emptyList()
         for (part in up.entries.chunked(100)) {
             val rows = JSONArray()
             for ((k, d) in part) {
                 val data = if (k.startsWith("chat:")) {
                     val key = runCatching { sharedKey(me) }.getOrNull() ?: continue
-                    JSONObject().put("id", d.optString("id")).put("enc", Crypto.sealText(key, JSONObject().put("name", d.optString("name")).put("t", d.optLong("t")).put("msgs", zenChatMedia(d)).toString(), zenRowId(k)))
+                    val plain = JSONObject().put("name", d.optString("name")).put("t", d.optLong("t")).put("msgs", zenChatMedia(d)).toString()
+                    JSONObject().put("id", d.optString("id")).put("enc", withContext(kotlinx.coroutines.Dispatchers.Default) { Crypto.sealText(key, plain, zenRowId(k)) })
                 } else d
                 val (kind, docId) = zenKey(k)
                 rows.put(JSONObject().put("owner_id", me).put("kind", kind).put("doc_id", docId).put("data", data).put("updated_at", isoNow()))
@@ -195,7 +199,13 @@ suspend fun Online.zenSync() {
             if (!r.ok) throw IllegalStateException(r.error?.message)
             part.forEach { (k, d) -> zenSeen[k] = canonJson(d) }
         }
-        for (k in del) { val (kind, docId) = zenKey(k); if (Sb.delete(Q("zenith_docs").eq("owner_id", me).eq("kind", kind).eq("doc_id", docId)).ok) zenSeen.remove(k) }
+        // one request per kind and hundred documents, not one per document
+        del.groupBy { zenKey(it).first }.forEach { (kind, ks) ->
+            for (chunk in ks.chunked(100)) {
+                val ids = chunk.map { zenKey(it).second }
+                if (Sb.delete(Q("zenith_docs").eq("owner_id", me).eq("kind", kind).inList("doc_id", ids)).ok) chunk.forEach { zenSeen.remove(it) }
+            }
+        }
     } catch (e: Exception) { } finally { zenBusy = false }
 }
 
@@ -220,13 +230,14 @@ suspend fun Online.zenPull(): Boolean {
     val byRemote = s.posts.filter { it.remote != null }.associateBy { it.remote!! }
     val key = runCatching { sharedKey(me) }.getOrNull()
     var picFail = false
+    // the list of removed posts is read once, not for every row
+    val gone by lazy { (s.zen.optJSONArray("gone")?.strings() ?: emptyList()).toHashSet() }
     for (row in r.rows) {
         val kind = row.optString("kind"); val docId = row.optString("doc_id"); val k = "$kind:$docId"
         var d = row.optJSONObject("data") ?: JSONObject()
         when (kind) {
             "post" -> {
                 zenSeen[k] = canonJson(d)
-                val gone = s.zen.optJSONArray("gone")?.strings() ?: emptyList()
                 if (d.optString("id") in gone) { app.scope.launch { if (Sb.delete(Q("zenith_docs").eq("owner_id", me).eq("kind", "post").eq("doc_id", docId)).ok) zenSeen.remove(k) }; continue }
                 val pr = d.optStr("parentRemote")
                 if (pr != null) {

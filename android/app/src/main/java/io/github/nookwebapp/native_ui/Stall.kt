@@ -23,6 +23,8 @@ object Stall {
             var noted = false
             while (true) {
                 try { Thread.sleep(1000) } catch (e: InterruptedException) { return@Thread }
+                // nothing is asked of the main thread while the app is in the background
+                if (AppState.current?.foreground != true) { beat = System.currentTimeMillis(); noted = false; continue }
                 main.post(tick)
                 val late = System.currentTimeMillis() - beat
                 if (late > 3000 && AppState.current?.foreground == true) {

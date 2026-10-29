@@ -9,7 +9,10 @@ import java.io.File
 // a moment after the last change.
 object Cache {
     class Hit(val v: Any?, val t: Long)
-    private val MEM = Regex("^(follows|fl|ids|rpt):")
+    // who follows whom and who liked or reposted what: kept in memory only
+    private fun memOnly(k: String) = k.startsWith("follows:") || k.startsWith("fl:") || k.startsWith("ids:") || k.startsWith("rpt:")
+    // the file is written on its own thread, one write at a time
+    private val writer = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "nook-cache").apply { isDaemon = true } }
     private val mem = HashMap<String, Hit>()
     private val disk = LinkedHashMap<String, Hit>()
     private var file: File? = null
@@ -26,13 +29,13 @@ object Cache {
         }
     }
 
-    fun read(k: String): Hit? = synchronized(lock) { if (MEM.containsMatchIn(k)) mem[k] else disk[k] }
+    fun read(k: String): Hit? = synchronized(lock) { if (memOnly(k)) mem[k] else disk[k] }
 
     fun fresh(k: String, ttl: Long): Any? = read(k)?.takeIf { System.currentTimeMillis() - it.t < ttl }?.v
 
     fun write(k: String, v: Any?) = synchronized(lock) {
         val h = Hit(v, System.currentTimeMillis())
-        if (MEM.containsMatchIn(k)) { mem[k] = h; return@synchronized }
+        if (memOnly(k)) { mem[k] = h; return@synchronized }
         disk.remove(k); disk[k] = h
         // the oldest profiles go first when there are a lot of entries
         if (disk.size > 3000) disk.keys.filter { it.startsWith("acct:") }.take(disk.size - 2500).forEach { disk.remove(it) }
@@ -49,7 +52,9 @@ object Cache {
     }
     fun clearMem() = synchronized(lock) { mem.clear() }
 
-    fun flush() {
+    fun flush() { writer.execute { flushNow() } }
+
+    private fun flushNow() {
         val f: File; val txt: String
         synchronized(lock) {
             if (!dirty) return

@@ -44,17 +44,29 @@ fun ago(t: Long): String {
     if (h < 24) return "${h}h"
     val d = h / 24
     if (d < 30) return "${d}d"
-    return java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault()).format(java.util.Date(t))
+    return monDay.get()!!.format(java.util.Date(t))
 }
+// one formatter per thread, built once instead of for every post older than 30 days
+private val monDay = java.lang.ThreadLocal.withInitial { java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault()) }
+private val whenFmt = java.lang.ThreadLocal.withInitial { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT) }
 // toLocaleString([], { dateStyle: "medium", timeStyle: "short" })
-fun whenText(t: Long): String = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(java.util.Date(t))
+fun whenText(t: Long): String = whenFmt.get()!!.format(java.util.Date(t))
 
 private val URL_RE = Regex("https?://[^\\s<>\"]+", RegexOption.IGNORE_CASE)
-fun firstUrl(text: String) = URL_RE.find(text)?.value?.replace(Regex("[.,!?)\\]]+$"), "")
+private val URL_TAIL = Regex("[.,!?)\\]]+$")
+fun firstUrl(text: String) = URL_RE.find(text)?.value?.replace(URL_TAIL, "")
+
+private val RICH_RE = Regex("(https?://\\S+|#[\\p{L}\\p{N}_]+)")
+private val BOLD_RE = Regex("\\*\\*([^*\\n]+?)\\*\\*")
+private val ITALIC_RE = Regex("\\*([^*\\s](?:[^*\\n]*[^*\\s])?)\\*")
+private val LINK_TAIL = Regex("[.,!?)]+$")
+private val SCHEME_RE = Regex("^https?://")
+private val CUT_LINK_RE = Regex("https?://\\S*$")
+private val NON_SPACE_RE = Regex("^\\S*")
 
 // rich() of app.js: links (shortened to 34 characters), #tags that open the tag page, **bold** and *slanted* words
 fun rich(text: String, accent: Color): AnnotatedString = buildAnnotatedString {
-    val parts = Regex("(https?://\\S+|#[\\p{L}\\p{N}_]+)").let { re ->
+    val parts = RICH_RE.let { re ->
         val out = mutableListOf<Pair<String, Boolean>>(); var at = 0
         re.findAll(text).forEach { m -> out.add(text.substring(at, m.range.first) to false); out.add(m.value to true); at = m.range.last + 1 }
         out.add(text.substring(at) to false); out
@@ -63,7 +75,7 @@ fun rich(text: String, accent: Color): AnnotatedString = buildAnnotatedString {
         if (!special) {
             // words between two pairs of stars are bold, one star on each side slants them
             var i = 0
-            Regex("\\*\\*([^*\\n]+?)\\*\\*").findAll(part).forEach { m ->
+            BOLD_RE.findAll(part).forEach { m ->
                 italics(part.substring(i, m.range.first))
                 withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(m.groupValues[1]) }
                 i = m.range.last + 1
@@ -75,15 +87,17 @@ fun rich(text: String, accent: Color): AnnotatedString = buildAnnotatedString {
             pushStringAnnotation("tag", part); withStyle(SpanStyle(color = accent)) { append(part) }; pop()
             return@forEach
         }
-        val raw = part.replace(Regex("[.,!?)]+$"), "")
+        val raw = part.replace(LINK_TAIL, "")
         val tail = part.substring(raw.length)
-        val shown = raw.replace(Regex("^https?://"), "")
-        pushStringAnnotation("url", raw); withStyle(SpanStyle(color = accent)) { append(if (shown.length > 34) shown.take(33) + "…" else shown) }; pop()
+        // the link is shown and opened without its tracking parameters, like cleanUrl in app.js
+        val clean = cleanUrl(raw)
+        val shown = clean.replace(SCHEME_RE, "")
+        pushStringAnnotation("url", clean); withStyle(SpanStyle(color = accent)) { append(if (shown.length > 34) shown.take(33) + "…" else shown) }; pop()
         append(tail)
     }
 }
 private fun AnnotatedString.Builder.italics(s: String) {
-    val re = Regex("\\*([^*\\s](?:[^*\\n]*[^*\\s])?)\\*")
+    val re = ITALIC_RE
     var i = 0
     re.findAll(s).forEach { m -> append(s.substring(i, m.range.first)); withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(m.groupValues[1]) }; i = m.range.last + 1 }
     append(s.substring(i))
@@ -94,22 +108,22 @@ fun cutText(text: String, n: Int): String {
     val cp = text.codePoints().toArray()
     if (cp.size <= n) return text
     val head = String(cp, 0, n)
-    val m = Regex("https?://\\S*$").find(head)
+    val m = CUT_LINK_RE.find(head)
     if (m != null && text.length > head.length && !text[head.length].isWhitespace()) {
         if (m.range.first > 0) return head.substring(0, m.range.first).trimEnd()
-        return head + Regex("^\\S*").find(text.substring(head.length))!!.value
+        return head + NON_SPACE_RE.find(text.substring(head.length))!!.value
     }
     return head
 }
 
 // .tx: the words of a post; taps on a link or a tag open it, a tap anywhere else falls through to the post
 @Composable
-fun Tx(text: String, big: Boolean = false, modifier: Modifier = Modifier, onTap: (() -> Unit)? = null, onLong: (() -> Unit)? = null, color: Color? = null, linkColor: Color? = null) {
+fun Tx(text: String, big: Boolean = false, modifier: Modifier = Modifier, onTap: (() -> Unit)? = null, onLong: (() -> Unit)? = null, color: Color? = null, linkColor: Color? = null, cut: Boolean = true) {
     val app = LocalApp.current
     val c = LocalNook.current
     val uri = LocalUriHandler.current
-    var full by remember(text) { mutableStateOf(text.length <= 700) }
-    val shown = if (full) text else cutText(text, 600) + "…"
+    var full by remember(text) { mutableStateOf(!cut || text.length <= 700) }
+    val shown = remember(text, full) { if (full) text else cutText(text, 600) + "…" }
     val ann = remember(shown, c.accent, linkColor) { rich(shown, linkColor ?: c.accent) }
     val size = if (big) Fs.x2 else Fs.base
     val lh = if (big) (20 * 1.35).sp else (15 * 1.38).sp
@@ -152,7 +166,7 @@ private fun Ab(icon: String, n: Int, on: Boolean, onColor: Color, big: Boolean, 
 fun Acts(p: LPost, big: Boolean = false, nc: Boolean = false) {
     val app = LocalApp.current
     val c = LocalNook.current
-    val n = if (nc) 0 else maxOf(if (p.ra != null) p.rp else 0, app.store.replyTotal(p.id))
+    val n = remember(p.id, p.rp, nc, app.store.posts.size) { if (nc) 0 else maxOf(if (p.ra != null) p.rp else 0, app.store.replyTotal(p.id)) }
     val reply = { if (app.canPost()) app.panels.add(Panel.Compose(parent = p.id)) }
     val save = { app.toggleSave(p) }
     val items: List<@Composable (Modifier) -> Unit> = if (p.ra != null) listOf(
@@ -203,7 +217,7 @@ fun otherSheet(app: AppState, p: LPost) {
         SheetItem("Not interested", "eyeoff", danger = true) { app.lessLikeThis(p) },
         if (app.on.zenithOfOwner(p)) SheetItem("Delete post", "trash", danger = true) { app.confirm("Delete this post of Zenith and its replies?", "Delete") { app.on.deleteZenithPost(p) } }
         else SheetItem("Report post", "flag", danger = true) { app.on.reportPost(p) },
-    ))
+    ), "More")
 }
 
 // .imgs: one photo at its own shape (at most min(460dp, 60% of the screen) tall), two side by side, three with the first
@@ -286,9 +300,9 @@ fun PostCard(p: LPost, lab: String? = null, pin: Boolean = false, replyTo: Boole
                 val par = app.store.byId(p.parent)
                 NIcon("reply", 14.dp, c.muted); T("Replying to " + if (par == null) "a post" else handleOf(app, par), Fs.sm, color = c.muted)
             }
-            val txt = cardless(p)
+            val txt = remember(p.text, p.imgs) { cardless(p) }
             if (txt.isNotEmpty()) Tx(txt, modifier = Modifier.probe("text:" + p.id), onTap = open, onLong = hold)
-            if (p.imgs.isNotEmpty()) ImgGrid(p.imgs) else firstUrl(p.text)?.let { LinkCard(it) }
+            if (p.imgs.isNotEmpty()) ImgGrid(p.imgs) else remember(p.text) { firstUrl(p.text) }?.let { LinkCard(it) }
             if (!compact) Acts(p, nc = nc)
         }
     }
@@ -348,7 +362,7 @@ fun MainPost(p: LPost) {
     }
     if (p.saved) Row(Modifier.padding(horizontal = 16.dp).padding(bottom = 12.dp)) { T("1", Fs.md, FontWeight.Bold); T(" save", Fs.md, color = c.muted) }
     Box(Modifier.padding(horizontal = 16.dp)) { Acts(p, big = true) }
-    Box(Modifier.padding(horizontal = 16.dp).padding(top = 6.dp)) { Line() }
+    Box(Modifier.fillMaxWidth().padding(top = 6.dp)) { Line() }
 }
 
 // .cr: the "write a post" row at the top of the feed and of one's own profile

@@ -30,7 +30,10 @@ fun langOf(text: String): String? {
     langMemo[text] = r
     return r
 }
-private fun cnt(t: String, re: String) = Regex(re).findAll(t).count()
+// each pattern is compiled once
+private val cntRe = HashMap<String, Regex>()
+private val WORD_RE = Regex("\\p{L}+")
+private fun cnt(t: String, re: String) = cntRe.getOrPut(re) { Regex(re) }.findAll(t).count()
 private fun langOfRaw(text: String): String? {
     val kana = cnt(text, "[\\u3040-\\u30FF]"); val han = cnt(text, "[\\u3400-\\u4DBF\\u4E00-\\u9FFF]"); val hangul = cnt(text, "[\\uAC00-\\uD7AF\\u1100-\\u11FF]")
     val arab = cnt(text, "[\\u0600-\\u06FF\\u0750-\\u077F]"); val cyr = cnt(text, "[\\u0400-\\u04FF]"); val deva = cnt(text, "[\\u0900-\\u097F]")
@@ -47,7 +50,7 @@ private fun langOfRaw(text: String): String? {
     if (heb == top) return "hebrew"
     if (greek == top) return "greek"
     val low = text.lowercase()
-    val words = Regex("\\p{L}+").findAll(low).map { it.value }.toList()
+    val words = WORD_RE.findAll(low).map { it.value }.toList()
     var best: String? = null; var hi = 0; var second = 0
     for ((k, set) in WORDS) {
         var sc = words.count { it in set }
@@ -81,9 +84,10 @@ fun rankFeed(s: Store, follows: Set<String>, arr: List<LPost>, tab: String): Lis
     rankCache[tab]?.let { (k, ids) -> if (k == key) { val by = arr.associateBy { it.id }; return ids.mapNotNull { by[it] }.filter { it.id !in hidden } } }
     val aff = HashMap<String, Double>()
     fun add(id: String, v: Double) { aff[id] = (aff[id] ?: 0.0) + v }
+    val byId = s.posts.associateBy { it.id }
     s.posts.forEach { p ->
         if (p.ra != null || p.ai) { val w = whoOf(p); if (p.liked) add(w, .25); if (p.saved) add(w, .4); if (p.reposted) add(w, .3) }
-        else if (p.parent != null) { val par = s.byId(p.parent); if (par != null && (par.ra != null || par.ai)) add(whoOf(par), .3) }
+        else if (p.parent != null) { val par = byId[p.parent]; if (par != null && (par.ra != null || par.ai)) add(whoOf(par), .3) }
     }
     val now = Clock.now()
     class Sc(val p: LPost, val s: Double, val who: String)

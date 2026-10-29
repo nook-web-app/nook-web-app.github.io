@@ -189,10 +189,15 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
         // way), a moment after the last change; only writing the file happens on a background thread
         saveJob = scope.launch {
             delay(150)
-            val txt = runCatching { store.toJson().toString() }.getOrNull() ?: return@launch
-            saveIo.launch { store.filesDir?.let { d -> java.io.File(d, "state.json.tmp").apply { writeText(txt) }.renameTo(java.io.File(d, "state.json")) } }
+            writeState()
         }
         if (on.me != null) { on.notesSoon(); on.zenSyncSoon() }
+    }
+    // the same copy at once (the app goes to the background)
+    fun saveNow() { saveJob?.cancel(); writeState() }
+    private fun writeState() {
+        val txt = runCatching { store.toJson().toString() }.getOrNull() ?: return
+        saveIo.launch { store.filesDir?.let { d -> java.io.File(d, "state.json.tmp").apply { writeText(txt) }.renameTo(java.io.File(d, "state.json")) } }
     }
 
     // ---- what the web app's post functions do ----

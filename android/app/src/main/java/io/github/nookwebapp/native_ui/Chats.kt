@@ -34,6 +34,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -112,7 +115,6 @@ private fun ConvoRow(cv: Convo) {
     val app = LocalApp.current
     val c = LocalNook.current
     val on = app.on
-    app.dm.typingVersion
     on.nickVersion
     val last = cv.last
     val mine = last?.optString("sender_id") == on.uid
@@ -120,7 +122,8 @@ private fun ConvoRow(cv: Convo) {
     LaunchedEffect(cv.other, last?.opt("id")) {
         if (last != null) gist = dmGist(zUn(on.openText(cv.other, last.optString("body"), true)), last.optJSONArray("media") ?: runCatching { JSONArray(last.optString("media")) }.getOrNull(), mine)
     }
-    val typing = on.isTyping(cv.other)
+    // only this person's own typing flag is read, so another person typing does not redraw this row
+    val typing = app.dm.typingFlag[cv.other] == true
     val name = on.nickOf(cv.other).ifEmpty { cv.name }
     Row(
         Modifier.fillMaxWidth().lineBelow(c.line).tap { on.openDm(cv.other) }.padding(horizontal = 16.dp).vpad(14.dp),
@@ -151,17 +154,8 @@ fun DmScreen(id: String) {
     var acct by remember(id) { mutableStateOf(on.acctCache[id]) }
     LaunchedEffect(id) { acct = on.acctsFor(listOf(id))[id]; on.loadSocial(); acct = on.acctCache[id] }
     val name = on.nickOf(id).ifEmpty { acct?.optString("name") ?: "user" }
-    var tv by remember(id) { mutableStateOf(TextFieldValue("")) }
-    val text = tv.text
-    fun setText(t: String) { tv = TextFieldValue(t, TextRange(t.length)) }
-    val focus = remember { FocusRequester() }
-    val pend = remember(id) { mutableStateListOf<String>() }
-    var busy by remember { mutableStateOf(false) }
-    val picker = rememberPicker(4 - pend.size) { got -> val room = 4 - pend.size; pend.addAll(got.take(room)); if (got.size > room) app.say("Only 4 allowed, extra ones skipped") }
     var open by remember { mutableStateOf<DmMsg?>(null) }
     val list = rememberLazyListState()
-    val scope = rememberCoroutineScope()
-    l.fill = { pre -> if (l.locked.isEmpty()) { setText(if (text.isNotBlank()) text.trimEnd() + " " + pre else pre); runCatching { focus.requestFocus() } } }
     // the chat stays at its newest message while new ones come in
     LaunchedEffect(l.rows.size, l.typing) { if (l.rows.isNotEmpty()) list.animateScrollToItem(l.rows.size + 1) }
     KeepAtBottom(list)
@@ -202,45 +196,81 @@ fun DmScreen(id: String) {
                 }
             }
         }
-        // .cdock: the note when messaging is off, the pending photos, and the text box with its photo and send buttons
-        Column(Modifier.fillMaxWidth().background(c.bg).lineAbove(c.line).navigationBarsPadding().padding(bottom = 10.dp)) {
-            if (zOn() && Regex("@\\w*$").containsMatchIn(text)) ZenPop { setText(text.replace(Regex("@\\w*$"), "@zenith ")) }
-            if (l.locked.isNotEmpty()) T(l.locked, Fs.sm, color = c.muted, align = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp))
-            if (pend.isNotEmpty()) PendStrip(pend)
-            val off = l.locked.isNotEmpty()
-            Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp).alpha(if (off) 0.4f else 1f), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                IB("image", tint = c.accent, box = 40.dp, height = 42.dp, enabled = !off && pend.size < 4) { picker.gallery() }
-                BasicTextField(
-                    tv, { v -> val changed = v.text != tv.text; tv = v; if (changed) on.sendTyping(id, v.text.isNotBlank()) },
-                    Modifier.weight(1f).focusRequester(focus).heightIn(min = 42.dp, max = 140.dp).clip(RoundedCornerShape(Rad.bubble)).background(if (off) c.line else c.bg2).padding(horizontal = 14.dp, vertical = 10.dp),
-                    enabled = !off, textStyle = LocalTextStyle.current.copy(color = c.fg, fontSize = Fs.lg, lineHeight = (16 * 1.35).sp), cursorBrush = SolidColor(c.accent),
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                    decorationBox = { inner -> Box { if (text.isEmpty()) T(if (off) "Messaging is off" else "Message", Fs.lg, color = c.muted, lineHeight = (16 * 1.35).sp); inner() } },
-                )
-                val can = !busy && !off && (text.isNotBlank() || pend.isNotEmpty())
-                Box(Modifier.size(42.dp).alpha(if (can) 1f else 0.45f).clip(CircleShape).background(c.fill).pressTap(CircleShape, enabled = can) {
-                    val t = cleanText(text.trim()); val srcs = pend.toList()
-                    busy = true; setText(""); pend.clear()
-                    // the app's own scope and the keep-alive: leaving the chat or the app never cancels a message on its way
-                    app.scope.launch {
-                        if (!Keep.around(app.ctx) { on.doSendDm(l, t, srcs) }) { setText(if (text.isNotBlank()) t + "\n" + tv.text else t); pend.addAll(srcs) }
-                        busy = false
-                    }
-                }, contentAlignment = Alignment.Center) { NIcon("send", 20.dp, c.on) }
-            }
+        DmDock(id, l)
+    }
+}
+
+// .cdock of a chat with a person. The typed text lives here, so a keystroke redraws the dock and not the messages.
+@Composable
+private fun DmDock(id: String, l: LiveDm) {
+    val app = LocalApp.current
+    val c = LocalNook.current
+    val on = app.on
+    var tv by remember(id) { mutableStateOf(TextFieldValue("")) }
+    val text = tv.text
+    fun setText(t: String) { tv = TextFieldValue(t, TextRange(t.length)) }
+    val focus = remember { FocusRequester() }
+    val pend = remember(id) { mutableStateListOf<String>() }
+    var busy by remember { mutableStateOf(false) }
+    val picker = rememberPicker(4 - pend.size) { got -> val room = 4 - pend.size; pend.addAll(got.take(room)); if (got.size > room) app.say("Only 4 allowed, extra ones skipped") }
+    l.fill = { pre -> if (l.locked.isEmpty()) { setText(if (text.isNotBlank()) text.trimEnd() + " " + pre else pre); runCatching { focus.requestFocus() } } }
+    // .cdock: the note when messaging is off, the pending photos, and the text box with its photo and send buttons
+    Column(Modifier.fillMaxWidth().background(c.bg).lineAbove(c.line).navigationBarsPadding().padding(bottom = 10.dp)) {
+        ZenPopHost(zOn() && ZEN_AT.containsMatchIn(text)) { setText(text.replace(ZEN_AT, "@zenith ")) }
+        if (l.locked.isNotEmpty()) T(l.locked, Fs.sm, color = c.muted, align = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp))
+        if (pend.isNotEmpty()) PendStrip(pend)
+        val off = l.locked.isNotEmpty()
+        Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp).alpha(if (off) 0.4f else 1f), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            IB("image", tint = c.accent, box = 40.dp, height = 42.dp, enabled = !off && pend.size < 4) { picker.gallery() }
+            BasicTextField(
+                tv, { v -> val changed = v.text != tv.text; tv = v; if (changed) on.sendTyping(id, v.text.isNotBlank()) },
+                Modifier.weight(1f).focusRequester(focus).heightIn(min = 42.dp, max = 140.dp).clip(RoundedCornerShape(Rad.bubble)).background(if (off) c.line else c.bg2).padding(horizontal = 14.dp, vertical = 10.dp),
+                enabled = !off, textStyle = LocalTextStyle.current.copy(color = c.fg, fontSize = Fs.lg, lineHeight = (16 * 1.35).sp), cursorBrush = SolidColor(c.accent),
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                decorationBox = { inner -> Box { if (text.isEmpty()) T(if (off) "Messaging is off" else "Message", Fs.lg, color = c.muted, lineHeight = (16 * 1.35).sp); inner() } },
+            )
+            val can = !busy && !off && (text.isNotBlank() || pend.isNotEmpty())
+            Box(Modifier.size(42.dp).alpha(if (can) 1f else 0.45f).clip(CircleShape).background(c.fill).pressTap(CircleShape, enabled = can) {
+                val t = cleanText(text.trim()); val srcs = pend.toList()
+                busy = true; setText(""); pend.clear()
+                // the app's own scope and the keep-alive: leaving the chat or the app never cancels a message on its way
+                app.scope.launch {
+                    if (!Keep.around(app.ctx) { on.doSendDm(l, t, srcs) }) { setText(if (text.isNotBlank()) t + "\n" + tv.text else t); pend.addAll(srcs) }
+                    busy = false
+                }
+            }, contentAlignment = Alignment.Center) { NIcon("send", 20.dp, c.on) }
         }
     }
 }
+
+// the end of what is typed, when it is an @ with some letters
+val ZEN_AT = Regex("@\\w*$")
 
 // .zpop: typing @ offers Zenith (the owner's chats only)
 @Composable
 fun ZenPop(onPick: () -> Unit) {
     val c = LocalNook.current
-    Box(Modifier.padding(start = 16.dp, top = 8.dp)) {
+    Box(Modifier.padding(start = 16.dp)) {
         Row(Modifier.clip(RoundedCornerShape(Rad.m)).background(c.bg2).border(1.dp, c.line, RoundedCornerShape(Rad.m)).tap(onClick = onPick).padding(start = 8.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             ZenAv(34.dp); T("Zenith AI", weight = FontWeight.Bold)
         }
+    }
+}
+
+// .zpop sits above the dock, over the messages, and fades and scales in from its lower left corner
+private class AboveDock(val gap: Int) : androidx.compose.ui.window.PopupPositionProvider {
+    override fun calculatePosition(anchorBounds: androidx.compose.ui.unit.IntRect, windowSize: androidx.compose.ui.unit.IntSize, layoutDirection: androidx.compose.ui.unit.LayoutDirection, popupContentSize: androidx.compose.ui.unit.IntSize) =
+        androidx.compose.ui.unit.IntOffset(anchorBounds.left, anchorBounds.top - popupContentSize.height - gap)
+}
+@Composable
+fun ZenPopHost(show: Boolean, onPick: () -> Unit) {
+    val vis = remember { androidx.compose.animation.core.MutableTransitionState(false) }
+    vis.targetState = show
+    if (!vis.currentState && !vis.targetState) return
+    val gap = with(androidx.compose.ui.platform.LocalDensity.current) { 6.dp.roundToPx() }
+    androidx.compose.ui.window.Popup(AboveDock(gap), properties = androidx.compose.ui.window.PopupProperties(focusable = false, clippingEnabled = false)) {
+        AnimatedVisibility(vis, enter = fadeIn(tween(180)) + androidx.compose.animation.scaleIn(tween(180), transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 1f)), exit = fadeOut(tween(120))) { ZenPop(onPick) }
     }
 }
 
@@ -265,11 +295,35 @@ fun TypingBubble(modifier: Modifier = Modifier) {
     Row(modifier.clip(RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.bubble, Rad.xs)).background(c.bg2).border(1.dp, c.line, RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.bubble, Rad.xs)).padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         repeat(3) { i ->
             val y by tr.animateFloat(0f, 1f, infiniteRepeatable(tween(1000, delayMillis = 0), RepeatMode.Restart, initialStartOffset = androidx.compose.animation.core.StartOffset(i * 150)), label = "d$i")
-            val k = if (y < 0.5f) y * 2 else (1 - y) * 2
-            Box(Modifier.offset(y = (-3 * k).dp).size(7.dp).alpha(0.5f + 0.5f * k).clip(CircleShape).background(c.muted))
+            // zdot: each dot lifts 4dp during the first 30 percent of the second, then rests
+            val k = if (y < 0.3f) y / 0.3f else if (y < 0.6f) (0.6f - y) / 0.3f else 0f
+            Box(Modifier.offset(y = (-4 * k).dp).size(7.dp).alpha(0.35f + 0.65f * k).clip(CircleShape).background(c.muted))
         }
     }
 }
+
+// style.css .bub:active and tapPop: a bubble sinks to 97 percent while it is held, and pops (95, 102, 100 percent over
+// 340 ms) when a tap opens its time
+class BubbleFx(private val scope: kotlinx.coroutines.CoroutineScope) {
+    private val pop = androidx.compose.animation.core.Animatable(1f)
+    private val hold = androidx.compose.animation.core.Animatable(1f)
+    val scale get() = pop.value * hold.value
+    fun press(down: Boolean) { scope.launch { hold.animateTo(if (down) 0.97f else 1f, tween(120)) } }
+    fun pop() { scope.launch { pop.snapTo(0.95f); pop.animateTo(1f, androidx.compose.animation.core.keyframes { durationMillis = 340; 1.02f at 204 }) } }
+}
+@Composable
+fun rememberBubbleFx(): BubbleFx { val scope = rememberCoroutineScope(); return remember { BubbleFx(scope) } }
+// the press is only watched (nothing is consumed), so the text inside still gets its own taps
+fun Modifier.bubbleFx(fx: BubbleFx, left: Boolean): Modifier = this
+    .graphicsLayer { transformOrigin = androidx.compose.ui.graphics.TransformOrigin(if (left) 0f else 1f, 1f); scaleX = fx.scale; scaleY = fx.scale }
+    .pointerInput(fx) {
+        awaitEachGesture {
+            awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+            fx.press(true)
+            waitForUpOrCancellation(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+            fx.press(false)
+        }
+    }
 
 // dmBubble(): photos, a shared post, a link card, the text, and the time under it while it is open
 @Composable
@@ -280,23 +334,30 @@ fun DmBubble(m: DmMsg, other: String, open: Boolean, onTap: () -> Unit, onLong: 
     val left = !mine
     val w = LocalConfiguration.current.screenWidthDp.dp - 32.dp
     val body = m.text ?: ""
-    Column(Modifier.fillMaxWidth().alpha(if (m.tmp && mine) 0.7f else 1f).pointerInput(m) { detectTapGestures(onTap = { onTap() }, onLongPress = { AppState.current?.buzz(); onLong() }) }, horizontalAlignment = if (left) Alignment.Start else Alignment.End) {
+    val fx = rememberBubbleFx()
+    val opened by rememberUpdatedState(open)
+    val tap = { if (!opened) fx.pop(); onTap() }
+    val url = remember(body) { firstUrl(body) }
+    Column(Modifier.fillMaxWidth().alpha(if (m.tmp && mine) 0.7f else 1f).pointerInput(m) { detectTapGestures(onTap = { tap() }, onLongPress = { AppState.current?.buzz(); onLong() }) }, horizontalAlignment = if (left) Alignment.Start else Alignment.End) {
         val media = (0 until m.media.length()).mapNotNull { m.media.optJSONObject(it) }
         media.forEachIndexed { i, md -> DmMedia(md, other, m, i, Modifier.padding(top = if (i > 0) 4.dp else 0.dp)) }
         m.rpost?.let { Box(Modifier.padding(top = if (media.isNotEmpty()) 4.dp else 0.dp)) { RCard(it.id, it.u) } }
         m.zpost?.let { Box(Modifier.padding(top = 4.dp)) { ZCard(it) } }
-        firstUrl(body)?.let { Box(Modifier.padding(top = if (media.isNotEmpty() || m.rpost != null) 4.dp else 0.dp)) { LinkCard(it, chat = true) } }
-        if (body.isNotEmpty()) {
+        url?.let { Box(Modifier.padding(top = if (media.isNotEmpty() || m.rpost != null) 4.dp else 0.dp)) { LinkCard(it, chat = true) } }
+        // Zenith's answer is still being written: the dots show, like .bub.typing of the web app
+        if (m.ai && m.tmp && body.isEmpty()) TypingBubble()
+        else if (body.isNotEmpty()) {
             val shape = if (left) RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.bubble, Rad.xs) else RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.xs, Rad.bubble)
-            Box(Modifier.padding(top = if (media.isNotEmpty() || m.rpost != null || firstUrl(body) != null) 4.dp else 0.dp).widthIn(max = w * 0.82f).clip(shape)
+            Box(Modifier.padding(top = if (media.isNotEmpty() || m.rpost != null || url != null) 4.dp else 0.dp).bubbleFx(fx, left).widthIn(max = w * 0.82f).clip(shape)
                 .background(if (left) c.bg2 else c.accent).then(if (left) Modifier.border(1.dp, c.line, shape) else Modifier).padding(horizontal = 14.dp, vertical = 9.dp)) {
-                Tx(if (m.ai) "zenith $body" else body, color = if (left) c.fg else c.on, linkColor = if (left) null else Color.White, onTap = onTap, onLong = onLong)
+                Tx(if (m.ai) "zenith $body" else body, color = if (left) c.fg else c.on, linkColor = if (left) null else Color.White, onTap = tap, onLong = onLong, cut = false)
             }
         }
         AnimatedVisibility(open, enter = expandVertically(tween(240)) + fadeIn(tween(200)), exit = shrinkVertically(tween(240)) + fadeOut(tween(200))) {
-            Row(Modifier.fillMaxWidth().padding(top = 4.dp, start = 2.dp, end = 2.dp), horizontalArrangement = if (left) Arrangement.Start else Arrangement.End) {
+            // .mmi span is a block: the note sits under the time
+            Column(Modifier.fillMaxWidth().padding(top = 4.dp, start = 2.dp, end = 2.dp), horizontalAlignment = if (left) Alignment.Start else Alignment.End) {
                 T(whenText(m.t), Fs.xs, color = c.muted)
-                if (m.plain) T("Not encrypted", Fs.xs, color = Color(0xFFC0392B), modifier = Modifier.padding(start = 6.dp))
+                if (m.plain) T("Not encrypted", Fs.xs, color = Color(0xFFC0392B), modifier = Modifier.padding(top = 4.dp))
             }
         }
     }
@@ -308,7 +369,9 @@ private fun DmMedia(md: JSONObject, other: String, m: DmMsg, i: Int, modifier: M
     val app = LocalApp.current
     val c = LocalNook.current
     val conf = LocalConfiguration.current
-    val local = md.optString("url").takeIf { it.startsWith("/") }
+    // a local file path is only believed on my own photo that is still on its way
+    val ownLocal = m.tmp && m.sender == app.on.uid
+    val local = md.optString("url").takeIf { it.startsWith("/") && ownLocal }
     var path by remember(md.optString("url")) { mutableStateOf(local) }
     var gone by remember(md.optString("url")) { mutableStateOf(false) }
     LaunchedEffect(md.optString("url")) {
@@ -326,7 +389,7 @@ private fun DmMedia(md: JSONObject, other: String, m: DmMsg, i: Int, modifier: M
         val p = path
         if (p != null) Pic(p, Modifier.matchParentSize().tap {
             app.scope.launch {
-                val all = (0 until m.media.length()).mapNotNull { k -> m.media.optJSONObject(k) }.mapNotNull { x -> x.optString("url").takeIf { it.startsWith("/") } ?: runCatching { app.on.encMedia(x) { app.on.sharedKeyFast(other) } }.getOrNull() }
+                val all = (0 until m.media.length()).mapNotNull { k -> m.media.optJSONObject(k) }.mapNotNull { x -> x.optString("url").takeIf { it.startsWith("/") && ownLocal } ?: runCatching { app.on.encMedia(x) { app.on.sharedKeyFast(other) } }.getOrNull() }
                 val mine = m.sender == app.on.uid && m.id != null
                 app.viewer = Viewer(all, all.indexOf(p).coerceAtLeast(0), del = if (mine) ({ k -> app.on.deleteDmMedia(m, k, other) }) else null)
             }
@@ -351,12 +414,16 @@ fun SwipeReply(on: Boolean, onSwipe: () -> Unit, content: @Composable () -> Unit
 // when the keyboard comes up the chat stays on its newest message (the page gets shorter from the bottom), like the web app
 @Composable
 fun KeepAtBottom(list: androidx.compose.foundation.lazy.LazyListState) {
-    val ime = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current)
-    var last by remember { mutableIntStateOf(ime) }
-    LaunchedEffect(ime) {
-        val n = list.layoutInfo.totalItemsCount
-        if (ime > last && n > 0) { list.scrollToItem(n - 1); list.scrollBy(100_000f) }
-        last = ime
+    // the keyboard height is read in an effect, so the frames of its animation do not redraw the screen
+    val insets = WindowInsets.ime
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    LaunchedEffect(list) {
+        var last = -1
+        snapshotFlow { insets.getBottom(density) }.collect { ime ->
+            val n = list.layoutInfo.totalItemsCount
+            if (last >= 0 && ime > last && n > 0) { list.scrollToItem(n - 1); list.scrollBy(100_000f) }
+            last = ime
+        }
     }
 }
 

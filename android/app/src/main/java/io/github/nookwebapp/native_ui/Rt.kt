@@ -101,7 +101,11 @@ object Rt {
                 chans.forEach { sendJoin(it) }
                 heartbeat()
             }.let { }
-            override fun onMessage(webSocket: WebSocket, text: String) = main?.post { if (ws === webSocket) onMsg(text) }.let { }
+            // the frame is parsed here, on OkHttp's thread; only what it holds is handed to the main thread
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                val m = runCatching { JSONObject(text) }.getOrNull() ?: return
+                main?.post { if (ws === webSocket) onMsg(m) }
+            }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = main?.post { if (ws === webSocket) dropped(St.CHANNEL_ERROR) }.let { }
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = main?.post { if (ws === webSocket) dropped(St.CLOSED) }.let { }
         })
@@ -135,8 +139,7 @@ object Rt {
         runCatching { w?.close(1000, null) }
     }
 
-    private fun onMsg(text: String) {
-        val m = runCatching { JSONObject(text) }.getOrNull() ?: return
+    private fun onMsg(m: JSONObject) {
         val topic = m.optString("topic"); val ev = m.optString("event"); val p = m.optJSONObject("payload") ?: JSONObject()
         if (ev == "phx_reply") {
             val ch = pending.remove(m.optString("ref")) ?: return

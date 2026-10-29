@@ -62,7 +62,10 @@ object Notify {
         val pi = PendingIntent.getActivity(ctx, id, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val n = NotificationCompat.Builder(ctx, CH).setSmallIcon(R.drawable.ic_stat).setContentTitle(title).setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body)).setContentIntent(pi).setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH).setCategory(NotificationCompat.CATEGORY_MESSAGE).setDefaults(NotificationCompat.DEFAULT_ALL).build()
+            .setPriority(NotificationCompat.PRIORITY_HIGH).setCategory(NotificationCompat.CATEGORY_MESSAGE).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            // on a lock screen only a neutral line shows, the text itself needs an unlocked phone
+            .setPublicVersion(NotificationCompat.Builder(ctx, CH).setSmallIcon(R.drawable.ic_stat).setContentTitle("Nook").setContentText("New message").build())
+            .setDefaults(NotificationCompat.DEFAULT_ALL).build()
         runCatching { NotificationManagerCompat.from(ctx).notify(id, n) }
     }
 

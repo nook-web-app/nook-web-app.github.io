@@ -1,6 +1,7 @@
 package io.github.nookwebapp.native_ui
 
 import android.content.Context
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -20,6 +21,8 @@ data class Author(val id: String, val name: String, val handle: String, val avat
 // who that you follow reposted it, and when (p.rpBy)
 data class RpBy(val id: String, val name: String, val t: Long)
 
+// every field that changes is snapshot state, so a row only recomposes for what it reads
+@Stable
 class LPost(
     val id: String, text: String, val t: Long, imgs: List<String>, parent: String?,
     liked: Boolean = false, reposted: Boolean = false, rpAt: Long = 0, saved: Boolean = false, pinned: Boolean = false, edited: Boolean = false,
@@ -246,6 +249,8 @@ class Store(private val dir: File?) {
         zen = JSONObject().put("log", JSONArray()).put("next", 0).put("since", System.currentTimeMillis())
         signedIn = false
         mediaDir?.listFiles()?.forEach { it.delete() }
+        // the decrypted copies of chat photos and the exports made for sharing go too
+        Photos.cacheDir?.let { listOf("dm", "share").forEach { d -> runCatching { File(it, d).deleteRecursively() } } }
         save()
     }
 

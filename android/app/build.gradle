@@ -2,13 +2,15 @@ plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android'; id 'a
 android {
     namespace 'io.github.nookwebapp.native_ui'
     compileSdk 34
-    defaultConfig { applicationId 'io.github.nookwebapp.nativeui'; minSdk 26; targetSdk 34; versionCode 32709; versionName '3.27.9' }
+    defaultConfig { applicationId 'io.github.nookwebapp.nativeui'; minSdk 26; targetSdk 34; versionCode 32800; versionName '3.28.0' }
     // the release key never lives in the repository: NOOK_KS points at it and NOOK_KS_PASS opens it;
     // without them a release build is signed with the local debug key so it still installs for testing
     def ks = System.getenv('NOOK_KS')
     signingConfigs { if (ks) { release {
         storeFile file(ks); storePassword System.getenv('NOOK_KS_PASS'); keyAlias 'nook'; keyPassword System.getenv('NOOK_KS_PASS')
     } } }
+    // a release built without the release key is only fit for testing: say so loudly, and never publish it
+    if (!ks) project.gradle.taskGraph.whenReady { g -> if (g.allTasks.any { it.name.startsWith('assembleRelease') || it.name.startsWith('bundleRelease') }) project.logger.warn('WARNING: NOOK_KS is not set, so this release build is signed with the local DEBUG key. Do not publish it.') }
     buildTypes { release { signingConfig ks ? signingConfigs.release : signingConfigs.debug; minifyEnabled true; shrinkResources true; proguardFiles getDefaultProguardFile('proguard-android-optimize.txt') } }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = '17' }

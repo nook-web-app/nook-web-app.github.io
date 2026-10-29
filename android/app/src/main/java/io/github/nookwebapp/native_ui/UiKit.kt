@@ -19,6 +19,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.runtime.*
+import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -88,7 +89,7 @@ fun Modifier.pressBg(shape: androidx.compose.ui.graphics.Shape, on: Boolean = fa
     val down by src.collectIsPressedAsState()
     val c = LocalNook.current
     val bg by androidx.compose.animation.animateColorAsState(if (down || on) c.bg2 else c.bg2.copy(alpha = 0f), androidx.compose.animation.core.tween(150), label = "pressbg")
-    this.clip(shape).background(bg).clickable(src, null, onClick = onClick)
+    this.clip(shape).drawBehind { drawRect(bg) }.clickable(src, null, onClick = onClick)
 }
 
 // Layout probes for the screenshot tests: when on, tagged elements record where they ended up (in dp from the top left),
@@ -225,7 +226,9 @@ fun Pill(label: String, kind: Btn = Btn.Pri, small: Boolean = false, enabled: Bo
 fun Empty(icon: String?, text: String, iconSize: Dp = 56.dp, button: (@Composable () -> Unit)? = null) {
     val c = LocalNook.current
     // the line is at most 30 characters wide (max-width: 30ch, the width of thirty zeros)
-    val ch = androidx.compose.ui.text.rememberTextMeasurer().measure("0".repeat(30), LocalTextStyle.current.copy(fontSize = Fs.base)).size.width
+    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+    val style = LocalTextStyle.current
+    val ch = remember(style) { measurer.measure("0".repeat(30), style.copy(fontSize = Fs.base)).size.width }
     val maxW = with(androidx.compose.ui.platform.LocalDensity.current) { ch.toDp() }
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 56.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (icon != null) NIcon(icon, iconSize, c.muted, modifier = Modifier.alpha(0.8f))
@@ -329,18 +332,30 @@ fun Badge(n: Int, modifier: Modifier = Modifier) {
     }
 }
 
+// one clock for every placeholder on screen (NookApp runs it, and only while at least one placeholder is drawn)
+class ShimmerClock { var users by mutableIntStateOf(0); var t by mutableFloatStateOf(0f) }
+val LocalShimmer = staticCompositionLocalOf<ShimmerClock?> { null }
+
+@Composable
+fun RunShimmerClock(clock: ShimmerClock) {
+    LaunchedEffect(clock) {
+        snapshotFlow { clock.users > 0 }.collectLatest { on ->
+            if (on) while (true) androidx.compose.runtime.withFrameNanos { n -> clock.t = (n / 1_000_000L % 1200L) / 1200f }
+        }
+    }
+}
+
 // .skel::after: a soft light band sweeps across a placeholder every 1.2 s until the real thing is drawn. Previews and the
 // screenshot tests draw one still frame.
 fun Modifier.shimmer(): Modifier = composed {
     val c = LocalNook.current
-    if (androidx.compose.ui.platform.LocalInspectionMode.current) return@composed this
-    val t by androidx.compose.animation.core.rememberInfiniteTransition(label = "shimmer").animateFloat(
-        0f, 1f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(1200, easing = androidx.compose.animation.core.LinearEasing)), label = "t",
-    )
+    val clock = LocalShimmer.current
+    if (androidx.compose.ui.platform.LocalInspectionMode.current || clock == null) return@composed this
+    DisposableEffect(clock) { clock.users++; onDispose { clock.users-- } }
     drawWithContent {
         drawContent()
         val w = size.width
-        val x = (t * 2f - 1f) * w
+        val x = (clock.t * 2f - 1f) * w
         drawRect(Brush.horizontalGradient(0.3f to Color.Transparent, 0.5f to c.line, 0.7f to Color.Transparent, startX = x, endX = x + w))
     }
 }

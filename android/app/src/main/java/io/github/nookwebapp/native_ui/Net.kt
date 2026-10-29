@@ -3,7 +3,13 @@ package io.github.nookwebapp.native_ui
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
+import java.io.IOException
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -80,7 +86,8 @@ class Q(val table: String) {
     fun limit(n: Int) = apply { params.add("limit" to n.toString()) }
     fun range(from: Int, to: Int) = apply { params.add("offset" to from.toString()); params.add("limit" to (to - from + 1).toString()) }
     private fun f(col: String, v: String) = apply { params.add(col to v) }
-    private fun quote(s: String) = if (Regex("^[A-Za-z0-9_.:-]+$").matches(s)) s else "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+    private fun quote(s: String) = if (SAFE.matches(s)) s else "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+    private companion object { val SAFE = Regex("^[A-Za-z0-9_.:-]+$") }
     fun query(): String {
         val all = params + (if (orders.isEmpty()) emptyList() else listOf("order" to orders.joinToString(",")))
         return all.joinToString("&") { (k, v) -> enc(k) + "=" + enc(v) }
@@ -198,20 +205,33 @@ object Sb {
         return b
     }
 
+    // the call runs on OkHttp's own threads and is cancelled with the coroutine that asked for it; `use` reads the answer
+    private suspend fun <T> Call.go(use: (Response) -> T): T = suspendCancellableCoroutine { k ->
+        k.invokeOnCancellation { cancel() }
+        enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) { k.resumeWithException(e) }
+            override fun onResponse(call: Call, response: Response) {
+                response.use { r -> try { k.resume(use(r)) } catch (e: Throwable) { k.resumeWithException(e) } }
+            }
+        })
+    }
+
     private suspend fun exec(retried: Boolean = false, build: suspend () -> Request): Triple<Int, String, Response?> = withContext(Dispatchers.IO) {
         try {
             val req = build()
-            http.newCall(req).execute().use { res ->
-                val txt = res.body?.string() ?: ""
-                // a token that ran out between the check and the call is renewed once and the call made again
-                if (res.code == 401 && !retried && session != null && txt.contains("JWT", true)) {
-                    session?.let { s -> useSession(Session(s.access, s.refresh, 0, s.user)) }
-                    return@withContext exec(true, build)
-                }
-                Triple(res.code, txt, res)
+            val got = http.newCall(req).go { res -> Triple(res.code, res.body?.string() ?: "", res) }
+            // a token that ran out between the check and the call is renewed once and the call made again
+            if (got.first == 401 && !retried && session != null && got.second.contains("JWT", true)) {
+                session?.let { s -> useSession(Session(s.access, s.refresh, 0, s.user)) }
+                return@withContext exec(true, build)
             }
+            got
         } catch (e: Exception) { Triple(0, e.message ?: "network", null) }
     }
+
+    // the answer of a big call is parsed off the main thread
+    private suspend fun parsed(code: Int, txt: String, res: Response?): Res =
+        if (txt.length < 8192) parse(code, txt, res) else withContext(Dispatchers.IO) { parse(code, txt, res) }
 
     private fun parse(code: Int, txt: String, res: Response?): Res {
         if (code == 0) return Res(null, Err("", "network: $txt", 0))
@@ -226,13 +246,13 @@ object Sb {
 
     suspend fun get(q: Q): Res {
         val (c, t, r) = exec { headers(Request.Builder().url("$SB_URL/rest/v1/${q.table}?${q.query()}")).get().build() }
-        return parse(c, t, r)
+        return parsed(c, t, r)
     }
 
     // select(col, { count: "exact", head: true })
     suspend fun count(q: Q): Res {
         val (c, t, r) = exec { headers(Request.Builder().url("$SB_URL/rest/v1/${q.table}?${q.query()}")).header("Prefer", "count=exact").head().build() }
-        return parse(c, t, r)
+        return parsed(c, t, r)
     }
 
     // insert / upsert; select names the columns to hand back (null: nothing comes back)
@@ -246,7 +266,7 @@ object Sb {
             headers(Request.Builder().url("$SB_URL/rest/v1/$table" + (if (p.isEmpty()) "" else "?" + p.joinToString("&")))).header("Prefer", prefer)
                 .post(rows.toString().toRequestBody(JSON_T)).build()
         }
-        return parse(c, t, r)
+        return parsed(c, t, r)
     }
     suspend fun upsert(table: String, rows: Any, onConflict: String, ignoreDuplicates: Boolean = false, select: String? = null) = insert(table, rows, select, onConflict, ignoreDuplicates)
 
@@ -256,7 +276,7 @@ object Sb {
             headers(Request.Builder().url("$SB_URL/rest/v1/${q.table}?${q.query()}")).header("Prefer", if (select != null) "return=representation" else "return=minimal")
                 .patch(values.toString().toRequestBody(JSON_T)).build()
         }
-        return parse(c, t, r)
+        return parsed(c, t, r)
     }
 
     suspend fun delete(q: Q, select: String? = null): Res {
@@ -264,12 +284,12 @@ object Sb {
         val (c, t, r) = exec {
             headers(Request.Builder().url("$SB_URL/rest/v1/${q.table}?${q.query()}")).header("Prefer", if (select != null) "return=representation" else "return=minimal").delete().build()
         }
-        return parse(c, t, r)
+        return parsed(c, t, r)
     }
 
     suspend fun rpc(fn: String, args: JSONObject = JSONObject(), token: String? = null): Res {
         val (c, t, r) = exec { headers(Request.Builder().url("$SB_URL/rest/v1/rpc/$fn"), token).post(args.toString().toRequestBody(JSON_T)).build() }
-        return parse(c, t, r)
+        return parsed(c, t, r)
     }
 
     // pageAll(): a long list read 1000 rows at a time (the server hands out at most 1000 per call)
@@ -280,7 +300,7 @@ object Sb {
             val r = get(mk().range(from, from + 999))
             if (!r.ok) return Res(null, r.error)
             val a = r.data as? JSONArray ?: JSONArray()
-            for (i in 0 until a.length()) out.put(a.get(i))
+            withContext(Dispatchers.IO) { for (i in 0 until a.length()) out.put(a.get(i)) }
             if (a.length() < 1000) break
             from += 1000
         }
@@ -306,7 +326,7 @@ object Sb {
             val tok = token ?: token()
             val b = Request.Builder().url("$SB_URL/functions/v1/$name").header("apikey", SB_KEY).post(body.toString().toRequestBody(JSON_T))
             if (!tok.isNullOrEmpty()) b.header("Authorization", "Bearer $tok")
-            http.newBuilder().callTimeout(timeoutS, TimeUnit.SECONDS).build().newCall(b.build()).execute().use { res ->
+            http.newBuilder().callTimeout(timeoutS, TimeUnit.SECONDS).build().newCall(b.build()).go { res ->
                 val j = runCatching { JSONObject(res.body?.string() ?: "") }.getOrNull() ?: JSONObject()
                 Fn(res.isSuccessful, res.code, j)
             }
@@ -319,8 +339,8 @@ object Sb {
             val tok = token()
             val b = Request.Builder().url("$SB_URL/functions/v1/$name").header("apikey", SB_KEY).post(body.toString().toRequestBody(JSON_T))
             if (tok != null) b.header("Authorization", "Bearer $tok")
-            http.newBuilder().callTimeout(timeoutS, TimeUnit.SECONDS).readTimeout(timeoutS, TimeUnit.SECONDS).build().newCall(b.build()).execute().use { res ->
-                if (onLine == null || !res.isSuccessful) return@use res.code to (res.body?.string() ?: "")
+            http.newBuilder().callTimeout(timeoutS, TimeUnit.SECONDS).readTimeout(timeoutS, TimeUnit.SECONDS).build().newCall(b.build()).go { res ->
+                if (onLine == null || !res.isSuccessful) return@go res.code to (res.body?.string() ?: "")
                 val src = res.body!!.source()
                 val all = StringBuilder()
                 while (!src.exhausted()) { val ln = src.readUtf8Line() ?: break; all.append(ln).append('\n'); onLine(ln) }
@@ -384,10 +404,10 @@ object Sb {
     // the bytes behind a link (photos of this app's own storage, or a signed link to the private chat files)
     suspend fun bytes(url: String, limit: Long = 30L shl 20): ByteArray? = withContext(Dispatchers.IO) {
         try {
-            http.newCall(Request.Builder().url(url).get().build()).execute().use { res ->
-                if (!res.isSuccessful) return@use null
-                val b = res.body ?: return@use null
-                if (b.contentLength() > limit) return@use null
+            http.newCall(Request.Builder().url(url).get().build()).go { res ->
+                if (!res.isSuccessful) return@go null
+                val b = res.body ?: return@go null
+                if (b.contentLength() > limit) return@go null
                 b.bytes().takeIf { it.size <= limit }
             }
         } catch (e: Exception) { null }
@@ -398,7 +418,7 @@ object Sb {
         try {
             val b = Request.Builder().url(url).get()
             headers.forEach { (k, v) -> b.header(k, v) }
-            http.newBuilder().callTimeout(timeoutS, TimeUnit.SECONDS).build().newCall(b.build()).execute().use { res -> if (res.isSuccessful) res.body?.string() else null }
+            http.newBuilder().callTimeout(timeoutS, TimeUnit.SECONDS).build().newCall(b.build()).go { res -> if (res.isSuccessful) res.body?.string() else null }
         } catch (e: Exception) { null }
     }
 

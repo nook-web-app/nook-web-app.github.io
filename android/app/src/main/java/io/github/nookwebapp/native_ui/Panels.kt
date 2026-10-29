@@ -16,6 +16,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -145,7 +147,10 @@ fun EditProfilePanel(app: AppState, me: Panel) {
         // .ebanner: the banner as it will look, with its photo button
         Box(Modifier.fillMaxWidth().aspectRatio(1000f / 330f).clip(RoundedCornerShape(Rad.m))) {
             BannerPic(banner, avatar, theme)
-            PickBtn(Modifier.align(Alignment.BottomEnd).padding(8.dp)) { bannerPick.gallery() }
+            PickBtn(Modifier.align(Alignment.BottomEnd).padding(8.dp)) {
+                if (banner == null) bannerPick.gallery()
+                else app.open(listOf(SheetItem("Choose a photo", "image") { bannerPick.gallery() }, SheetItem("Remove banner", "trash", danger = true) { banner = null }, SheetItem("Cancel", cancel = true)), "Banner")
+            }
         }
         // .eav: the picture over the banner's edge, with its own photo button
         Box(Modifier.padding(start = 12.dp).layoutOffsetUp(44.dp).width(88.dp)) {
@@ -174,7 +179,12 @@ fun BannerPic(banner: String?, avatar: String?, theme: String, modifier: Modifie
         when {
             theme == "avatar" && avatar != null -> {
                 val px = with(androidx.compose.ui.platform.LocalDensity.current) { androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp.toPx() }
-                Pic(avatar, Modifier.fillMaxSize(), want = (px / 4).toInt().coerceIn(48, 320), smooth = true, small = true, bare = true) { _, _ -> ok = true }
+                // like the web app's soft look: a tenth of the size scaled up (the smoothing is the blur), a little larger than the
+                // box so no edge shows, and a real blur on top where the phone can do it (Android 12 and later)
+                val soft = if (android.os.Build.VERSION.SDK_INT >= 31) Modifier.blur(10.dp, androidx.compose.ui.draw.BlurredEdgeTreatment.Unbounded) else Modifier
+                Box(Modifier.fillMaxSize().clipToBounds()) {
+                    Pic(avatar, Modifier.fillMaxSize().graphicsLayer { scaleX = 1.3f; scaleY = 1.3f }.then(soft), want = (px / 10).toInt().coerceIn(24, 96), smooth = true, small = true, bare = true) { _, _ -> ok = true }
+                }
             }
             banner != null -> Pic(banner, Modifier.fillMaxSize(), want = 1000, bare = true) { _, _ -> ok = true }
         }

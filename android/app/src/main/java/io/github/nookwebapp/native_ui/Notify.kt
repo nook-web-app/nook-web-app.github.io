@@ -27,13 +27,16 @@ import kotlinx.coroutines.launch
 // is alive, and from a check every 15 minutes (WorkManager) while it is not. Only notifications this person has not
 // read yet, and that were not shown before, become a notification on the phone.
 object Notify {
-    private const val CH = "nook"
+    // high importance so a notification drops down from the top as a pop up; a channel keeps the importance it was made with,
+    // so the older, quieter "nook" channel is removed and this one takes its place
+    private const val CH = "nook_alerts"
     private const val WORK = "nook-notes"
 
     fun channel(ctx: Context) {
         if (Build.VERSION.SDK_INT >= 26) {
             val nm = ctx.getSystemService(NotificationManager::class.java)
-            if (nm.getNotificationChannel(CH) == null) nm.createNotificationChannel(NotificationChannel(CH, "Nook", NotificationManager.IMPORTANCE_DEFAULT))
+            runCatching { nm.deleteNotificationChannel("nook") }
+            if (nm.getNotificationChannel(CH) == null) nm.createNotificationChannel(NotificationChannel(CH, "Nook", NotificationManager.IMPORTANCE_HIGH).apply { enableVibration(true); setShowBadge(true) })
         }
     }
 
@@ -58,7 +61,8 @@ object Notify {
         val i = Intent(ctx, MainActivity::class.java).putExtra("open", open).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         val pi = PendingIntent.getActivity(ctx, id, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val n = NotificationCompat.Builder(ctx, CH).setSmallIcon(R.drawable.ic_stat).setContentTitle(title).setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body)).setContentIntent(pi).setAutoCancel(true).build()
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body)).setContentIntent(pi).setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH).setCategory(NotificationCompat.CATEGORY_MESSAGE).setDefaults(NotificationCompat.DEFAULT_ALL).build()
         runCatching { NotificationManagerCompat.from(ctx).notify(id, n) }
     }
 

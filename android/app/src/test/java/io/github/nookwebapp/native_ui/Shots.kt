@@ -37,6 +37,15 @@ class Shots {
     }
 
     @Test fun pages() {
+        // a thread with Zenith's answer under my post, and a public post of his account in the feed
+        shot("48-zen-thread") {
+            val mine = post(0)
+            store.posts.add(LPost("zz1", "hey that sounds fun :3 tell me more about it nya", Sample.NOW - 3 * 60000, emptyList(), mine.id, ai = true))
+            go(Route.Thread(mine.id))
+        }
+        shot("49-zen-feed") {
+            store.posts.add(0, LPost("r00000000-0000-4000-8000-0000000000c1", "just woke up and the sky is pink owo", Sample.NOW - 60000, emptyList(), null, remote = "00000000-0000-4000-8000-0000000000c1", ra = Author("00000000-0000-4000-8000-0000000000c9", "Zenith", "zenith", null)).apply { lc = 2; rp = 1 })
+        }
         shot("00-auth", start = Route.Auth)
         shot("01-auth-signup", start = Route.Auth) { authUp = true }
         shot("10-home")

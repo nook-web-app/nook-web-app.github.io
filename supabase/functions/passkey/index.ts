@@ -7,6 +7,8 @@ const admin = createClient(URL_, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { a
 const mk = () => createClient(URL_, Deno.env.get("SUPABASE_ANON_KEY")!, { auth: { persistSession: false, autoRefreshToken: false } });
 const RP_ID = "nook-web-app.github.io";
 const ORIGIN = "https://nook-web-app.github.io";
+// the Android app signs in with the same keys; the phone names it by the hash of its signing certificate
+const ORIGINS = [ORIGIN, "android:apk-key-hash:Fx3nDLYgyW3NMLlKoYmGGm9axSAf2kNOUGDPuu17YRQ"];
 const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info",
@@ -103,7 +105,7 @@ Deno.serve(async (req) => {
       if (!pk) return json({ error: "unknown_key" }, 404);
       let why = "";
       const v = await verifyAuthenticationResponse({
-        response: resp, expectedChallenge: challengeOf(resp), expectedOrigin: ORIGIN, expectedRPID: RP_ID, requireUserVerification: true,
+        response: resp, expectedChallenge: challengeOf(resp), expectedOrigin: ORIGINS, expectedRPID: RP_ID, requireUserVerification: true,
         credential: { id: pk.credential_id, publicKey: toU8(pk.public_key), counter: Number(pk.counter), transports: pk.transports || undefined },
       }).catch((e) => { why = String((e as Error).message || e).slice(0, 140); return null; });
       if (!v || !v.verified) { console.error("verify", why || "not verified"); return json({ error: "failed" }, 401); }
@@ -164,7 +166,7 @@ Deno.serve(async (req) => {
       if (!resp || typeof resp.id !== "string") return json({ error: "bad_request" }, 400);
       const ch = await take(challengeOf(resp), "reg");
       if (!ch || ch.user_id !== user.id) return json({ error: "expired" }, 400);
-      const v = await verifyRegistrationResponse({ response: resp, expectedChallenge: challengeOf(resp), expectedOrigin: ORIGIN, expectedRPID: RP_ID, requireUserVerification: true }).catch(() => null);
+      const v = await verifyRegistrationResponse({ response: resp, expectedChallenge: challengeOf(resp), expectedOrigin: ORIGINS, expectedRPID: RP_ID, requireUserVerification: true }).catch(() => null);
       if (!v || !v.verified || !v.registrationInfo) return json({ error: "failed" }, 400);
       const c = v.registrationInfo.credential;
       const ins = await admin.from("passkeys").insert({ user_id: user.id, credential_id: c.id, public_key: fromU8(c.publicKey), counter: c.counter, transports: c.transports || null, name: String(body.name || "This device").slice(0, 40) });

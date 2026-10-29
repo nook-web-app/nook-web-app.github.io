@@ -35,8 +35,8 @@ object Rt {
         }
     }
 
-    // the main thread runs every step of the connection; without one (tests) nothing is connected
-    private val main: Handler by lazy { Handler(Looper.getMainLooper() ?: Looper.myLooper() ?: run { Looper.prepare(); Looper.myLooper()!! }) }
+    // the main thread runs every step of the connection; without one (tests off the phone) nothing is connected
+    private val main: Handler? by lazy { (Looper.getMainLooper() ?: Looper.myLooper())?.let { Handler(it) } }
     private var ws: WebSocket? = null
     private var open = false
     private var ref = 0
@@ -50,7 +50,7 @@ object Rt {
 
     fun remove(ch: Ch?) {
         if (ch == null) return
-        main.post {
+        main?.post {
             if (chans.remove(ch) && ch.joined) push(ch.topic, "phx_leave", JSONObject(), ch.joinRef)
             ch.joined = false
             if (chans.isEmpty()) close()
@@ -58,12 +58,12 @@ object Rt {
     }
 
     // every channel goes away and the socket closes (sign out, switching accounts)
-    fun removeAll() = main.post { chans.toList().forEach { it.joined = false }; chans.clear(); close() }
+    fun removeAll() = main?.post { chans.toList().forEach { it.joined = false }; chans.clear(); close() }
 
     // a renewed login is handed to every joined channel, so the server keeps sending to it
-    fun token(t: String) = main.post { chans.filter { it.joined }.forEach { push(it.topic, "access_token", JSONObject().put("access_token", t), it.joinRef) } }
+    fun token(t: String) = main?.post { chans.filter { it.joined }.forEach { push(it.topic, "access_token", JSONObject().put("access_token", t), it.joinRef) } }
 
-    private fun join(ch: Ch) = main.post {
+    private fun join(ch: Ch) = main?.post {
         if (ch !in chans) chans.add(ch)
         if (!open) { connect(); return@post }
         sendJoin(ch)
@@ -82,7 +82,7 @@ object Rt {
         pending[r] = ch
         push(ch.topic, "phx_join", JSONObject().put("config", cfg).apply { if (tok != null) put("access_token", tok) }, r, r)
         // a join nobody answers counts as timed out and is tried again with the next connection
-        main.postDelayed({ if (pending.remove(r) != null && !ch.joined) ch.onStatus(St.TIMED_OUT) }, 10_000)
+        main?.postDelayed({ if (pending.remove(r) != null && !ch.joined) ch.onStatus(St.TIMED_OUT) }, 10_000)
     }
 
     internal fun push(topic: String, event: String, payload: JSONObject, joinRef: String?, r: String = (++ref).toString()) {
@@ -95,41 +95,41 @@ object Rt {
         if (ws != null) return
         val url = SB_URL.replace("https://", "wss://") + "/realtime/v1/websocket?apikey=$SB_KEY&vsn=1.0.0"
         ws = Sb.http.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) = main.post {
+            override fun onOpen(webSocket: WebSocket, response: Response) = main?.post {
                 if (ws !== webSocket) return@post
                 open = true; backoff = 2000
                 chans.forEach { sendJoin(it) }
                 heartbeat()
             }.let { }
-            override fun onMessage(webSocket: WebSocket, text: String) = main.post { if (ws === webSocket) onMsg(text) }.let { }
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = main.post { if (ws === webSocket) dropped(St.CHANNEL_ERROR) }.let { }
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = main.post { if (ws === webSocket) dropped(St.CLOSED) }.let { }
+            override fun onMessage(webSocket: WebSocket, text: String) = main?.post { if (ws === webSocket) onMsg(text) }.let { }
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = main?.post { if (ws === webSocket) dropped(St.CHANNEL_ERROR) }.let { }
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = main?.post { if (ws === webSocket) dropped(St.CLOSED) }.let { }
         })
     }
 
     private fun heartbeat() {
-        beat?.let { main.removeCallbacks(it) }
-        val b = object : Runnable { override fun run() { if (!open) return; push("phoenix", "heartbeat", JSONObject(), null); main.postDelayed(this, 25_000) } }
+        beat?.let { main?.removeCallbacks(it) }
+        val b = object : Runnable { override fun run() { if (!open) return; push("phoenix", "heartbeat", JSONObject(), null); main?.postDelayed(this, 25_000) } }
         beat = b
-        main.postDelayed(b, 25_000)
+        main?.postDelayed(b, 25_000)
     }
 
     private fun dropped(st: St) {
         ws = null; open = false
-        beat?.let { main.removeCallbacks(it) }
+        beat?.let { main?.removeCallbacks(it) }
         chans.forEach { if (it.joined) { it.joined = false; it.onStatus(st) } }
         pending.clear()
         if (chans.isEmpty()) return
-        retry?.let { main.removeCallbacks(it) }
+        retry?.let { main?.removeCallbacks(it) }
         val r = Runnable { retry = null; if (chans.isNotEmpty()) connect() }
         retry = r
-        main.postDelayed(r, backoff)
+        main?.postDelayed(r, backoff)
         backoff = minOf(30_000, backoff * 2)
     }
 
     private fun close() {
-        retry?.let { main.removeCallbacks(it) }
-        beat?.let { main.removeCallbacks(it) }
+        retry?.let { main?.removeCallbacks(it) }
+        beat?.let { main?.removeCallbacks(it) }
         val w = ws
         ws = null; open = false; pending.clear()
         runCatching { w?.close(1000, null) }

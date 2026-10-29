@@ -140,6 +140,8 @@ fun SettingsScreen() {
     var key by remember { mutableStateOf<Pair<String, List<String>>?>(null) }
     var keyText by remember { mutableStateOf("Checking...") }
     var push by remember { mutableStateOf("Checking...") }
+    var pk by remember { mutableStateOf<List<org.json.JSONObject>?>(null) }
+    var pkText by remember { mutableStateOf(if (Passkey.ok()) "Checking..." else "Not available here") }
     var tick by remember { mutableIntStateOf(0) }
     val ctx = app.ctx
     LaunchedEffect(tick) {
@@ -151,6 +153,12 @@ fun SettingsScreen() {
         val k = on.keyState()
         key = k
         keyText = when { k == null -> "Couldn't check. Tap to retry"; k.first == "locked" -> "Locked. Tap to unlock"; k.first == "off" -> "Off"; "login" in k.second -> "On"; else -> "On, recovery password" }
+    }
+    LaunchedEffect(tick) {
+        if (!Passkey.ok()) return@LaunchedEffect
+        val r = on.passkeys()
+        pk = r
+        pkText = if (r == null) "Couldn't check" else if (r.isEmpty()) "Off" else "On for " + r.size + if (r.size == 1) " phone" else " phones"
     }
     LaunchedEffect(tick, app.foreground) {
         push = if (ctx == null) "Off" else if (!Notify.allowed(ctx) && Notify.on(ctx)) "Blocked in phone settings" else if (Notify.on(ctx) && Notify.allowed(ctx)) "On" else "Off"
@@ -169,7 +177,20 @@ fun SettingsScreen() {
             Group {
                 SRow(ic("pass", 22.dp), "Change password", "Update your password") { app.panels.add(Panel.ChangePassword) }
                 SRow(ic("mail", 22.dp), "Change email", "Update your email") { app.panels.add(Panel.ChangeEmail) }
-                SRow(ic("lock", 22.dp), "Fingerprint", "Not available here") { app.say("This phone cannot do that") }
+                SRow(ic("lock", 22.dp), "Fingerprint", pkText) {
+                    val rows = pk
+                    when {
+                        !Passkey.ok() -> app.say("This phone cannot do that")
+                        rows == null -> { app.say("Checking, try again in a moment"); tick++ }
+                        else -> app.open(
+                            (if (rows.isEmpty()) listOf(SheetItem("Add this phone") { app.scope.launch { if (on.passkeyAdd()) { app.say("Saved. You can sign in with it now"); tick++ } } }) else emptyList()) +
+                                rows.map { k ->
+                                    SheetItem(if (rows.size > 1) "Remove " + k.optString("name").ifEmpty { "key" } else "Remove", "close", danger = true) {
+                                        app.scope.launch { val r = Sb.delete(Q("passkeys").eq("id", k.optString("id"))); app.say(if (r.ok) "Removed" else "Could not remove it"); if (r.ok) tick++ }
+                                    }
+                                } + SheetItem("Cancel", cancel = true), "Fingerprint")
+                    }
+                }
                 SRow(ic("shield", 22.dp), "Authenticator app", totp) {
                     when (totpOn) {
                         null -> { app.say("Checking..."); tick++ }
@@ -300,6 +321,13 @@ fun AuthScreen() {
             }
             if (msg.isNotEmpty()) T(msg, Fs.md, color = c.muted, align = TextAlign.Center, modifier = Modifier.fillMaxWidth())
             Pill(if (up) "Create account" else "Sign in", Btn.Pri, enabled = !busy, modifier = Modifier.fillMaxWidth()) { go() }
+            if (!up && Passkey.ok()) {
+                LaunchedEffect(Unit) { app.on.passkeyWarm() }
+                Pill("Sign in with Fingerprint", Btn.Ghost, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                    msg = ""; busy = true
+                    app.scope.launch { app.on.signInPasskey()?.let { msg = it }; busy = false }
+                }
+            }
             if (!up) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { Box(Modifier.tap { app.panels.add(Panel.Recover(email.trim())) }.vpad(8.dp)) { T("Forgot password?", Fs.md, color = c.muted) } }
             Pill(if (up) "I already have an account" else "Make an account", Btn.Ghost, modifier = Modifier.fillMaxWidth()) { app.authUp = !up; msg = "" }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {

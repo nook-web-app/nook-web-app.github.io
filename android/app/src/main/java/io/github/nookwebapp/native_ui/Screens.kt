@@ -125,7 +125,7 @@ fun ThreadScreen(id: String) {
         // the replies of a post of somebody else that this phone does not have yet are fetched
         LaunchedEffect(p.remote) {
             val r = p.remote ?: return@LaunchedEffect
-            if (app.signedIn && p.ra != null) app.on.mapRemotePosts(Sb.get(Q("posts").select("id, user_id, body, created_at, parent_id, media_url").eq("parent_id", r).order("created_at").limit(100)).rows)
+            if (app.signedIn && p.ra != null) app.on.mapRemotePosts(Sb.get(Q("posts").select("id, user_id, body, created_at, parent_id, media_url, edited_at").eq("parent_id", r).order("created_at").limit(100)).rows)
         }
         val anc = mutableListOf<LPost>()
         var q = s.byId(p.parent)
@@ -143,7 +143,7 @@ fun ThreadScreen(id: String) {
 @Composable
 fun BannerBox(banner: String?, avatar: String?, theme: String) {
     val c = LocalNook.current
-    Box(Modifier.fillMaxWidth().aspectRatio(1000f / 330f).background(Brush.linearGradient(listOf(c.b1, c.b2), Offset.Zero, Offset.Infinite))) {
+    Box(Modifier.fillMaxWidth().aspectRatio(1000f / 330f)) {
         BannerPic(banner?.takeIf { Photos.ownMedia(it) }, avatar?.takeIf { Photos.ownMedia(it) }, theme)
     }
 }

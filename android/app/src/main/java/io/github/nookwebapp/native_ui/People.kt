@@ -31,9 +31,8 @@ fun RAv(name: String, handle: String, avatar: String?, size: Dp, id: String? = n
     val seed = name.ifEmpty { handle }.ifEmpty { "?" }
     val isZen = !Photos.ownMedia(avatar) && (handle.lowercase() == "zenith" || (id != null && id == app.on.zenId()))
     if (isZen) { ZenAv(size, modifier); return }
-    Box(modifier.size(size).clip(CircleShape).background(hsl(hueOf(seed), .45f, .42f)), contentAlignment = Alignment.Center) {
+    RoundPic(avatar?.takeIf { Photos.ownMedia(it) }, size, androidx.compose.ui.graphics.SolidColor(hsl(hueOf(seed), .45f, .42f)), modifier) {
         T(seed.trim().take(1).uppercase().ifEmpty { "?" }, size = (size.value * 0.4f).roundToInt().sp, weight = FontWeight.Bold, color = Color.White, lineHeight = (size.value * 0.5f).sp)
-        if (Photos.ownMedia(avatar)) Pic(avatar, Modifier.matchParentSize(), want = 320)
     }
 }
 
@@ -46,9 +45,8 @@ fun ZenAv(size: Dp, modifier: Modifier = Modifier) {
     val app = LocalApp.current
     app.zenVersion
     val pfp = app.store.zen.optStr("pfp")
-    Box(modifier.size(size).clip(CircleShape).background(Brush.linearGradient(listOf(Color(0xFF14466F), Color(0xFF208BFE)))), contentAlignment = Alignment.Center) {
-        if (pfp != null) Pic(pfp, Modifier.matchParentSize(), want = 320)
-        else T("Z", size = (size.value * 0.5f).roundToInt().sp, weight = FontWeight.Bold, color = Color.White, lineHeight = (size.value * 0.6f).sp)
+    RoundPic(pfp, size, Brush.linearGradient(listOf(Color(0xFF14466F), Color(0xFF208BFE))), modifier) {
+        if (pfp == null) T("Z", size = (size.value * 0.5f).roundToInt().sp, weight = FontWeight.Bold, color = Color.White, lineHeight = (size.value * 0.6f).sp)
     }
 }
 
@@ -107,21 +105,14 @@ fun LinkCard(url0: String, chat: Boolean = false) {
 }
 
 // the picture of a link card comes from the linked site itself (not this app's storage), so it is loaded on its own
+// (no referrer is sent, like referrerpolicy=no-referrer); it is kept on disk like every other photo
 @Composable
 private fun LinkPic(src: String, focus: Pair<Float, Float>?) {
-    var bm by remember(src) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
-    LaunchedEffect(src) {
-        bm = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            runCatching {
-                Sb.http.newCall(okhttp3.Request.Builder().url(src).header("Referer", "").build()).execute().use { r ->
-                    if (!r.isSuccessful) null else r.body?.bytes()?.takeIf { it.size < 8 shl 20 }?.let { Photos.decodeUpright(it, 1024)?.asImageBitmap() }
-                }
-            }.getOrNull()
-        }
-    }
-    val b = bm ?: return
+    if (androidx.compose.ui.platform.LocalInspectionMode.current || Photos.sync) return
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val req = remember(src) { coil.request.ImageRequest.Builder(ctx).data(src).setHeader("Referer", "").build() }
     val align = focus?.let { (x, y) -> androidx.compose.ui.BiasAlignment((x / 50f - 1f).coerceIn(-1f, 1f), (y / 50f - 1f).coerceIn(-1f, 1f)) } ?: Alignment.Center
-    androidx.compose.foundation.Image(b, null, Modifier.fillMaxSize(), alignment = align, contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+    coil.compose.AsyncImage(req, null, modifier = Modifier.fillMaxSize(), imageLoader = Img.loader(ctx), alignment = align, contentScale = androidx.compose.ui.layout.ContentScale.Crop)
 }
 
 // .zcard: a post shared into a chat, as a card: only that post, no profile and no replies behind it
@@ -168,7 +159,7 @@ fun ZCard(z: ZPost, big: Boolean = false) {
     val c = LocalNook.current
     CardBox(big, onClick = if (big) null else ({ app.zcard = z })) {
         Row(Modifier.padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (z.a != null) Box(Modifier.size(if (big) 44.dp else 34.dp).clip(CircleShape)) { Pic(z.a, Modifier.matchParentSize(), want = 200) } else ZenAv(if (big) 44.dp else 34.dp)
+            if (z.a != null) RoundPic(z.a, if (big) 44.dp else 34.dp, androidx.compose.ui.graphics.SolidColor(c.bg2)) {} else ZenAv(if (big) 44.dp else 34.dp)
             Column { T("Zenith", weight = FontWeight.Bold); T("@zenith", Fs.xs, color = c.muted) }
         }
         Tx(z.x)

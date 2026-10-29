@@ -155,7 +155,8 @@ class Online(val app: AppState) {
         val me = uid ?: return@coroutineScope
         val feedT0 = System.currentTimeMillis()
         val postsQ = async {
-            var pq = Sb.get(Q("posts_feed").select("id, user_id, body, created_at, parent_id, media_url, media_inline").order("created_at", false).limit(300))
+            var pq = Sb.get(Q("posts_feed").select("id, user_id, body, created_at, parent_id, media_url, media_inline, edited_at").order("created_at", false).limit(300))
+            if (!pq.ok) pq = Sb.get(Q("posts_feed").select("id, user_id, body, created_at, parent_id, media_url, media_inline").order("created_at", false).limit(300))
             if (!pq.ok) pq = Sb.get(Q("posts").select("id, user_id, body, created_at, parent_id, media_url").order("created_at", false).limit(300))
             pq
         }
@@ -199,7 +200,7 @@ class Online(val app: AppState) {
                 rpRows = rqs.flatMap { it.rows }.sortedByDescending { parseIso(it.optString("created_at")) }.take(60).filter { it.optString("user_id") != me }
                 val have = posts.map { it.optString("id") }.toSet()
                 val miss = rpRows.map { it.optString("post_id") }.distinct().filter { it !in have }.take(60)
-                if (miss.isNotEmpty()) Sb.get(Q("posts").select("id, user_id, body, created_at, parent_id, media_url").inList("id", miss)).rows.forEach { p -> if (p.isNull("parent_id") || p.optString("parent_id").isEmpty()) posts.add(p) }
+                if (miss.isNotEmpty()) Sb.get(Q("posts").select("id, user_id, body, created_at, parent_id, media_url, edited_at").inList("id", miss)).rows.forEach { p -> if (p.isNull("parent_id") || p.optString("parent_id").isEmpty()) posts.add(p) }
             }
         } catch (e: Exception) { rpRows = emptyList(); rpFailed = true }
         inlP.await()
@@ -248,9 +249,12 @@ class Online(val app: AppState) {
         val savedMap = s.posts.filter { it.ra != null }.associate { it.remote to it.saved }
         val localByRemote = s.posts.filter { it.remote != null && it.ra == null }.associate { it.remote!! to it.id }
         val sv = s.sv
+        // posts whose words were changed after they went up (the server marks it; removing a photo does not count)
+        val editedIds = shown.filter { it.optStr("edited_at") != null }.map { it.optString("id") }.toSet()
         s.posts.forEach { p ->
             val r = p.remote ?: return@forEach
             if (p.ra != null) return@forEach
+            if (r in editedIds) p.edited = true
             p.lc = lcM[r] ?: 0; p.rpc = rcM[r] ?: 0; p.svc = shareStats.sv[r] ?: 0; p.shc = shareStats.sh[r] ?: 0; p.sharedByMe = r in shareStats.myShared
             p.rp = replyTally[r] ?: 0; p.liked = r in liked; p.reposted = r in reposted
             p.rpAt = if (p.reposted) rpTime[r]?.takeIf { it > 0 } ?: p.rpAt else 0
@@ -260,7 +264,7 @@ class Online(val app: AppState) {
             val a = who.get(u) ?: JSONObject().put("username", "user")
             LPost("r$id", p.optString("body"), parseIso(p.optString("created_at")), imgsOf[id] ?: parseMedia(p.opt("media_url")),
                 p.optStr("parent_id")?.let { localByRemote[it] ?: "r$it" }, id in liked, id in reposted, rpTime[id] ?: 0,
-                savedMap[id] ?: (sv?.contains(id) == true), false, false, id, authorOf(u, a)).apply {
+                savedMap[id] ?: (sv?.contains(id) == true), false, p.optStr("edited_at") != null, id, authorOf(u, a)).apply {
                 rpBy = rpBy(id); this.lc = lcM[id] ?: 0; this.rpc = rcM[id] ?: 0; shc = shareStats.sh[id] ?: 0; svc = shareStats.sv[id] ?: 0; sharedByMe = id in shareStats.myShared; rp = replyTally[id] ?: 0
             }
         }
@@ -272,7 +276,7 @@ class Online(val app: AppState) {
         val back = mineBack.map { p ->
             val id = p.optString("id"); val im = imgsOf[id] ?: parseMedia(p.opt("media_url"))
             LPost("m$id", p.optString("body"), parseIso(p.optString("created_at")), im,
-                p.optStr("parent_id")?.let { localByRemote[it] ?: if (it in backIds) "m$it" else "r$it" }, id in liked, id in reposted, 0, sv?.contains(id) == true, pinnedId == id, false, id).apply {
+                p.optStr("parent_id")?.let { localByRemote[it] ?: if (it in backIds) "m$it" else "r$it" }, id in liked, id in reposted, 0, sv?.contains(id) == true, pinnedId == id, p.optStr("edited_at") != null, id).apply {
                 media = im; this.lc = lcM[id] ?: 0; this.rpc = rcM[id] ?: 0; shc = shareStats.sh[id] ?: 0; svc = shareStats.sv[id] ?: 0; sharedByMe = id in shareStats.myShared; rp = replyTally[id] ?: 0
             }
         }
@@ -361,7 +365,7 @@ class Online(val app: AppState) {
             val im = parseMedia(p.opt("media_url"))
             val par = p.optStr("parent_id")?.let { localByRemote[it] ?: (if (mineP) "m" else "r") + it }
             val np = LPost((if (mineP) "m" else "r") + id, p.optString("body"), parseIso(p.optString("created_at")), im, par, id in mineL, id in mineR, 0,
-                s.sv?.contains(id) == true, false, false, id, if (mineP) null else authorOf(u, a!!)).apply {
+                s.sv?.contains(id) == true, false, p.optStr("edited_at") != null, id, if (mineP) null else authorOf(u, a!!)).apply {
                 if (mineP) media = im
                 this.lc = lcM[id] ?: 0; this.rpc = rcM[id] ?: 0; shc = sst.sh[id] ?: 0; svc = sst.sv[id] ?: 0; sharedByMe = id in sst.myShared; this.rp = kc[id] ?: 0
             }
@@ -374,7 +378,7 @@ class Online(val app: AppState) {
     // loadUserPosts(): the feed only holds the newest posts of everybody, so a profile fetches the person's own newest posts
     suspend fun loadUserPosts(id: String): Boolean {
         if (uid == null) return false
-        val r = Sb.get(Q("posts").select("id, user_id, body, created_at, parent_id, media_url").eq("user_id", id).order("created_at", false).limit(80))
+        val r = Sb.get(Q("posts").select("id, user_id, body, created_at, parent_id, media_url, edited_at").eq("user_id", id).order("created_at", false).limit(80))
         if (!r.ok || r.rows.isEmpty()) return false
         return mapRemotePosts(r.rows) > 0
     }
@@ -388,7 +392,7 @@ class Online(val app: AppState) {
         val miss = want.filter { it !in have && it !in wantGone }.take(100)
         var changed = false
         if (miss.isNotEmpty()) {
-            val r = Sb.get(Q("posts").select("id, user_id, body, created_at, parent_id, media_url").inList("id", miss))
+            val r = Sb.get(Q("posts").select("id, user_id, body, created_at, parent_id, media_url, edited_at").inList("id", miss))
             if (r.ok) { val got = r.rows.map { it.optString("id") }.toSet(); miss.forEach { if (it !in got) wantGone.add(it) } }
             changed = mapRemotePosts(r.rows) > 0
         }

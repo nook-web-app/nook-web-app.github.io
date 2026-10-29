@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 and later draw their own start screen from the app icon: it gets the app's dark background and the
+     adaptive icon, so the icon is not shown shrunk inside a white circle -->
+<resources><style name="Theme.Nook" parent="android:Theme.Material.NoActionBar">
+    <item name="android:windowBackground">#161e27</item>
+    <item name="android:windowSplashScreenBackground">#161e27</item>
+    <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
+</style></resources>

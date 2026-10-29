@@ -27,7 +27,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -42,7 +46,11 @@ fun ConvScreen(id: String) {
     val s = app.store
     val chat = s.chats.firstOrNull { it.id == id }
     if (chat == null) { LaunchedEffect(Unit) { app.pop() }; return }
-    var text by remember(chat.id) { mutableStateOf(chat.draft) }
+    // the text and where the cursor is: a word put in by the app (Zenith's name) leaves the cursor after it
+    var tv by remember(chat.id) { mutableStateOf(TextFieldValue(chat.draft, TextRange(chat.draft.length))) }
+    val text = tv.text
+    fun setText(t: String) { tv = TextFieldValue(t, TextRange(t.length)); chat.draft = t; app.persist() }
+    val focus = remember { FocusRequester() }
     val pend = remember { mutableStateListOf<String>() }
     val picker = rememberPicker(4 - pend.size) { got -> pend.addAll(got.take(4 - pend.size)) }
     var open by remember { mutableStateOf<String?>(null) }
@@ -77,12 +85,13 @@ fun ConvScreen(id: String) {
             if (chat.msgs.isEmpty()) item { Empty("smile", "Nothing here yet. Say something to yourself.", iconSize = 48.dp) }
             if (shownFrom > 0) item { Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) { Pill("Show earlier messages", Btn.Ghost) { shownFrom = maxOf(0, shownFrom - 80) } } }
             items(chat.msgs.drop(shownFrom), key = { it.id }) { m ->
-                Bubble(m, open == m.id, onTap = { open = if (open == m.id) null else m.id }) {
+                // pulling one of Zenith's messages to the right starts an answer to him
+                SwipeReply(m.ai, { setText("@zenith "); runCatching { focus.requestFocus() } }) { Bubble(m, open == m.id, onTap = { open = if (open == m.id) null else m.id }) {
                     app.open(listOfNotNull(
                         if (m.text.isNotEmpty()) SheetItem("Copy message", "copy") { app.clipboard(m.text) } else null,
                         SheetItem("Delete message", "trash", danger = true) { chat.msgs.remove(m); app.persist() },
                     ))
-                }
+                } }
             }
             // his answer while it is still being typed out
             if (typing != null) item(key = "zen-typing") {
@@ -91,7 +100,7 @@ fun ConvScreen(id: String) {
         }
         // .cdock: the pending photos and the text box with its photo and send buttons
         Column(Modifier.fillMaxWidth().background(c.bg).lineAbove(c.line).navigationBarsPadding().padding(bottom = 10.dp)) {
-            if (zOn() && Regex("@\\w*$").containsMatchIn(text)) ZenPop { text = text.replace(Regex("@\\w*$"), "@zenith "); chat.draft = text; app.persist() }
+            if (zOn() && Regex("@\\w*$").containsMatchIn(text)) ZenPop { setText(text.replace(Regex("@\\w*$"), "@zenith ")) }
             if (pend.isNotEmpty()) Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 pend.forEachIndexed { i, src ->
                     Box(Modifier.size(64.dp).clip(RoundedCornerShape(Rad.s))) {
@@ -103,8 +112,8 @@ fun ConvScreen(id: String) {
             Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 IB("image", tint = c.accent, box = 40.dp, height = 42.dp, enabled = pend.size < 4) { picker.gallery() }
                 BasicTextField(
-                    text, { text = it; chat.draft = it; app.persist() },
-                    Modifier.weight(1f).heightIn(min = 42.dp, max = 140.dp).clip(RoundedCornerShape(Rad.bubble)).background(c.bg2).padding(horizontal = 14.dp, vertical = 10.dp),
+                    tv, { v -> val changed = v.text != tv.text; tv = v; if (changed) { chat.draft = v.text; app.persist() } },
+                    Modifier.weight(1f).focusRequester(focus).heightIn(min = 42.dp, max = 140.dp).clip(RoundedCornerShape(Rad.bubble)).background(c.bg2).padding(horizontal = 14.dp, vertical = 10.dp),
                     textStyle = LocalTextStyle.current.copy(color = c.fg, fontSize = Fs.lg, lineHeight = (16 * 1.35).sp), cursorBrush = SolidColor(c.accent),
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     decorationBox = { inner -> Box { if (text.isEmpty()) T("Message", Fs.lg, color = c.muted, lineHeight = (16 * 1.35).sp); inner() } },
@@ -113,7 +122,7 @@ fun ConvScreen(id: String) {
                 Box(Modifier.size(42.dp).alpha(if (can) 1f else 0.45f).clip(CircleShape).background(c.fill).pressTap(CircleShape, enabled = can) {
                     val m = LMsg(uid(), cleanText(text.trim()), Clock.now(), pend.toList())
                     chat.msgs.add(m)
-                    pend.clear(); text = ""; chat.draft = ""; app.persist()
+                    pend.clear(); setText("")
                     app.on.zAsk(chat, m)
                 }, contentAlignment = Alignment.Center) { NIcon("send", 20.dp, c.on) }
             }

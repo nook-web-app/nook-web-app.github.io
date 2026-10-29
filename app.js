@@ -291,7 +291,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.23.0";
+const APP_VERSION = "3.24.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1609,6 +1609,7 @@ function postCard(p, o) {
   if (cardless(p)) col.append(txBody(cardless(p), ""));
   if (p.imgs.length) col.append(imgGrid(p.imgs));
   else if (firstUrl(p.text)) col.append(linkCard(firstUrl(p.text)));
+  if (p.edited) col.append(h("div", { class: "rt ed" }, ic("edit", 14), "Edited"));
   if (!o.compact) col.append(acts(p, false, !!o.nc));
   const av = p.ai ? zenAv(40) : p.ra ? rAv(p.ra, 40) : avatar(40);
   if (p.ra) av.addEventListener("click", e => { e.stopPropagation(); go({ r: "user", id: p.ra.id }); });
@@ -3466,7 +3467,8 @@ function feedPrefetch() {
 function feedFetchStart() {
   const uid = sbUser.id, f = { t: Date.now(), uid };
   f.posts = (async () => {
-    let pq = await sb.from("posts_feed").select("id, user_id, body, created_at, parent_id, media_url, media_inline").order("created_at", { ascending: false }).limit(300);
+    let pq = await sb.from("posts_feed").select("id, user_id, body, created_at, parent_id, media_url, media_inline, edited_at").order("created_at", { ascending: false }).limit(300);
+    if (pq.error) pq = await sb.from("posts_feed").select("id, user_id, body, created_at, parent_id, media_url, media_inline").order("created_at", { ascending: false }).limit(300);
     if (pq.error) pq = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url").order("created_at", { ascending: false }).limit(300);
     if (pq.error) pq = await sb.from("posts").select("id, user_id, body, created_at").order("created_at", { ascending: false }).limit(300);
     return pq;
@@ -3530,7 +3532,7 @@ async function loadFeedNow(pre) {
           const rt = new Map();
           shownP.filter(p => p.parent_id).forEach(p => rt.set(p.parent_id, (rt.get(p.parent_id) || 0) + 1));
           const ids = new Set(shownP.map(p => p.id));
-          const mk = p => ({ remote: p.id, text: p.body || "", t: Date.parse(p.created_at), imgs: p._imgs || parseMedia(p.media_url), liked: false, reposted: false, rpAt: 0, saved: !!(S.sv && S.sv[p.id]), lc: 0, rpc: 0, shc: 0, svc: 0, sharedByMe: false, rp: rt.get(p.id) || 0, _prov: true });
+          const mk = p => ({ remote: p.id, text: p.body || "", t: Date.parse(p.created_at), imgs: p._imgs || parseMedia(p.media_url), liked: false, reposted: false, rpAt: 0, saved: !!(S.sv && S.sv[p.id]), lc: 0, rpc: 0, shc: 0, svc: 0, sharedByMe: false, rp: rt.get(p.id) || 0, edited: !!p.edited_at, _prov: true });
           const par = p => (p.parent_id ? (ids.has(p.parent_id) ? p.parent_id : null) : null);
           const mine = shownP.filter(p => p.user_id === sbUser.id && !(S.pendDel || []).includes(p.id)).map(p => Object.assign(mk(p), { id: "m" + p.id, parent: par(p) ? "m" + p.parent_id : p.parent_id ? "r" + p.parent_id : null, media: p._imgs || parseMedia(p.media_url), pinned: false }));
           const others0 = shownP.filter(p => p.user_id !== sbUser.id && who0.get(p.user_id)).map(p => {
@@ -3579,7 +3581,7 @@ async function loadFeedNow(pre) {
       const have = new Set(posts.map(p => p.id));
       const miss = [...new Set(rpRows.map(r => r.post_id))].filter(id => !have.has(id)).slice(0, 60);
       if (miss.length) {
-        const mq = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url").in("id", miss);
+        const mq = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url, edited_at").in("id", miss);
         (mq.data || []).forEach(p => { if (!p.parent_id) posts.push(p); });
       }
     }
@@ -3659,8 +3661,11 @@ async function loadFeedNow(pre) {
   shown.filter(p => p.parent_id).forEach(p => replyTally.set(p.parent_id, (replyTally.get(p.parent_id) || 0) + 1));
   const savedMap = new Map(S.posts.filter(p => p.ra).map(p => [p.remote, !!p.saved]));
   const localByRemote = new Map(S.posts.filter(p => p.remote && !p.ra).map(p => [p.remote, p.id]));
+  // posts whose words were changed after they went up (the server marks it; removing a photo does not count)
+  const editedIds = new Set(shown.filter(p => p.edited_at).map(p => p.id));
   S.posts.forEach(p => {
     if (!p.remote || p.ra) return;
+    if (editedIds.has(p.remote)) p.edited = true;
     p.lc = lc.get(p.remote) || 0;
     p.rpc = rc.get(p.remote) || 0;
     p.svc = svc.get(p.remote) || 0; p.shc = shc.get(p.remote) || 0; p.sharedByMe = shMine.has(p.remote);
@@ -3676,7 +3681,7 @@ async function loadFeedNow(pre) {
       text: p.body || "", t: Date.parse(p.created_at), imgs: p._imgs || parseMedia(p.media_url),
       ra: { id: p.user_id, name: a.display_name == null ? a.username : a.display_name, handle: a.username, avatar: a.avatar || null },
       liked: liked.has(p.id), reposted: reposted.has(p.id), rpAt: rpTime.get(p.id) || 0, rpBy: rpBy(p.id), saved: savedMap.get(p.id) || !!(S.sv && S.sv[p.id]),
-      lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, shc: shc.get(p.id) || 0, svc: svc.get(p.id) || 0, sharedByMe: shMine.has(p.id), rp: replyTally.get(p.id) || 0, pinned: false
+      lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, shc: shc.get(p.id) || 0, svc: svc.get(p.id) || 0, sharedByMe: shMine.has(p.id), rp: replyTally.get(p.id) || 0, pinned: false, edited: !!p.edited_at
     };
   });
   // my posts that only the server has (made on another device, or lost from this one) come back
@@ -3687,7 +3692,7 @@ async function loadFeedNow(pre) {
     id: "m" + p.id, remote: p.id, parent: p.parent_id ? (localByRemote.get(p.parent_id) || (backIds.has(p.parent_id) ? "m" + p.parent_id : "r" + p.parent_id)) : null,
     text: p.body || "", t: Date.parse(p.created_at), imgs: p._imgs || parseMedia(p.media_url), media: p._imgs || parseMedia(p.media_url),
     liked: liked.has(p.id), reposted: reposted.has(p.id), saved: !!(S.sv && S.sv[p.id]), lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, shc: shc.get(p.id) || 0, svc: svc.get(p.id) || 0, sharedByMe: shMine.has(p.id), rp: replyTally.get(p.id) || 0,
-    pinned: !!meRow && meRow.pinned_post_id === p.id
+    pinned: !!meRow && meRow.pinned_post_id === p.id, edited: !!p.edited_at
   }));
   // what this person saved or liked stays, even when the post is older than the newest 300
   const seen = new Set(remote.map(r => r.remote));
@@ -3814,7 +3819,7 @@ async function mapRemotePosts(rows) {
     const base = {
       remote: p.id, parent: p.parent_id ? (localByRemote.get(p.parent_id) || (mine ? "m" : "r") + p.parent_id) : null,
       text: p.body || "", t: Date.parse(p.created_at), imgs: parseMedia(p.media_url),
-      liked: mineL.has(p.id), reposted: mineR.has(p.id), saved: !!(S.sv && S.sv[p.id]), lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, shc: shc.get(p.id) || 0, svc: svc.get(p.id) || 0, sharedByMe: shMine.has(p.id), rp: kc.get(p.id) || 0, pinned: false
+      liked: mineL.has(p.id), reposted: mineR.has(p.id), saved: !!(S.sv && S.sv[p.id]), lc: lc.get(p.id) || 0, rpc: rc.get(p.id) || 0, shc: shc.get(p.id) || 0, svc: svc.get(p.id) || 0, sharedByMe: shMine.has(p.id), rp: kc.get(p.id) || 0, pinned: false, edited: !!p.edited_at
     };
     if (mine) S.posts.push(Object.assign(base, { id: "m" + p.id, media: base.imgs }));
     else S.posts.push(Object.assign(base, { id: "r" + p.id, ra: { id: p.user_id, name: a.display_name == null ? a.username : a.display_name, handle: a.username, avatar: a.avatar || null } }));
@@ -3826,7 +3831,7 @@ async function mapRemotePosts(rows) {
 // the feed only holds the newest posts of everybody, so when a profile opens the person's own newest posts are fetched too
 async function loadUserPosts(id) {
   if (!sbUser) return false;
-  const { data: rows, error } = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url").eq("user_id", id).order("created_at", { ascending: false }).limit(80);
+  const { data: rows, error } = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url, edited_at").eq("user_id", id).order("created_at", { ascending: false }).limit(80);
   if (error || !rows || !rows.length) return false;
   return (await mapRemotePosts(rows)) > 0;
 }
@@ -4214,7 +4219,9 @@ function openCompose(o) {
         const origin = ed.imgs.slice(), was = { text: ed.text, imgs: ed.imgs, edited: ed.edited };
         // shown at once, and put back if the server refuses it
         syncEdit(ed, text, origin, imgs.slice()).then(ok => { if (!ok) { ed.text = was.text; ed.imgs = was.imgs; ed.edited = was.edited; persist(); render(); } });
-        ed.text = text; ed.imgs = imgs.slice(); ed.edited = true;
+        // only a change of the words marks it as edited (removing or adding a photo does not)
+        ed.edited = !!ed.edited || text !== was.text;
+        ed.text = text; ed.imgs = imgs.slice();
       }
       else {
         const np = { id: uid(), text, t: Date.now(), imgs: imgs.slice(), parent: parent ? parent.id : null, liked: false, reposted: false, saved: false, pinned: false };
@@ -6800,7 +6807,7 @@ function rCard(id, big, hint) {
 async function openSharedPost(id) {
   let local = S.posts.find(x => x.remote === id);
   if (!local) {
-    const cols = "id, user_id, body, media_url, created_at, parent_id";
+    const cols = "id, user_id, body, media_url, created_at, parent_id, edited_at";
     const [pq, rq] = await Promise.all([
       sb.from("posts").select(cols).eq("id", id).maybeSingle(),
       sb.from("posts").select(cols).eq("parent_id", id).order("created_at", { ascending: true }).limit(100)
@@ -6817,7 +6824,7 @@ async function openSharedPost(id) {
         id: "r" + r.id, remote: r.id, parent: r.id === id ? null : "r" + id,
         text: r.body || "", t: Date.parse(r.created_at), imgs: parseMedia(r.media_url),
         ra: { id: r.user_id, name: a.display_name || a.username || "user", handle: a.username, avatar: a.avatar || null },
-        liked: false, reposted: false, saved: false, lc: 0, rpc: 0, rp: r.id === id ? rows.length - 1 : 0, pinned: false, sharedAt: now
+        liked: false, reposted: false, saved: false, lc: 0, rpc: 0, rp: r.id === id ? rows.length - 1 : 0, pinned: false, sharedAt: now, edited: !!r.edited_at
       };
     });
     S.posts.push(...fresh);
@@ -8503,7 +8510,7 @@ async function fillWanted() {
   const miss = [...want].filter(r => !have.has(r) && !wantGone.has(r)).slice(0, 100);
   let changed = false;
   if (miss.length) {
-    const { data, error } = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url").in("id", miss);
+    const { data, error } = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url, edited_at").in("id", miss);
     if (!error) { const got = new Set((data || []).map(d => d.id)); miss.forEach(r => { if (!got.has(r)) wantGone.add(r); }); }
     changed = (await mapRemotePosts(data || [])) > 0;
   }

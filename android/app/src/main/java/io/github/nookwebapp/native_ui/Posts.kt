@@ -205,12 +205,14 @@ fun ImgGrid(imgs: List<String>, cap: String? = null, framed: Boolean = true) {
     val shape = RoundedCornerShape(Rad.m)
     val maxH = minOf(460f, LocalConfiguration.current.screenHeightDp * 0.6f).dp
     val open = { i: Int -> app.viewer = Viewer(imgs, i, cap) }
-    val cell = @Composable { i: Int, m: Modifier -> Pic(imgs[i], m.background(c.bg2).tap { open(i) }) }
+    // .imgs.n1 img { height: auto }: one photo takes its own shape once it is in (and at once when it is known)
+    var one by remember(imgs.firstOrNull()) { mutableStateOf(imgs.firstOrNull()?.let { Photos.size(it) }) }
+    val cell = @Composable { i: Int, m: Modifier -> Pic(imgs[i], m.tap { open(i) }, onLoad = if (i == 0 && imgs.size == 1) ({ w, h -> if (one == null || one!!.first * h != one!!.second * w) one = w to h }) else null) }
     BoxWithConstraints(if (framed) Modifier.padding(top = 8.dp).fillMaxWidth().clip(shape).border(1.dp, c.line, shape).padding(1.dp) else Modifier.fillMaxWidth().clip(RoundedCornerShape(Rad.bubble))) {
         val w = maxWidth
         when {
             imgs.size == 1 -> {
-                val d = Photos.size(imgs[0])
+                val d = one
                 val h = minOf(if (d != null) w * (d.second.toFloat() / d.first) else w * 0.75f, maxH)
                 cell(0, Modifier.fillMaxWidth().height(h))
             }
@@ -277,6 +279,10 @@ fun PostCard(p: LPost, lab: String? = null, pin: Boolean = false, replyTo: Boole
             val txt = cardless(p)
             if (txt.isNotEmpty()) Tx(txt, modifier = Modifier.probe("text:" + p.id), onTap = open, onLong = hold)
             if (p.imgs.isNotEmpty()) ImgGrid(p.imgs) else firstUrl(p.text)?.let { LinkCard(it) }
+            // .rt.ed: the words were changed after the post went up
+            if (p.edited) Row(Modifier.padding(top = 6.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                NIcon("edit", 14.dp, c.muted); T("Edited", Fs.sm, color = c.muted)
+            }
             if (!compact) Acts(p, nc = nc)
         }
     }

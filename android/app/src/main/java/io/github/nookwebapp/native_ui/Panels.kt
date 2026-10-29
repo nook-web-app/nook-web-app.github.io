@@ -128,7 +128,7 @@ fun EditProfilePanel(app: AppState, me: Panel) {
     var saving by remember { mutableStateOf(false) }
     val lockDays = pr.handleChangedAt?.let { val t = parseIso(it) + 7 * 86_400_000 - System.currentTimeMillis(); if (t > 0) Math.ceil(t / 86_400_000.0).toInt() else 0 } ?: 0
     val crop: (Boolean, Int, Int, String, (String) -> Unit) -> (List<String>) -> Unit = { round, w, h, title, set ->
-        { got -> got.firstOrNull()?.let { src -> if (src.endsWith(".gif")) set(src) else app.panels.add(Panel.Crop(src, round, w, h, title) { out -> if (out != null) set(out) }) }; Unit }
+        { got -> got.firstOrNull()?.let { src -> app.panels.add(Panel.Crop(src, round, w, h, title) { out -> if (out != null) set(out) }) }; Unit }
     }
     val bannerPick = rememberPicker(1, crop(false, 1000, 330, "Crop banner") { banner = it })
     val avatarPick = rememberPicker(1, crop(true, 320, 320, "Crop profile photo") { avatar = it })
@@ -143,7 +143,7 @@ fun EditProfilePanel(app: AppState, me: Panel) {
         }
     }, enabled = !saving) {
         // .ebanner: the banner as it will look, with its photo button
-        Box(Modifier.fillMaxWidth().aspectRatio(1000f / 330f).clip(RoundedCornerShape(Rad.m)).background(Brush.linearGradient(listOf(c.b1, c.b2), Offset.Zero, Offset.Infinite))) {
+        Box(Modifier.fillMaxWidth().aspectRatio(1000f / 330f).clip(RoundedCornerShape(Rad.m))) {
             BannerPic(banner, avatar, theme)
             PickBtn(Modifier.align(Alignment.BottomEnd).padding(8.dp)) { bannerPick.gallery() }
         }
@@ -164,24 +164,28 @@ fun EditProfilePanel(app: AppState, me: Panel) {
     }
 }
 
-// the banner: a photo of its own, or (Blurred photo) the profile picture enlarged from a small copy, or the gradient
+// the banner: a photo of its own, or (Blurred photo) the profile picture enlarged from a small copy, or the gradient.
+// The gradient is only drawn until the photo is in, so none of it shows along the photo's edges.
 @Composable
-fun BannerPic(banner: String?, avatar: String?, theme: String) {
-    when {
-        theme == "avatar" && avatar != null -> {
-            val px = with(androidx.compose.ui.platform.LocalDensity.current) { androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp.toPx() }
-            Pic(avatar, Modifier.fillMaxSize(), want = (px / 4).toInt().coerceIn(48, 320), smooth = true)
+fun BannerPic(banner: String?, avatar: String?, theme: String, modifier: Modifier = Modifier.fillMaxSize()) {
+    val c = LocalNook.current
+    var ok by remember(banner, avatar, theme) { mutableStateOf(false) }
+    Box(modifier.then(if (ok) Modifier else Modifier.background(Brush.linearGradient(listOf(c.b1, c.b2), Offset.Zero, Offset.Infinite)))) {
+        when {
+            theme == "avatar" && avatar != null -> {
+                val px = with(androidx.compose.ui.platform.LocalDensity.current) { androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp.toPx() }
+                Pic(avatar, Modifier.fillMaxSize(), want = (px / 4).toInt().coerceIn(48, 320), smooth = true, small = true, bare = true) { _, _ -> ok = true }
+            }
+            banner != null -> Pic(banner, Modifier.fillMaxSize(), want = 1000, bare = true) { _, _ -> ok = true }
         }
-        banner != null -> Pic(banner, Modifier.fillMaxSize(), want = 1000)
     }
 }
 
 @Composable
 private fun EditAvatar(avatar: String?, name: String) {
     val c = LocalNook.current
-    Box(Modifier.size(88.dp).clip(CircleShape).background(c.bg).padding(4.dp).clip(CircleShape).background(c.accent), contentAlignment = Alignment.Center) {
-        T(name.trim().take(1).uppercase().ifEmpty { "?" }, Fs.av, FontWeight.Bold, c.on, lineHeight = 44.sp)
-        if (avatar != null) Pic(avatar, Modifier.matchParentSize(), want = 320)
+    Box(Modifier.size(88.dp).clip(CircleShape).background(c.bg), contentAlignment = Alignment.Center) {
+        RoundPic(avatar, 80.dp, SolidColor(c.accent)) { T(name.trim().take(1).uppercase().ifEmpty { "?" }, Fs.av, FontWeight.Bold, c.on, lineHeight = 44.sp) }
     }
 }
 
@@ -203,6 +207,21 @@ fun CropPanel(app: AppState, p: Panel.Crop) {
         val im = img
         val d = app.store.mediaDir
         if (im != null && d != null && s > 0f) scope.launch {
+            if (p.src.endsWith(".gif")) {
+                // cropGif(): the area picked on the first frame is cut from every frame and the GIF is made again
+                app.say("Cropping your GIF...")
+                val path = withContext(Dispatchers.Default) {
+                    val b = File(p.src).readBytes()
+                    val real = Gif.size(b) ?: return@withContext null
+                    val k = real.first.toFloat() / im.width
+                    val left = cx - im.width * s / 2; val top = cy - im.height * s / 2
+                    val out = Gif.crop(b, (frame.left - left) / s * k, (frame.top - top) / s * k, frame.width / s * k, frame.height / s * k, p.w, p.h, p.round) ?: return@withContext null
+                    File(d, uid() + ".gif").apply { writeBytes(out) }.absolutePath
+                }
+                if (path == null) { app.say(if (File(p.src).length() > Gif.MAX) "That GIF is too big to crop (over 12 MB)" else "Could not crop that GIF"); return@launch }
+                app.closePanel(p); p.done(path)
+                return@launch
+            }
             val out = withContext(Dispatchers.Default) { cropOut(im, s, cx, cy, frame, p) }
             val path = withContext(Dispatchers.IO) { Photos.saveBitmap(d, out, if (p.round) "image/png" else "image/jpeg") }
             app.closePanel(p); p.done(path)

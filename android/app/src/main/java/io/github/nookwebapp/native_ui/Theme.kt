@@ -70,7 +70,7 @@ val BaseText = TextStyle(
 enum class ThemeMode { System, Dark, Light }
 
 // the same version as the web app (APP_VERSION in app.js); the app's own version code is made from it in build.gradle
-const val APP_VERSION = "3.23.0"
+const val APP_VERSION = "3.24.0"
 
 @Composable
 fun NookTheme(mode: ThemeMode = ThemeMode.System, content: @Composable () -> Unit) {
@@ -82,7 +82,9 @@ fun NookTheme(mode: ThemeMode = ThemeMode.System, content: @Composable () -> Uni
     // text keeps the web app's sizes whatever the phone's font size setting is, so the screens stay the same as the web app
     val d = LocalDensity.current
     MaterialTheme(colorScheme = scheme) {
-        CompositionLocalProvider(LocalDensity provides Density(d.density, 1f), LocalNook provides c, LocalContentColor provides c.fg, LocalTextStyle provides BaseText.copy(color = c.fg)) {
+        // no blue drop under the cursor while typing (the selection handles are see-through); selected text keeps a light accent behind it
+        CompositionLocalProvider(LocalDensity provides Density(d.density, 1f), LocalNook provides c, LocalContentColor provides c.fg, LocalTextStyle provides BaseText.copy(color = c.fg),
+            androidx.compose.foundation.text.selection.LocalTextSelectionColors provides androidx.compose.foundation.text.selection.TextSelectionColors(androidx.compose.ui.graphics.Color.Transparent, c.accent.copy(alpha = 0.3f))) {
             content()
         }
     }

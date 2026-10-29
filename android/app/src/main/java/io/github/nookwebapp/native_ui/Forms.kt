@@ -54,6 +54,19 @@ fun AddAccountPanel(app: AppState, p: Panel) {
         T("Sign in to continue", color = LocalNook.current.muted, align = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp))
         Field(email, { email = it }, "Email", border = true); Gap()
         PwField(pw, { pw = it }, "Password"); Gap()
+        if (Passkey.ok()) {
+            var busy by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) { app.on.passkeyWarm() }
+            Pill("Sign in with Fingerprint", Btn.Ghost, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                busy = true
+                app.scope.launch {
+                    val r = app.on.addAccountPasskey()
+                    busy = false
+                    if (r == null) { app.closePanel(p); app.say("Account added"); delay(350); app.on.openAccounts() } else if (r.isNotEmpty()) app.say(r)
+                }
+            }
+            Gap()
+        }
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { Box(Modifier.tap { app.panels.add(Panel.Recover(email.trim())) }.vpad(8.dp)) { T("Forgot password?", Fs.md, color = LocalNook.current.muted) } }
         Pill("Make an account", Btn.Ghost, modifier = Modifier.fillMaxWidth()) { app.closePanel(p); app.panels.add(Panel.NewAccount) }
     }
@@ -89,7 +102,18 @@ fun NewAccountPanel(app: AppState, p: Panel) {
 @Composable
 fun LinkedLoginPanel(app: AppState, p: Panel.LinkedLogin) {
     var pw by remember { mutableStateOf("") }
-    Form(p, "@" + p.x.username, "Switch", run = { if (pw.isEmpty()) "Enter the password" else app.on.linkedLogin(p.x, pw) }) { PwField(pw, { pw = it }, "Password") }
+    Form(p, "@" + p.x.username, "Switch", run = { if (pw.isEmpty()) "Enter the password" else app.on.linkedLogin(p.x, pw) }) {
+        PwField(pw, { pw = it }, "Password")
+        if (Passkey.ok()) {
+            var busy by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) { app.on.passkeyWarm() }
+            Gap()
+            Pill("Use Fingerprint", Btn.Ghost, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                busy = true
+                app.scope.launch { val r = app.on.linkedLoginPasskey(p.x); busy = false; if (r == null) app.closePanel(p) else if (r.isNotEmpty()) app.say(r) }
+            }
+        }
+    }
 }
 
 // newPasswordModal(): opened from the link in the reset email; the person is signed in just for this
@@ -292,14 +316,14 @@ fun ZenEditPanel(app: AppState, p: Panel) {
     val c = LocalNook.current
     var pfp by remember { mutableStateOf(app.store.zen.optStr("pfp")) }
     var blurred by remember { mutableStateOf(app.store.zen.optString("bn") == "avatar") }
-    val pick = rememberPicker(1) { got -> got.firstOrNull()?.let { src -> if (src.endsWith(".gif")) pfp = src else app.panels.add(Panel.Crop(src, true, 320, 320, "Crop picture") { out -> if (out != null) pfp = out }) } }
+    val pick = rememberPicker(1) { got -> got.firstOrNull()?.let { src -> app.panels.add(Panel.Crop(src, true, 320, 320, "Crop picture") { out -> if (out != null) pfp = out }) } }
     Modal("Edit Zenith", "Save", top = true, onCancel = { app.closePanel(p) }, onAction = { app.on.saveZen(pfp, blurred); app.closePanel(p) }) {
-        Box(Modifier.fillMaxWidth().aspectRatio(1000f / 330f).clip(RoundedCornerShape(Rad.m)).background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(c.b1, c.b2), androidx.compose.ui.geometry.Offset.Zero, androidx.compose.ui.geometry.Offset.Infinite))) {
-            if (blurred && pfp != null) BannerPic(null, pfp, "avatar")
+        Box(Modifier.fillMaxWidth().aspectRatio(1000f / 330f).clip(RoundedCornerShape(Rad.m))) {
+            BannerPic(null, pfp?.takeIf { blurred }, "avatar")
         }
         Box(Modifier.padding(start = 12.dp).layoutOffsetUp(44.dp).width(88.dp)) {
             Box(Modifier.size(88.dp).clip(androidx.compose.foundation.shape.CircleShape).background(c.bg).padding(4.dp)) {
-                if (pfp != null) Box(Modifier.size(80.dp).clip(androidx.compose.foundation.shape.CircleShape)) { Pic(pfp, Modifier.matchParentSize(), want = 320) } else ZenAv(80.dp)
+                if (pfp != null) RoundPic(pfp, 80.dp, androidx.compose.ui.graphics.SolidColor(LocalNook.current.bg2)) {} else ZenAv(80.dp)
             }
             PickBtn(Modifier.align(Alignment.BottomEnd).offset(x = 6.dp, y = (-2).dp), icon = 16.dp) { pick.gallery() }
         }

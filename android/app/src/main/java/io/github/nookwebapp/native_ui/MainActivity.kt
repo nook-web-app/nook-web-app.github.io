@@ -36,6 +36,7 @@ class MainActivity : ComponentActivity() {
         app = AppState(Store.open(this))
         AppState.current = app
         app.ctx = applicationContext
+        app.activity = java.lang.ref.WeakReference(this)
         app.clipboard = { t -> (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Nook", t)) }
         app.sharePicture = { p, toCompose -> sharePicture(p, toCompose) }
         app.sharePictureTo = { p, done -> picture(p) { f -> f?.let { done(it.absolutePath) } ?: app.say("Could not make picture") } }

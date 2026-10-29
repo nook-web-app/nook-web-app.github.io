@@ -1063,7 +1063,7 @@ suspend fun Online.loadRPost(id: String, hint: String?): JSONObject? {
 suspend fun Online.openSharedPost(id: String) {
     var local = s.byRemote(id)
     if (local == null) {
-        val cols = "id, user_id, body, media_url, created_at, parent_id"
+        val cols = "id, user_id, body, media_url, created_at, parent_id, edited_at"
         val pq = Sb.get(Q("posts").select(cols).eq("id", id))
         val rq = Sb.get(Q("posts").select(cols).eq("parent_id", id).order("created_at").limit(100))
         if (!pq.ok || !rq.ok) throw IllegalStateException("load")
@@ -1076,7 +1076,7 @@ suspend fun Online.openSharedPost(id: String) {
             val a = who.get(r.optString("user_id")) ?: JSONObject().put("username", "user")
             s.posts.add(LPost("r" + r.optString("id"), r.optString("body"), parseIso(r.optString("created_at")), parseMedia(r.opt("media_url")), if (r.optString("id") == id) null else "r$id",
                 remote = r.optString("id"), ra = Author(r.optString("user_id"), a.optString("display_name").ifEmpty { a.optString("username").ifEmpty { "user" } }, a.optString("username"), a.optStr("avatar"))).apply {
-                rp = if (r.optString("id") == id) rows.size - 1 else 0; sharedAt = now
+                rp = if (r.optString("id") == id) rows.size - 1 else 0; sharedAt = now; edited = r.optStr("edited_at") != null
             })
         }
         app.persist()

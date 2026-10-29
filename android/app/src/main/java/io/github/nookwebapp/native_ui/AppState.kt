@@ -112,6 +112,8 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     var askNotifs: () -> Unit = {}
     var shareFile: (java.io.File, String) -> Unit = { _, _ -> }
     var ctx: android.content.Context? = null
+    // the activity on screen (the fingerprint window needs one); weak, so a closed activity is never kept
+    var activity: java.lang.ref.WeakReference<android.app.Activity>? = null
     var foreground by mutableStateOf(true)
     // bumped when notes or Zenith's chats changed from another phone, so the open pages draw again
     var notesVersion by mutableIntStateOf(0)
@@ -170,14 +172,23 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
 
     // saving runs a moment after the last change, off the main thread, so many quick taps make one write
     private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // one save at a time, in order, so two saves never write the file at once
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val saveIo = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
     private var saveJob: Job? = null
     fun persist() {
         saveJob?.cancel()
-        // the copy is taken on the main thread (where the state changes) and written on a background one
+        // the state is frozen as it is now (a Compose snapshot, cheap to take) and turned into text and written on a
+        // background thread, so typing or scrolling never waits for a big save; a copy that clashed with a change made
+        // at that moment is simply made again
         saveJob = scope.launch {
             delay(150)
-            val snap = runCatching { store.toJson().toString() }.getOrNull() ?: return@launch
-            io.launch { store.filesDir?.let { d -> java.io.File(d, "state.json.tmp").apply { writeText(snap) }.renameTo(java.io.File(d, "state.json")) } }
+            val snap = androidx.compose.runtime.snapshots.Snapshot.takeSnapshot()
+            saveIo.launch {
+                val txt = try { snap.enter { store.toJson().toString() } } catch (e: Exception) { null } finally { snap.dispose() }
+                if (txt == null) { scope.launch { persist() }; return@launch }
+                store.filesDir?.let { d -> java.io.File(d, "state.json.tmp").apply { writeText(txt) }.renameTo(java.io.File(d, "state.json")) }
+            }
         }
         if (on.me != null) { on.notesSoon(); on.zenSyncSoon() }
     }
@@ -203,7 +214,9 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     fun saveEdit(p: LPost, text: String, imgs: List<String>) {
         val was = Triple(p.text, p.imgs, p.edited)
         val origin = p.imgs
-        p.text = text; p.imgs = imgs; p.edited = true; persist(); say("Saved")
+        // only a change of the words marks it as edited (removing or adding a photo does not)
+        p.edited = p.edited || text != was.first
+        p.text = text; p.imgs = imgs; persist(); say("Saved")
         scope.launch { if (!on.syncEdit(p, text, origin, imgs)) { p.text = was.first; p.imgs = was.second; p.edited = was.third; persist() } }
     }
 

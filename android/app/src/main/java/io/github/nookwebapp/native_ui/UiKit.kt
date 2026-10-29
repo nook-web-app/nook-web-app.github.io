@@ -122,10 +122,12 @@ fun MyAvatar(size: Dp = 40.dp, ring: Color? = null, modifier: Modifier = Modifie
     val pr = LocalApp.current.store.profile
     // with a ring (border: 4px solid --bg) the picture sits inside the ring instead of under it, so no photo pixels
     // peek out at the ring's edge
-    Box(modifier.size(size).clip(CircleShape).background(ring ?: c.accent).padding(if (ring != null) 4.dp else 0.dp).clip(CircleShape).background(c.accent), contentAlignment = Alignment.Center) {
-        val letter = pr.name.ifBlank { pr.handle }.ifBlank { "?" }.trim().take(1).uppercase()
-        T(letter, size = (size.value * 0.4f).roundToInt().sp, weight = FontWeight.Bold, color = c.on, lineHeight = (size.value * 0.5f).sp)
-        if (pr.avatar != null) Pic(pr.avatar, Modifier.matchParentSize(), want = 320)
+    val inner = if (ring != null) size - 8.dp else size
+    Box(modifier.size(size).then(if (ring != null) Modifier.clip(CircleShape).background(ring) else Modifier), contentAlignment = Alignment.Center) {
+        RoundPic(pr.avatar, inner, androidx.compose.ui.graphics.SolidColor(c.accent)) {
+            val letter = pr.name.ifBlank { pr.handle }.ifBlank { "?" }.trim().take(1).uppercase()
+            T(letter, size = (inner.value * 0.4f * size.value / inner.value).roundToInt().sp, weight = FontWeight.Bold, color = c.on, lineHeight = (size.value * 0.5f).sp)
+        }
     }
 }
 

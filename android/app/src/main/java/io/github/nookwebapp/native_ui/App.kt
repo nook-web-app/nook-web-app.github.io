@@ -33,10 +33,10 @@ fun NookApp(app: AppState) {
                 else androidx.activity.SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
                 activity?.enableEdgeToEdge(bars, bars)
             }
-            // screenshots and screen recordings are blocked in chats with people, in the chat list and in Zenith's chats;
-            // notes to self stay free to capture
+            // screenshots and screen recordings are blocked only inside a chat that is not one's own notes: a chat with a
+            // person, and a chat with Zenith. Notes to self and every other page stay free to capture
             val top = app.top
-            val secure = top is Route.Dm || top == Route.Chats || top == Route.Hidden || (top is Route.Conv && app.store.chats.firstOrNull { it.id == top.id }?.isNotes == false)
+            val secure = top is Route.Dm || (top is Route.Conv && app.store.chats.firstOrNull { it.id == top.id }?.isNotes == false)
             LaunchedEffect(secure) {
                 val w = activity?.window ?: return@LaunchedEffect
                 if (secure) w.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE) else w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)

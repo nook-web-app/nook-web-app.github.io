@@ -12,6 +12,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -31,7 +32,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -143,14 +148,17 @@ fun DmScreen(id: String) {
     var acct by remember(id) { mutableStateOf(on.acctCache[id]) }
     LaunchedEffect(id) { acct = on.acctsFor(listOf(id))[id]; on.loadSocial(); acct = on.acctCache[id] }
     val name = on.nickOf(id).ifEmpty { acct?.optString("name") ?: "user" }
-    var text by remember(id) { mutableStateOf("") }
+    var tv by remember(id) { mutableStateOf(TextFieldValue("")) }
+    val text = tv.text
+    fun setText(t: String) { tv = TextFieldValue(t, TextRange(t.length)) }
+    val focus = remember { FocusRequester() }
     val pend = remember(id) { mutableStateListOf<String>() }
     var busy by remember { mutableStateOf(false) }
     val picker = rememberPicker(4 - pend.size) { got -> val room = 4 - pend.size; pend.addAll(got.take(room)); if (got.size > room) app.say("Only 4 allowed, extra ones skipped") }
     var open by remember { mutableStateOf<DmMsg?>(null) }
     val list = rememberLazyListState()
     val scope = rememberCoroutineScope()
-    l.fill = { pre -> if (l.locked.isEmpty()) text = if (text.isNotBlank()) text.trimEnd() + " " + pre else pre }
+    l.fill = { pre -> if (l.locked.isEmpty()) { setText(if (text.isNotBlank()) text.trimEnd() + " " + pre else pre); runCatching { focus.requestFocus() } } }
     // the chat stays at its newest message while new ones come in
     LaunchedEffect(l.rows.size, l.typing) { if (l.rows.isNotEmpty()) list.animateScrollToItem(l.rows.size + 1) }
     Page({
@@ -172,13 +180,14 @@ fun DmScreen(id: String) {
             else if (l.failed && l.rows.isEmpty()) item { Empty(null, "Could not load messages. Trying again...") }
             else if (l.rows.isEmpty()) item { Empty("chat", "No messages yet. Say hi.", iconSize = 48.dp) }
             items(l.rows, key = { it.id?.toString() ?: ("t" + System.identityHashCode(it)) }) { m ->
-                DmBubble(m, id, open === m, onTap = { open = if (open === m) null else m }) {
+                // one of Zenith's messages pulled to the right starts an answer to him (the owner's chats only)
+                SwipeReply(m.ai && zOn(), { l.fill?.invoke("@zenith ") }) { DmBubble(m, id, open === m, onTap = { open = if (open === m) null else m }) {
                     val body = m.text ?: m.body
                     app.open(listOfNotNull(
                         if (body.isNotEmpty()) SheetItem("Copy message", "copy") { app.clipboard(body) } else null,
                         if (m.sender == on.uid && m.id != null) SheetItem("Delete message", "trash", danger = true) { app.confirm("Delete this message?", "Delete") { on.deleteDm(m, id) } } else null,
                     ).ifEmpty { return@DmBubble })
-                }
+                } }
             }
             // .trow: the typing dots, in a slot that grows smoothly
             item(key = "typing") {
@@ -189,15 +198,15 @@ fun DmScreen(id: String) {
         }
         // .cdock: the note when messaging is off, the pending photos, and the text box with its photo and send buttons
         Column(Modifier.fillMaxWidth().background(c.bg).lineAbove(c.line).navigationBarsPadding().padding(bottom = 10.dp)) {
-            if (zOn() && Regex("@\\w*$").containsMatchIn(text)) ZenPop { text = text.replace(Regex("@\\w*$"), "@zenith ") }
+            if (zOn() && Regex("@\\w*$").containsMatchIn(text)) ZenPop { setText(text.replace(Regex("@\\w*$"), "@zenith ")) }
             if (l.locked.isNotEmpty()) T(l.locked, Fs.sm, color = c.muted, align = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp))
             if (pend.isNotEmpty()) PendStrip(pend)
             val off = l.locked.isNotEmpty()
             Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp).alpha(if (off) 0.4f else 1f), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 IB("image", tint = c.accent, box = 40.dp, height = 42.dp, enabled = !off && pend.size < 4) { picker.gallery() }
                 BasicTextField(
-                    text, { text = it; on.sendTyping(id, it.isNotBlank()) },
-                    Modifier.weight(1f).heightIn(min = 42.dp, max = 140.dp).clip(RoundedCornerShape(Rad.bubble)).background(if (off) c.line else c.bg2).padding(horizontal = 14.dp, vertical = 10.dp),
+                    tv, { v -> val changed = v.text != tv.text; tv = v; if (changed) on.sendTyping(id, v.text.isNotBlank()) },
+                    Modifier.weight(1f).focusRequester(focus).heightIn(min = 42.dp, max = 140.dp).clip(RoundedCornerShape(Rad.bubble)).background(if (off) c.line else c.bg2).padding(horizontal = 14.dp, vertical = 10.dp),
                     enabled = !off, textStyle = LocalTextStyle.current.copy(color = c.fg, fontSize = Fs.lg, lineHeight = (16 * 1.35).sp), cursorBrush = SolidColor(c.accent),
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     decorationBox = { inner -> Box { if (text.isEmpty()) T(if (off) "Messaging is off" else "Message", Fs.lg, color = c.muted, lineHeight = (16 * 1.35).sp); inner() } },
@@ -205,9 +214,9 @@ fun DmScreen(id: String) {
                 val can = !busy && !off && (text.isNotBlank() || pend.isNotEmpty())
                 Box(Modifier.size(42.dp).alpha(if (can) 1f else 0.45f).clip(CircleShape).background(c.fill).pressTap(CircleShape, enabled = can) {
                     val t = cleanText(text.trim()); val srcs = pend.toList()
-                    busy = true; text = ""; pend.clear()
+                    busy = true; setText(""); pend.clear()
                     scope.launch {
-                        if (!on.doSendDm(l, t, srcs)) { text = if (text.isNotBlank()) t + "\n" + text else t; pend.addAll(srcs) }
+                        if (!on.doSendDm(l, t, srcs)) { setText(if (text.isNotBlank()) t + "\n" + tv.text else t); pend.addAll(srcs) }
                         busy = false
                     }
                 }, contentAlignment = Alignment.Center) { NIcon("send", 20.dp, c.on) }
@@ -315,5 +324,37 @@ private fun DmMedia(md: JSONObject, other: String, m: DmMsg, i: Int, modifier: M
                 app.viewer = Viewer(all, all.indexOf(p).coerceAtLeast(0), del = if (mine) ({ k -> app.on.deleteDmMedia(m, k, other) }) else null)
             }
         }, want = 1080, scale = androidx.compose.ui.layout.ContentScale.Fit)
+    }
+}
+
+// swipeReply() of app.js: a message pulled more than 50dp to the right (and not much up or down) calls onSwipe. On a phone
+// the message follows the finger, a reply arrow fades in behind it, the phone ticks once at the point where letting go
+// counts, and the message springs back.
+@Composable
+fun SwipeReply(on: Boolean, onSwipe: () -> Unit, content: @Composable () -> Unit) {
+    if (!on) { content(); return }
+    val c = LocalNook.current
+    val scope = rememberCoroutineScope()
+    val dx = remember { androidx.compose.animation.core.Animatable(0f) }
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val limit = with(androidx.compose.ui.platform.LocalDensity.current) { 50.dp.toPx() }
+    val swipe by rememberUpdatedState(onSwipe)
+    Box(Modifier.fillMaxWidth()) {
+        val k = (dx.value / limit).coerceIn(0f, 1f)
+        if (k > 0f) Box(Modifier.align(Alignment.CenterStart).padding(start = 4.dp).size(30.dp).alpha(k).clip(CircleShape).background(c.bg2), contentAlignment = Alignment.Center) { NIcon("reply", 18.dp, c.accent) }
+        Box(Modifier.offset { androidx.compose.ui.unit.IntOffset(dx.value.toInt(), 0) }.pointerInput(Unit) {
+            var ticked = false
+            detectHorizontalDragGestures(
+                onDragStart = { ticked = false },
+                onDragEnd = { if (dx.value >= limit) swipe(); scope.launch { dx.animateTo(0f, androidx.compose.animation.core.spring(dampingRatio = 0.7f)) } },
+                onDragCancel = { scope.launch { dx.animateTo(0f) } },
+            ) { ch, amount ->
+                ch.consume()
+                // it moves slower than the finger and stops a little past the point where it counts
+                val next = (dx.value + amount * 0.6f).coerceIn(0f, limit * 1.4f)
+                scope.launch { dx.snapTo(next) }
+                if (!ticked && next >= limit) { ticked = true; haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress) }
+            }
+        }) { content() }
     }
 }

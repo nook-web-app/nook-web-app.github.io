@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- the speech bubble of icon-512.png, drawn in its 512 units and scaled so it sits in the adaptive icon's safe zone -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="512" android:viewportHeight="512">
+    <group android:pivotX="256" android:pivotY="256" android:scaleX="0.667" android:scaleY="0.667">
+        <path android:fillColor="#FFFFFFFF"
+            android:pathData="M206,150H306A70,70 0,0 1,376 220V270A70,70 0,0 1,306 340H240L174,386V333A70,70 0,0 1,136 270V220A70,70 0,0 1,206 150Z" />
+        <path android:fillColor="#FF208BFE"
+            android:pathData="M212,244.5m-16.5,0a16.5,16.5 0,1 1,33 0a16.5,16.5 0,1 1,-33 0M256,244.5m-16.5,0a16.5,16.5 0,1 1,33 0a16.5,16.5 0,1 1,-33 0M300,244.5m-16.5,0a16.5,16.5 0,1 1,33 0a16.5,16.5 0,1 1,-33 0" />
+    </group>
+</vector>

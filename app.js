@@ -291,7 +291,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.27.4";
+const APP_VERSION = "3.27.5";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1967,7 +1967,6 @@ function chatV() {
   }
   main.append(emptyBox);
   if (!sbUser) { inboxN = 0; showEmpty(); }
-  if (!S.chats.length) return;
   const mine = S.chats.slice().sort((a, b) => lastT(b) - lastT(a)).map(c => {
     const last = c.msgs[c.msgs.length - 1];
     return h("div", { class: "lrow", onclick: () => go({ r: "conv", id: c.id }) }, avatar(48), h("div", { class: "nm" }, h("b", {}, c.name), h("span", { class: "sub" }, last ? last.text || (last.rpost || last.zpost ? "Shared a post" : "Sent a photo") : "No messages yet")), last ? h("span", { class: "time" }, ago(last.t)) : null);

@@ -99,6 +99,10 @@ class Profile {
     // the picture and banner that are already on the server, so they are not sent again
     var avSynced: String? = null
     var bnSynced: String? = null
+    // what the server held for the picture and the banner the last time they were read: a different value there (changed
+    // on another phone or in the web app) replaces this phone's copy, unless a change made here is still on its way
+    var avSrv: String? = null
+    var bnSrv: String? = null
 }
 
 // a new id, made the same way as uid() in app.js
@@ -161,6 +165,7 @@ class Store(private val dir: File?) {
             profile.bio = p.optString("bio", ""); profile.avatar = p.optStr("avatar"); profile.banner = p.optStr("banner")
             profile.bannerTheme = p.optString("bannerTheme", "default")
             profile.handleChangedAt = p.optStr("handleChangedAt"); profile.avSynced = p.optStr("avSynced"); profile.bnSynced = p.optStr("bnSynced")
+            profile.avSrv = p.optStr("avSrv"); profile.bnSrv = p.optStr("bnSrv")
         }
         posts.clear()
         j.optJSONArray("posts")?.forEachObj { p -> postOf(p)?.let { posts.add(it) } }
@@ -209,7 +214,8 @@ class Store(private val dir: File?) {
         j.put("v", 3).put("signedIn", signedIn).put("localUid", localUid ?: JSONObject.NULL)
         j.put("profile", JSONObject().put("name", profile.name).put("handle", profile.handle).put("bio", profile.bio)
             .put("avatar", profile.avatar ?: JSONObject.NULL).put("banner", profile.banner ?: JSONObject.NULL).put("bannerTheme", profile.bannerTheme)
-            .put("handleChangedAt", profile.handleChangedAt ?: JSONObject.NULL).put("avSynced", profile.avSynced ?: JSONObject.NULL).put("bnSynced", profile.bnSynced ?: JSONObject.NULL))
+            .put("handleChangedAt", profile.handleChangedAt ?: JSONObject.NULL).put("avSynced", profile.avSynced ?: JSONObject.NULL).put("bnSynced", profile.bnSynced ?: JSONObject.NULL)
+            .put("avSrv", profile.avSrv ?: JSONObject.NULL).put("bnSrv", profile.bnSrv ?: JSONObject.NULL))
         j.put("posts", JSONArray().apply { posts.toList().forEach { p -> if (!p.prov) put(postJson(p)) } })
         j.put("chats", JSONArray().apply {
             chats.toList().forEach { c ->
@@ -235,7 +241,7 @@ class Store(private val dir: File?) {
     fun wipe() {
         posts.clear(); chats.clear(); lists.clear(); hidden.clear(); lessWords.clear(); lessA.clear(); dmPins.clear(); draft = null
         profile.name = "Me"; profile.handle = "me"; profile.bio = ""; profile.avatar = null; profile.banner = null; profile.bannerTheme = "default"
-        profile.handleChangedAt = null; profile.avSynced = null; profile.bnSynced = null
+        profile.handleChangedAt = null; profile.avSynced = null; profile.bnSynced = null; profile.avSrv = null; profile.bnSrv = null
         sv = null; pendDel.clear(); previews.clear(); notesSync = null; localUid = null
         zen = JSONObject().put("log", JSONArray()).put("next", 0).put("since", System.currentTimeMillis())
         signedIn = false

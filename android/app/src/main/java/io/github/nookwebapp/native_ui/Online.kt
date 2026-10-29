@@ -326,9 +326,14 @@ class Online(val app: AppState) {
         pr.handleChangedAt = m.optStr("handle_changed_at")
         val pin = m.optStr("pinned_post_id")
         s.posts.forEach { p -> if (p.remote != null && p.ra == null) p.pinned = p.remote == pin }
-        m.optStr("banner")?.let { pr.banner = it }
+        // the banner and the picture follow the server: one changed elsewhere replaces this phone's copy, one picked here
+        // that is not saved yet stays
+        val srvBn = m.optStr("banner"); val srvAv = m.optStr("avatar")
+        if (pr.banner == null || pr.banner == pr.bnSynced || pr.banner?.startsWith("http") == true) { if (pr.banner != srvBn) pr.banner = srvBn; pr.bnSynced = srvBn }
+        pr.bnSrv = srvBn
+        if (pr.avatar == null || pr.avatar == pr.avSynced || pr.avatar?.startsWith("/") == false) { if (srvAv != pr.avatar) pr.avatar = srvAv; pr.avSynced = srvAv }
+        pr.avSrv = srvAv
         m.optStr("banner_theme")?.let { pr.bannerTheme = it }
-        if (pr.avatar == null) m.optStr("avatar")?.let { pr.avatar = it }
         if (pr.bio.isEmpty()) m.optStr("bio")?.let { pr.bio = it }
         app.persist()
     }

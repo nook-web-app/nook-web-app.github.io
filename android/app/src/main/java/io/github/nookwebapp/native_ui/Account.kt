@@ -135,6 +135,7 @@ suspend fun Online.boot() {
     startRealtime()
     app.scope.launch { runCatching { warmInbox() } }
     app.scope.launch { checkModNotices() }
+    app.scope.launch { delay(5000); runCatching { Stall.send(this@boot) } }
     app.scope.launch { loadPostLock() }
     app.scope.launch { runCatching { zenStart() } }
     notesStart()

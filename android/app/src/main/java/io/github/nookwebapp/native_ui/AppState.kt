@@ -182,17 +182,12 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     private var saveJob: Job? = null
     fun persist() {
         saveJob?.cancel()
-        // the state is frozen as it is now (a Compose snapshot, cheap to take) and turned into text and written on a
-        // background thread, so typing or scrolling never waits for a big save; a copy that clashed with a change made
-        // at that moment is simply made again
+        // the copy is made on the main thread, where everything it reads is changed (so it can never meet a change half
+        // way), a moment after the last change; only writing the file happens on a background thread
         saveJob = scope.launch {
             delay(150)
-            val snap = androidx.compose.runtime.snapshots.Snapshot.takeSnapshot()
-            saveIo.launch {
-                val txt = try { snap.enter { store.toJson().toString() } } catch (e: Exception) { null } finally { snap.dispose() }
-                if (txt == null) { scope.launch { persist() }; return@launch }
-                store.filesDir?.let { d -> java.io.File(d, "state.json.tmp").apply { writeText(txt) }.renameTo(java.io.File(d, "state.json")) }
-            }
+            val txt = runCatching { store.toJson().toString() }.getOrNull() ?: return@launch
+            saveIo.launch { store.filesDir?.let { d -> java.io.File(d, "state.json.tmp").apply { writeText(txt) }.renameTo(java.io.File(d, "state.json")) } }
         }
         if (on.me != null) { on.notesSoon(); on.zenSyncSoon() }
     }

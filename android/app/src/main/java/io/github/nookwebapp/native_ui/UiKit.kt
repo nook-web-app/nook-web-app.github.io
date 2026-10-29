@@ -120,11 +120,12 @@ fun Line() { Box(Modifier.fillMaxWidth().height(1.dp).background(LocalNook.curre
 fun MyAvatar(size: Dp = 40.dp, ring: Color? = null, modifier: Modifier = Modifier) {
     val c = LocalNook.current
     val pr = LocalApp.current.store.profile
-    Box(modifier.size(size).clip(CircleShape).background(c.accent), contentAlignment = Alignment.Center) {
+    // with a ring (border: 4px solid --bg) the picture sits inside the ring instead of under it, so no photo pixels
+    // peek out at the ring's edge
+    Box(modifier.size(size).clip(CircleShape).background(ring ?: c.accent).padding(if (ring != null) 4.dp else 0.dp).clip(CircleShape).background(c.accent), contentAlignment = Alignment.Center) {
         val letter = pr.name.ifBlank { pr.handle }.ifBlank { "?" }.trim().take(1).uppercase()
         T(letter, size = (size.value * 0.4f).roundToInt().sp, weight = FontWeight.Bold, color = c.on, lineHeight = (size.value * 0.5f).sp)
-        if (pr.avatar != null) Pic(pr.avatar, Modifier.matchParentSize().clip(CircleShape), want = 320)
-        if (ring != null) Box(Modifier.matchParentSize().border(4.dp, ring, CircleShape))
+        if (pr.avatar != null) Pic(pr.avatar, Modifier.matchParentSize(), want = 320)
     }
 }
 

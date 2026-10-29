@@ -162,7 +162,10 @@ fun EditProfilePanel(app: AppState, me: Panel) {
 @Composable
 fun BannerPic(banner: String?, avatar: String?, theme: String) {
     when {
-        theme == "avatar" && avatar != null -> Pic(avatar, Modifier.fillMaxSize(), want = 40)
+        theme == "avatar" && avatar != null -> {
+            val px = with(androidx.compose.ui.platform.LocalDensity.current) { androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp.toPx() }
+            Pic(avatar, Modifier.fillMaxSize(), want = (px / 4).toInt().coerceIn(48, 320), smooth = true)
+        }
         banner != null -> Pic(banner, Modifier.fillMaxSize(), want = 1000)
     }
 }
@@ -170,10 +173,9 @@ fun BannerPic(banner: String?, avatar: String?, theme: String) {
 @Composable
 private fun EditAvatar(avatar: String?, name: String) {
     val c = LocalNook.current
-    Box(Modifier.size(88.dp).clip(CircleShape).background(c.accent), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(88.dp).clip(CircleShape).background(c.bg).padding(4.dp).clip(CircleShape).background(c.accent), contentAlignment = Alignment.Center) {
         T(name.trim().take(1).uppercase().ifEmpty { "?" }, Fs.av, FontWeight.Bold, c.on, lineHeight = 44.sp)
         if (avatar != null) Pic(avatar, Modifier.matchParentSize(), want = 320)
-        Box(Modifier.matchParentSize().border(4.dp, c.bg, CircleShape))
     }
 }
 
@@ -209,7 +211,7 @@ fun CropPanel(app: AppState, p: Panel.Crop) {
             val H = if (p.round) W else maxOf(fh + pad * 2 + 80.dp, W * 0.8f)
             Canvas(Modifier.size(W, H).align(Alignment.Center).pointerInput(im) {
                 detectTransformGestures { centroid, pan, zoom, _ ->
-                    if (im == null) return@detectTransformGestures
+                    if (im == null || s <= 0f) return@detectTransformGestures
                     val minS = maxOf(fw.toPx() / im.width, fh.toPx() / im.height)
                     val ns = (s * zoom).coerceIn(minS, minS * 4)
                     val g = ns / s
@@ -244,8 +246,11 @@ fun CropPanel(app: AppState, p: Panel.Crop) {
 }
 
 private fun clampCrop(im: ImageBitmap, s: Float, cx: Float, cy: Float, fl: Float, ft: Float, fw: Float, fh: Float): Pair<Float, Float> {
+    // the picture always covers the frame; when it is exactly as big as the frame the two limits meet (and rounding
+    // can even swap them), so the middle of the two is taken then instead of failing
     val hw = im.width * s / 2; val hh = im.height * s / 2
-    return cx.coerceIn(fl + fw - hw, fl + hw) to cy.coerceIn(ft + fh - hh, ft + hh)
+    fun fit(v: Float, lo: Float, hi: Float) = if (lo <= hi) v.coerceIn(lo, hi) else (lo + hi) / 2
+    return fit(cx, fl + fw - hw, fl + hw) to fit(cy, ft + fh - hh, ft + hh)
 }
 
 // the framed part of the photo, at p.w x p.h pixels (on white unless it is the round picture)

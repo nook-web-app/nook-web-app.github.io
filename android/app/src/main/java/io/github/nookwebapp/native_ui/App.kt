@@ -35,7 +35,7 @@ fun NookApp(app: AppState) {
             }
             BackHandler(app.viewer != null || app.sheet != null || app.drawer || app.panels.isNotEmpty() || app.stack.size > 1) { app.back() }
             Box(Modifier.fillMaxSize().background(c.bg)) {
-                Column(Modifier.fillMaxSize().statusBarsPadding()) {
+                Column(Modifier.fillMaxSize().statusBarsPadding().imePadding()) {
                     val slide = with(LocalDensity.current) { 14.dp.roundToPx() }
                     AnimatedContent(
                         app.top to app.stack.size, Modifier.weight(1f), label = "page",

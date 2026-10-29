@@ -104,13 +104,13 @@ object Photos {
 
 // one saved photo, cropped to fill its box (object-fit: cover) unless told otherwise; the box shows --bg2 while it loads
 @Composable
-fun Pic(path: String?, modifier: Modifier = Modifier, want: Int = 1280, scale: ContentScale = ContentScale.Crop) {
+fun Pic(path: String?, modifier: Modifier = Modifier, want: Int = 1280, scale: ContentScale = ContentScale.Crop, smooth: Boolean = false) {
     val c = LocalNook.current
     // previews and the screenshot tests draw one frame only, so there the photo is read at once
     val now = androidx.compose.ui.platform.LocalInspectionMode.current || Photos.sync
     var bm by remember(path, want) { mutableStateOf(path?.let { Photos.cached(it, want) ?: if (now) Photos.loadNow(it, want) else null }) }
     LaunchedEffect(path, want) { if (bm == null && path != null) bm = Photos.load(path, want) }
     val b = bm
-    if (b != null) Image(b, null, modifier, contentScale = scale)
+    if (b != null) Image(b, null, modifier, contentScale = scale, filterQuality = if (smooth) androidx.compose.ui.graphics.FilterQuality.High else androidx.compose.ui.graphics.FilterQuality.Low)
     else Box(modifier.background(c.bg2))
 }

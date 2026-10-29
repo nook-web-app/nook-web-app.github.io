@@ -200,7 +200,7 @@ class Online(val app: AppState) {
                 rpRows = rqs.flatMap { it.rows }.sortedByDescending { parseIso(it.optString("created_at")) }.take(60).filter { it.optString("user_id") != me }
                 val have = posts.map { it.optString("id") }.toSet()
                 val miss = rpRows.map { it.optString("post_id") }.distinct().filter { it !in have }.take(60)
-                if (miss.isNotEmpty()) Sb.get(Q("posts").select("id, user_id, body, created_at, parent_id, media_url, edited_at").inList("id", miss)).rows.forEach { p -> if (p.isNull("parent_id") || p.optString("parent_id").isEmpty()) posts.add(p) }
+                if (miss.isNotEmpty()) postsGet("id, user_id, body, created_at, parent_id, media_url") { Q("posts").select(it).inList("id", miss) }.rows.forEach { p -> if (p.isNull("parent_id") || p.optString("parent_id").isEmpty()) posts.add(p) }
             }
         } catch (e: Exception) { rpRows = emptyList(); rpFailed = true }
         inlP.await()
@@ -309,6 +309,15 @@ class Online(val app: AppState) {
 
     fun zenId(): String? = s.zen.optStr("id")
 
+    // posts.edited_at (when the words of a post were changed) came later: a server without it refuses the column (42703),
+    // and the read is made again without it
+    private var editedCol = true
+    suspend fun postsGet(cols: String, mk: (String) -> Q): Res {
+        var r = Sb.get(mk(if (editedCol) "$cols, edited_at" else cols))
+        if (editedCol && !r.ok && (r.error?.code == "42703" || r.error?.message?.contains("edited_at") == true)) { editedCol = false; r = Sb.get(mk(cols)) }
+        return r
+    }
+
     // the profile row of this account: the handle, name, banner and pinned post the server has
     fun takeMeRow(m: JSONObject) {
         val pr = s.profile
@@ -378,7 +387,7 @@ class Online(val app: AppState) {
     // loadUserPosts(): the feed only holds the newest posts of everybody, so a profile fetches the person's own newest posts
     suspend fun loadUserPosts(id: String): Boolean {
         if (uid == null) return false
-        val r = Sb.get(Q("posts").select("id, user_id, body, created_at, parent_id, media_url, edited_at").eq("user_id", id).order("created_at", false).limit(80))
+        val r = postsGet("id, user_id, body, created_at, parent_id, media_url") { Q("posts").select(it).eq("user_id", id).order("created_at", false).limit(80) }
         if (!r.ok || r.rows.isEmpty()) return false
         return mapRemotePosts(r.rows) > 0
     }
@@ -392,7 +401,7 @@ class Online(val app: AppState) {
         val miss = want.filter { it !in have && it !in wantGone }.take(100)
         var changed = false
         if (miss.isNotEmpty()) {
-            val r = Sb.get(Q("posts").select("id, user_id, body, created_at, parent_id, media_url, edited_at").inList("id", miss))
+            val r = postsGet("id, user_id, body, created_at, parent_id, media_url") { Q("posts").select(it).inList("id", miss) }
             if (r.ok) { val got = r.rows.map { it.optString("id") }.toSet(); miss.forEach { if (it !in got) wantGone.add(it) } }
             changed = mapRemotePosts(r.rows) > 0
         }

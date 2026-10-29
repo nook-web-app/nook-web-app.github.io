@@ -1063,9 +1063,9 @@ suspend fun Online.loadRPost(id: String, hint: String?): JSONObject? {
 suspend fun Online.openSharedPost(id: String) {
     var local = s.byRemote(id)
     if (local == null) {
-        val cols = "id, user_id, body, media_url, created_at, parent_id, edited_at"
-        val pq = Sb.get(Q("posts").select(cols).eq("id", id))
-        val rq = Sb.get(Q("posts").select(cols).eq("parent_id", id).order("created_at").limit(100))
+        val cols = "id, user_id, body, media_url, created_at, parent_id"
+        val pq = postsGet(cols) { Q("posts").select(it).eq("id", id) }
+        val rq = postsGet(cols) { Q("posts").select(it).eq("parent_id", id).order("created_at").limit(100) }
         if (!pq.ok || !rq.ok) throw IllegalStateException("load")
         val top = pq.one ?: run { app.say("This post is not available"); return }
         val rows = listOf(top) + rq.rows

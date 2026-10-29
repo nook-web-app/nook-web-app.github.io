@@ -3464,6 +3464,14 @@ function feedPrefetch() {
   // a prefetch that is never used (ban, age screen, sign out) must not leave an unhandled error behind
   Object.values(f).forEach(v => { if (v && v.catch) v.catch(() => {}); });
 }
+// posts.edited_at (when the words of a post were changed) came later: a server without it refuses the column (42703),
+// and the read is made again without it
+let editedCol = true;
+async function postsRead(cols, run) {
+  let r = await run(editedCol ? cols + ", edited_at" : cols);
+  if (editedCol && r && r.error && (r.error.code === "42703" || /edited_at/.test(r.error.message || ""))) { editedCol = false; r = await run(cols); }
+  return r;
+}
 function feedFetchStart() {
   const uid = sbUser.id, f = { t: Date.now(), uid };
   f.posts = (async () => {
@@ -3581,7 +3589,7 @@ async function loadFeedNow(pre) {
       const have = new Set(posts.map(p => p.id));
       const miss = [...new Set(rpRows.map(r => r.post_id))].filter(id => !have.has(id)).slice(0, 60);
       if (miss.length) {
-        const mq = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url, edited_at").in("id", miss);
+        const mq = await postsRead("id, user_id, body, created_at, parent_id, media_url", c => sb.from("posts").select(c).in("id", miss));
         (mq.data || []).forEach(p => { if (!p.parent_id) posts.push(p); });
       }
     }
@@ -3831,7 +3839,7 @@ async function mapRemotePosts(rows) {
 // the feed only holds the newest posts of everybody, so when a profile opens the person's own newest posts are fetched too
 async function loadUserPosts(id) {
   if (!sbUser) return false;
-  const { data: rows, error } = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url, edited_at").eq("user_id", id).order("created_at", { ascending: false }).limit(80);
+  const { data: rows, error } = await postsRead("id, user_id, body, created_at, parent_id, media_url", c => sb.from("posts").select(c).eq("user_id", id).order("created_at", { ascending: false }).limit(80));
   if (error || !rows || !rows.length) return false;
   return (await mapRemotePosts(rows)) > 0;
 }
@@ -6807,10 +6815,10 @@ function rCard(id, big, hint) {
 async function openSharedPost(id) {
   let local = S.posts.find(x => x.remote === id);
   if (!local) {
-    const cols = "id, user_id, body, media_url, created_at, parent_id, edited_at";
+    const cols = "id, user_id, body, media_url, created_at, parent_id";
     const [pq, rq] = await Promise.all([
-      sb.from("posts").select(cols).eq("id", id).maybeSingle(),
-      sb.from("posts").select(cols).eq("parent_id", id).order("created_at", { ascending: true }).limit(100)
+      postsRead(cols, c => sb.from("posts").select(c).eq("id", id).maybeSingle()),
+      postsRead(cols, c => sb.from("posts").select(c).eq("parent_id", id).order("created_at", { ascending: true }).limit(100))
     ]);
     if (pq.error || rq.error) throw new Error("load");
     if (!pq.data) { toast("This post is not available"); return; }
@@ -8510,7 +8518,7 @@ async function fillWanted() {
   const miss = [...want].filter(r => !have.has(r) && !wantGone.has(r)).slice(0, 100);
   let changed = false;
   if (miss.length) {
-    const { data, error } = await sb.from("posts").select("id, user_id, body, created_at, parent_id, media_url, edited_at").in("id", miss);
+    const { data, error } = await postsRead("id, user_id, body, created_at, parent_id, media_url", c => sb.from("posts").select(c).in("id", miss));
     if (!error) { const got = new Set((data || []).map(d => d.id)); miss.forEach(r => { if (!got.has(r)) wantGone.add(r); }); }
     changed = (await mapRemotePosts(data || [])) > 0;
   }

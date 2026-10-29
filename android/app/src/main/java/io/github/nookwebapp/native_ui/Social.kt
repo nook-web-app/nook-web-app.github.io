@@ -155,7 +155,7 @@ suspend fun Online.idsTab(pg: UserPage, name: String): List<String>? {
     // the posts behind the ids that this phone does not have yet are fetched
     val have = s.posts.mapNotNull { it.remote }.toSet()
     val miss = ids.filter { it !in have }.take(100)
-    if (miss.isNotEmpty()) mapRemotePosts(Sb.get(Q("posts").select("id, user_id, body, created_at, parent_id, media_url, edited_at").inList("id", miss)).rows)
+    if (miss.isNotEmpty()) mapRemotePosts(postsGet("id, user_id, body, created_at, parent_id, media_url") { Q("posts").select(it).inList("id", miss) }.rows)
     pg.version++
     return ids
 }

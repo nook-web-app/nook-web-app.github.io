@@ -54,7 +54,7 @@ class MainActivity : ComponentActivity() {
         app.askNotifs = { askNotifs() }
         app.shareFile = { f, type -> send(f, type) }
         app.onSignedIn = {
-            if (Notify.on(this)) Notify.schedule(this)
+            if (Notify.on(this)) { Notify.schedule(this); app.scope.launch { runCatching { Push.register(this@MainActivity) } } }
             // the first time somebody signs in here, the phone asks about notifications
             val prefs = getSharedPreferences("nook", 0)
             if (!prefs.getBoolean("asked", false)) { prefs.edit().putBoolean("asked", true).apply(); askNotifs() }

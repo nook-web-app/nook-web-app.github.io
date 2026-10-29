@@ -2,7 +2,7 @@ plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android'; id 'a
 android {
     namespace 'io.github.nookwebapp.native_ui'
     compileSdk 34
-    defaultConfig { applicationId 'io.github.nookwebapp.nativeui'; minSdk 26; targetSdk 34; versionCode 32500; versionName '3.25.0' }
+    defaultConfig { applicationId 'io.github.nookwebapp.nativeui'; minSdk 26; targetSdk 34; versionCode 32600; versionName '3.26.0' }
     // the release key never lives in the repository: NOOK_KS points at it and NOOK_KS_PASS opens it;
     // without them a release build is signed with the local debug key so it still installs for testing
     def ks = System.getenv('NOOK_KS')
@@ -30,6 +30,8 @@ dependencies {
     implementation 'androidx.credentials:credentials:1.2.2'
     implementation 'androidx.credentials:credentials-play-services-auth:1.2.2'
     implementation 'com.google.android.gms:play-services-fido:20.1.0'
+    implementation 'com.google.firebase:firebase-messaging:23.4.1'
+    implementation 'androidx.fragment:fragment:1.6.2'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.json:json:20231013'
     testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'

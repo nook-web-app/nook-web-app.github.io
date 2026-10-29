@@ -3,6 +3,8 @@
 # updater looks for it. Needs ANDROID_HOME, NOOK_KS and NOOK_KS_PASS like g.sh.
 set -e
 cd "$(dirname "$0")"
+# an apk from an earlier build is never published by mistake: it is removed first, so a failed build stops here
+rm -f app/build/outputs/apk/release/app-release.apk
 # g.sh exits 1 when gradle printed nothing (its output filter found no lines), so its exit code is not used
 ./g.sh :app:assembleRelease || true
 test -f app/build/outputs/apk/release/app-release.apk

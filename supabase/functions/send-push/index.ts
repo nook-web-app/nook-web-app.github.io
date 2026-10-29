@@ -1,5 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import webpush from "npm:web-push@3.6.7";
+import { SignJWT, importPKCS8 } from "npm:jose@5.9.6";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 const VAPID_PUBLIC = "BHfuPbwRPzD71CGmJaEMX5eizbSknGd2rjSJIVO-9ahWUcsL6z-eEC_bhWCLloy0EdOEVyBoiLgQZjdaIrO5udA";
@@ -34,6 +35,42 @@ async function setup(): Promise<boolean> {
   return true;
 }
 
+// Android phones: Firebase Cloud Messaging (HTTP v1). The service account of the Firebase project is a secret of this function.
+let fcmTok: { t: string; exp: number } | null = null;
+let fcmSa: { client_email: string; private_key: string; project_id: string } | null = null;
+async function fcmToken(): Promise<string | null> {
+  if (fcmTok && fcmTok.exp > Date.now() + 60000) return fcmTok.t;
+  if (!fcmSa) { try { fcmSa = JSON.parse(Deno.env.get("FCM_SERVICE_ACCOUNT") || ""); } catch { return null; } }
+  if (!fcmSa || !fcmSa.private_key) return null;
+  const key = await importPKCS8(fcmSa.private_key, "RS256");
+  const now = Math.floor(Date.now() / 1000);
+  const jwt = await new SignJWT({ scope: "https://www.googleapis.com/auth/firebase.messaging" }).setProtectedHeader({ alg: "RS256", typ: "JWT" })
+    .setIssuer(fcmSa.client_email).setSubject(fcmSa.client_email).setAudience("https://oauth2.googleapis.com/token").setIssuedAt(now).setExpirationTime(now + 3000).sign(key);
+  const r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: jwt }) });
+  const j = await r.json().catch(() => ({}));
+  if (!j.access_token) return null;
+  fcmTok = { t: j.access_token, exp: Date.now() + (Number(j.expires_in) || 3000) * 1000 };
+  return fcmTok.t;
+}
+// the phone builds the notification itself from this data (the words of a chat message are never sent)
+async function sendFcm(tokens: { token: string }[], data: Record<string, string>): Promise<{ sent: number; dead: string[] }> {
+  const at = await fcmToken();
+  if (!at || !fcmSa) return { sent: 0, dead: [] };
+  let sent = 0;
+  const dead: string[] = [];
+  await Promise.all(tokens.map(async (t) => {
+    try {
+      const r = await fetch("https://fcm.googleapis.com/v1/projects/" + fcmSa!.project_id + "/messages:send", {
+        method: "POST", headers: { authorization: "Bearer " + at, "content-type": "application/json" },
+        body: JSON.stringify({ message: { token: t.token, data, android: { priority: "HIGH", ttl: "3600s" } } }),
+      });
+      if (r.ok) sent++;
+      else if (r.status === 404 || r.status === 400) { const j = await r.json().catch(() => ({})); const st = JSON.stringify(j); if (/UNREGISTERED|INVALID_ARGUMENT|NOT_FOUND/.test(st)) dead.push(t.token); }
+    } catch (_e) { /* the next notification tries again */ }
+  }));
+  return { sent, dead };
+}
+
 Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   if (!secretCache) {
@@ -59,7 +96,8 @@ Deno.serve(async (req) => {
   }
   const { data: actor } = await admin.from("accounts").select("display_name, username, public_key").eq("id", n.actor_id).maybeSingle();
   const { data: subs } = await admin.from("push_subs").select("id, endpoint, p256dh, auth").eq("user_id", n.user_id);
-  if (!subs || !subs.length) return json({ sent: 0 });
+  const { data: fcm } = await admin.from("fcm_tokens").select("token").eq("user_id", n.user_id);
+  if ((!subs || !subs.length) && (!fcm || !fcm.length)) return json({ sent: 0 });
 
   const name = (actor && (actor.display_name || actor.username)) || "Someone";
   const msg: Record<string, unknown> = {};
@@ -86,7 +124,12 @@ Deno.serve(async (req) => {
 
   let sent = 0;
   const dead: string[] = [];
-  await Promise.all(subs.map(async (s) => {
+  if (fcm && fcm.length) {
+    const r = await sendFcm(fcm, { title: name, body: WHAT[n.kind] || "sent you something", open: n.kind === "message" ? "dm:" + n.actor_id : "notifs", id: n.id });
+    sent += r.sent;
+    if (r.dead.length) await admin.from("fcm_tokens").delete().in("token", r.dead);
+  }
+  await Promise.all((subs || []).map(async (s) => {
     try {
       await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload, { TTL: 3600, urgency: "high" });
       sent++;

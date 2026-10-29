@@ -21,6 +21,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.launch
 
 // Phone notifications. The web app gets them through web push; here they come from the live connection while the app
 // is alive, and from a check every 15 minutes (WorkManager) while it is not. Only notifications this person has not
@@ -41,7 +42,7 @@ object Notify {
     fun on(ctx: Context) = ctx.getSharedPreferences("nook", 0).getBoolean("push", false)
     fun setOn(ctx: Context, v: Boolean) {
         ctx.getSharedPreferences("nook", 0).edit().putBoolean("push", v).apply()
-        if (v) schedule(ctx) else WorkManager.getInstance(ctx).cancelUniqueWork(WORK)
+        if (v) { schedule(ctx); kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch { runCatching { Push.register(ctx) } } } else WorkManager.getInstance(ctx).cancelUniqueWork(WORK)
     }
 
     fun schedule(ctx: Context) {
@@ -108,8 +109,9 @@ class NoteWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p) {
 }
 
 // pushDetach(): this phone stops getting notifications for the account that leaves it
-fun Online.pushDetach() {
+suspend fun Online.pushDetach() {
     val ctx = app.ctx ?: return
+    runCatching { Push.detach(ctx) }
     androidx.work.WorkManager.getInstance(ctx).cancelUniqueWork("nook-notes")
     ctx.getSharedPreferences("nook", 0).edit().remove("since").remove("seen").apply()
 }

@@ -95,7 +95,7 @@ fun HomeScreen() {
     }) {
         val feed = s.posts.filter { it.parent == null && (!photos || it.imgs.isNotEmpty()) }.sortedByDescending { ft(it) }
         val ranked = rankFeed(s, app.on.follows, feed, if (photos) "photos" else "latest")
-        LazyColumn(Modifier.fillMaxSize(), state = app.listState()) {
+        LazyColumn(Modifier.fillMaxSize(), state = app.listStateFor(LocalPage.current)) {
             item { ComposerRow() }
             postList(ranked, { FeedEmpty(photos) }, lab = { p -> p.rpBy?.let { it.name + " reposted" } })
         }
@@ -131,7 +131,7 @@ fun ThreadScreen(id: String) {
         var q = s.byId(p.parent)
         while (q != null && q !== p && anc.size < 60 && q !in anc) { anc.add(0, q); q = s.byId(q.parent) }
         val reps = if (p.parent != null) s.flat(p.id) else s.kids(p.id).sortedBy { it.t }.map { it to 0 }
-        LazyColumn(Modifier.fillMaxSize(), state = app.listState()) {
+        LazyColumn(Modifier.fillMaxSize(), state = app.listStateFor(LocalPage.current)) {
             items(anc, key = { "a" + it.id }) { PostCard(it, line = true, compact = true) }
             item(key = "main") { MainPost(p) }
             items(reps, key = { it.first.id }) { (r, d) -> PostCard(r, rep = true, d = d, nc = p.parent != null, replyTo = d > 0) }
@@ -163,7 +163,7 @@ fun ProfileScreen() {
     val me = app.on.me?.id
     LaunchedEffect(me) { if (me != null) app.on.countsOf(me) { a, b -> fol = a; fng = b } }
     Page({ Bar("Profile", { Lead() }) }) {
-        LazyColumn(Modifier.fillMaxSize(), state = app.listState()) {
+        LazyColumn(Modifier.fillMaxSize(), state = app.listStateFor(LocalPage.current)) {
             item(key = "head") {
                 BannerBox(pr.banner, pr.avatar, pr.bannerTheme)
                 Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 8.dp)) {
@@ -244,7 +244,7 @@ fun Stat(n: Int, one: String, many: String, onClick: () -> Unit) {
 fun SavedScreen() {
     val app = LocalApp.current
     Page({ Bar("Saved", { Lead() }) }) {
-        LazyColumn(Modifier.fillMaxSize(), state = app.listState()) {
+        LazyColumn(Modifier.fillMaxSize(), state = app.listStateFor(LocalPage.current)) {
             postList(app.store.posts.filter { it.saved }.sortedByDescending { it.t }, { Empty("bookmark", "Nothing saved yet.") }, replyTo = true)
         }
     }
@@ -256,7 +256,7 @@ fun TagScreen(q: String) {
     val app = LocalApp.current
     val re = Regex("(^|[^\\p{L}\\p{N}_])" + Regex.escape(q) + "(?![\\p{L}\\p{N}_])", RegexOption.IGNORE_CASE)
     Page({ Bar(q, { BackBtn() }) }) {
-        LazyColumn(Modifier.fillMaxSize(), state = app.listState()) {
+        LazyColumn(Modifier.fillMaxSize(), state = app.listStateFor(LocalPage.current)) {
             postList(app.store.posts.filter { it.parent == null && re.containsMatchIn(it.text) }.sortedByDescending { ft(it) }, { Empty("smile", "No posts use $q yet.") })
         }
     }
@@ -268,7 +268,7 @@ fun ListsScreen() {
     val app = LocalApp.current
     val s = app.store
     Page({ Bar("Lists", { Lead() }) }, fab = if (s.lists.isNotEmpty()) ({ Fab("plus") { app.panels.add(Panel.ListForm(null)) } }) else null) {
-        LazyColumn(Modifier.fillMaxSize(), state = app.listState(), contentPadding = PaddingValues(bottom = if (s.lists.isNotEmpty()) 88.dp else 0.dp)) {
+        LazyColumn(Modifier.fillMaxSize(), state = app.listStateFor(LocalPage.current), contentPadding = PaddingValues(bottom = if (s.lists.isNotEmpty()) 88.dp else 0.dp)) {
             if (s.lists.isEmpty()) item { Empty("list", "Make your first list.") { Pill("New list") { app.panels.add(Panel.ListForm(null)) } } }
             items(s.lists, key = { it.id }) { l ->
                 val n = l.ids.count { s.byId(it) != null }
@@ -295,7 +295,7 @@ fun ListScreen(id: String) {
             }
         })
     }) {
-        LazyColumn(Modifier.fillMaxSize(), state = app.listState()) {
+        LazyColumn(Modifier.fillMaxSize(), state = app.listStateFor(LocalPage.current)) {
             postList(l.ids.mapNotNull { s.byId(it) }.sortedByDescending { it.t }, { Empty("list", "Empty list. Use the three dots on a post and pick Add to list.") }, replyTo = true)
         }
     }

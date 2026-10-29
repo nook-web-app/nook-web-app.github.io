@@ -50,7 +50,7 @@ fun UserScreen(id: String, fromMenu: Boolean = false) {
             }
         }
         val mine = s.posts.filter { it.ra?.id == id }.sortedByDescending { it.t }
-        LazyColumn(Modifier.fillMaxSize(), state = app.listState()) {
+        LazyColumn(Modifier.fillMaxSize(), state = app.listStateFor(LocalPage.current)) {
             item(key = "head") {
                 BannerBox(acc?.optStr("banner"), avatar, acc?.optString("banner_theme") ?: "default")
                 Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 8.dp)) {

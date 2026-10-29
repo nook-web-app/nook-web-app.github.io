@@ -79,7 +79,7 @@ fun ChatsScreen() {
     val convos = (dm.inbox ?: emptyList()).filter { it.other !in dm.hideSet }.sortedByDescending { if (it.other in s.dmPins) 1 else 0 }
     val local = s.chats.sortedByDescending { c -> c.msgs.lastOrNull()?.t ?: c.t }
     Page({ Bar("Chats", { Lead() }) }, fab = if (s.chats.isNotEmpty()) ({ Fab("plus") { app.newChat() } }) else null) {
-        LazyColumn(Modifier.fillMaxSize(), state = app.listState(), contentPadding = PaddingValues(bottom = if (s.chats.isNotEmpty()) 88.dp else 0.dp)) {
+        LazyColumn(Modifier.fillMaxSize(), state = app.listStateFor(LocalPage.current), contentPadding = PaddingValues(bottom = if (s.chats.isNotEmpty()) 88.dp else 0.dp)) {
             // rows of the same shape as the chats shimmer until the real ones are drawn, so the page never looks empty
             if (dm.inbox == null && on.me != null) items((Cache.read("inbox-n")?.v as? Int ?: 1).coerceIn(1, 6)) { SkelRow() }
             items(convos, key = { "d" + it.other }) { cv -> ConvoRow(cv) }

@@ -55,7 +55,7 @@ fun NookApp(app: AppState) {
                                 Dir.Root -> fadeIn(tween(140)) togetherWith fadeOut(tween(0))
                             }
                         },
-                    ) { (r, _) -> PageFor(r) }
+                    ) { (r, n) -> CompositionLocalProvider(LocalPage provides n) { PageFor(r) } }
                     // the bottom bar goes away on the sign in, banned and age pages, inside a chat, and on the legal pages before signing in
                     if (top != Route.Auth && top != Route.Banned && top != Route.Age && top !is Route.Conv && top !is Route.Dm && !(top is Route.Legal && !app.signedIn)) NavBar(app)
                 }
@@ -112,7 +112,7 @@ private fun NavBar(app: AppState) {
             Box(Modifier.weight(1f).fillMaxHeight().pressTap {
                 if (r == Route.Profile && System.currentTimeMillis() - lastProfileTap < 350) { lastProfileTap = 0; app.on.quickSwitch(); return@pressTap }
                 if (r == Route.Profile) lastProfileTap = System.currentTimeMillis()
-                if (on && app.stack.size == 1) scope.launch { app.listState().animateScrollToItem(0) } else app.root(r)
+                if (on && app.stack.size == 1) scope.launch { app.listStateFor(1).animateScrollToItem(0) } else app.root(r)
             }, contentAlignment = Alignment.Center) {
                 // the lit picture gets a 2dp ring outside it (box-shadow: 0 0 0 2px)
                 if (r == Route.Profile) Box(Modifier.size(32.dp).then(if (on) Modifier.border(2.dp, c.fg, CircleShape) else Modifier), contentAlignment = Alignment.Center) { MyAvatar(28.dp) }

@@ -125,6 +125,9 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     val settingsScroll = androidx.compose.foundation.ScrollState(0)
     // where each page on the stack was scrolled to, so going back lands on the same spot
     private val lists = mutableMapOf<Int, LazyListState>()
+    // each open page keeps its own list state, found by the page's own place on the stack (never by whatever the stack is
+    // at the moment of drawing: a page that is leaving would otherwise take the state of the page that is coming)
+    fun listStateFor(page: Int): LazyListState = lists.getOrPut(page) { LazyListState() }
     fun listState(): LazyListState = lists.getOrPut(stack.size) { LazyListState() }
 
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -289,3 +292,6 @@ val LocalApp = staticCompositionLocalOf<AppState> { error("no app state") }
 
 private val STOP = setOf("this", "that", "with", "have", "from", "they", "were", "what", "your", "about", "just", "will", "would", "there", "their", "been", "than", "then", "them", "into", "some", "when", "like", "more", "very", "also", "only", "over", "dont", "cant")
 fun wordsOf(text: String): List<String> = Regex("[\\p{L}\\p{N}]{4,}").findAll(text.lowercase()).map { it.value }.filter { it !in STOP }.distinct().take(12).toList()
+
+// the place on the stack of the page being drawn (1 for the first page)
+val LocalPage = androidx.compose.runtime.compositionLocalOf { 1 }

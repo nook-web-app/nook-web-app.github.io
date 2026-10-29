@@ -2,14 +2,14 @@ plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android'; id 'a
 android {
     namespace 'io.github.nookwebapp.native_ui'
     compileSdk 34
-    defaultConfig { applicationId 'io.github.nookwebapp.nativeui'; minSdk 26; targetSdk 34; versionCode 32230; versionName '3.22.30' }
+    defaultConfig { applicationId 'io.github.nookwebapp.nativeui'; minSdk 26; targetSdk 34; versionCode 32231; versionName '3.22.31' }
     // the release key never lives in the repository: NOOK_KS points at it and NOOK_KS_PASS opens it;
     // without them a release build is signed with the local debug key so it still installs for testing
     def ks = System.getenv('NOOK_KS')
     signingConfigs { if (ks) { release {
         storeFile file(ks); storePassword System.getenv('NOOK_KS_PASS'); keyAlias 'nook'; keyPassword System.getenv('NOOK_KS_PASS')
     } } }
-    buildTypes { release { signingConfig ks ? signingConfigs.release : signingConfigs.debug; minifyEnabled false } }
+    buildTypes { release { signingConfig ks ? signingConfigs.release : signingConfigs.debug; minifyEnabled true; shrinkResources true; proguardFiles getDefaultProguardFile('proguard-android-optimize.txt') } }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = '17' }
     buildFeatures { compose true }

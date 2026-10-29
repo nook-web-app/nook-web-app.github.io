@@ -121,7 +121,7 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onLong: () -> Unit
         if (m.text.isNotEmpty()) Box(
             Modifier.padding(top = if (m.imgs.isNotEmpty()) 4.dp else 0.dp).widthIn(max = w * 0.82f)
                 .clip(RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.xs, Rad.bubble)).background(c.accent).padding(horizontal = 14.dp, vertical = 9.dp),
-        ) { Tx(m.text, color = c.on, linkColor = Color.White) }
+        ) { Tx(m.text, color = c.on, linkColor = Color.White, onTap = onTap, onLong = onLong) }
         AnimatedVisibility(open, enter = expandVertically(tween(240)) + fadeIn(tween(200)), exit = shrinkVertically(tween(240)) + fadeOut(tween(200))) {
             T(whenText(m.t), Fs.xs, color = c.muted, align = TextAlign.End, modifier = Modifier.fillMaxWidth().padding(top = 4.dp, end = 2.dp))
         }

@@ -291,7 +291,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.22.30";
+const APP_VERSION = "3.22.31";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -4550,7 +4550,8 @@ function openDrawer() {
     h("p", { class: "hand" }, "@" + S.profile.handle),
     h("div", { class: "dsp" }),
     ...(zOn() ? [h("button", { class: "dm", onclick: () => close(() => root("zen")) }, zenAv(28), "Zenith")] : []),
-    item("search", "Search", "search"), item("lists", "Lists", "list"), item("settings", "Settings", "sliders"));
+    // the page that is already open is left out of the menu
+    ...[["search", "Search", "search"], ["lists", "Lists", "list"], ["settings", "Settings", "sliders"]].filter(x => x[0] !== stack[0].r).map(x => item(...x)));
   const close = trackLayer(() => dismiss(scrim, dr));
   layer.append(scrim, dr);
 }

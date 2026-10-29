@@ -68,6 +68,7 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     var clipboard: (String) -> Unit = {}
     var sharePicture: (LPost, Boolean) -> Unit = { _, _ -> }
     var backup: () -> Unit = {}
+    var checkUpdate: (Boolean) -> Unit = {}
     val settingsScroll = androidx.compose.foundation.ScrollState(0)
     // where each page on the stack was scrolled to, so going back lands on the same spot
     private val lists = mutableMapOf<Int, LazyListState>()

@@ -121,9 +121,9 @@ fun DrawerHost(app: AppState) {
             T(pr.name.ifEmpty { "@" + pr.handle }, Fs.x2, FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
             T("@" + pr.handle, color = c.muted)
             Spacer(Modifier.height(18.dp))
-            DrawerItem(app, "search", "Search", Route.Search)
-            DrawerItem(app, "list", "Lists", Route.Lists)
-            DrawerItem(app, "sliders", "Settings", Route.Settings)
+            // the page that is already open is left out of the menu
+            listOf(Triple("search", "Search", Route.Search), Triple("list", "Lists", Route.Lists), Triple("sliders", "Settings", Route.Settings))
+                .filter { it.third != app.rootRoute }.forEach { (i, l, r) -> DrawerItem(app, i, l, r) }
         }
     }
 }
@@ -171,6 +171,9 @@ fun ToastHost(app: AppState) {
 @Composable
 fun PanelHost(app: AppState) {
     val shown = remember { mutableStateListOf<Panel>() }
+    // a field left focused under a new panel would keep its cursor handle floating over it
+    val focus = androidx.compose.ui.platform.LocalFocusManager.current
+    LaunchedEffect(app.panels.size) { focus.clearFocus() }
     app.panels.forEach { if (it !in shown) shown.add(it) }
     shown.toList().forEach { p ->
         key(p) {

@@ -22,6 +22,9 @@ class MainActivity : ComponentActivity() {
         app.clipboard = { t -> (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Nook", t)) }
         app.sharePicture = { p, toCompose -> sharePicture(p, toCompose) }
         app.backup = { backup() }
+        app.checkUpdate = { manual -> checkUpdate(manual) }
+        // like the web app, a new version is looked for a moment after the app opens
+        window.decorView.postDelayed({ checkUpdate(false) }, 3000)
         takeShared(intent)
         setContent { NookApp(app) }
     }
@@ -63,6 +66,35 @@ class MainActivity : ComponentActivity() {
                     val f = File(File(cacheDir, "share").apply { mkdirs() }, "nook-post.png").apply { outputStream().use { bm.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
                     send(f, "image/png")
                 }
+            }
+        }.start()
+    }
+
+    // the web app's update sheet; Update now downloads the new apk and opens Android's installer
+    private fun checkUpdate(manual: Boolean) {
+        Thread {
+            val r = Updater.latest(this)
+            runOnUiThread {
+                val rel = r.getOrNull()
+                when {
+                    r.isFailure -> if (manual) app.say("Could not check. Check your connection and try again")
+                    rel == null -> if (manual) app.say("Up to date")
+                    else -> app.open(listOf(
+                        SheetItem("Update now") { getUpdate() },
+                        SheetItem("Stay on current version", cancel = true),
+                    ), "Update available (" + rel.name + ")")
+                }
+            }
+        }.start()
+    }
+
+    private fun getUpdate() {
+        app.say("Downloading the update...")
+        Thread {
+            val f = runCatching { Updater.download(this) }.getOrNull()
+            runOnUiThread {
+                if (f == null) app.say("Could not download the update. Try again")
+                else if (!Updater.install(this, f)) app.say("Allow Nook to install the update, then tap Update now again")
             }
         }.start()
     }

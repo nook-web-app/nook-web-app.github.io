@@ -362,7 +362,7 @@ fun SettingsScreen() {
             Sec("Your data")
             Group { SRow(ic("copy", 22.dp), "Download backup", "Posts, notes and media", last = true) { app.backup() } }
             Sec("Updates")
-            Group { SRow(ic("refresh", 22.dp), "Check for updates", "Version $APP_VERSION", last = true) { app.say("Up to date") } }
+            Group { SRow(ic("refresh", 22.dp), "Check for updates", "Version $APP_VERSION", last = true) { app.checkUpdate(true) } }
             Sec("Legal")
             Group {
                 SRow(ic("eyeoff", 22.dp), "Privacy Policy", "What we collect") { app.go(Route.Legal(false)) }

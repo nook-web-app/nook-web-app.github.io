@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
@@ -209,7 +210,7 @@ fun CropPanel(app: AppState, p: Panel.Crop) {
             val fw = W - pad * 2
             val fh = if (p.round) fw else fw * p.h.toFloat() / p.w
             val H = if (p.round) W else maxOf(fh + pad * 2 + 80.dp, W * 0.8f)
-            Canvas(Modifier.size(W, H).align(Alignment.Center).pointerInput(im) {
+            Canvas(Modifier.size(W, H).align(Alignment.Center).clipToBounds().pointerInput(im) {
                 detectTransformGestures { centroid, pan, zoom, _ ->
                     if (im == null || s <= 0f) return@detectTransformGestures
                     val minS = maxOf(fw.toPx() / im.width, fh.toPx() / im.height)

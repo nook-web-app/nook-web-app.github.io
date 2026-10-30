@@ -99,7 +99,7 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     // a line the sign in page shows once (the web app's nook-notice), and the email of a banned account for its download
     var notice by mutableStateOf<String?>(null)
     // "/media" cards: the download state of each
-    val mdl = MediaDl()
+    val mdl = MediaDl.shared
     // the offline page: shown while the phone has no connection, or when the start could not be made for lack of one
     var online by mutableStateOf(true)
     var bootOffline by mutableStateOf(false)

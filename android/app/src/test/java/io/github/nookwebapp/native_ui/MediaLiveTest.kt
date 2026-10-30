@@ -26,4 +26,24 @@ class MediaLiveTest {
         // the address of a YouTube file is tied to the address of the asker, so only the phone itself can fetch it
         assertTrue(r.isSuccess)
     }
+
+    // the same file, once in one piece and once in pieces over several connections, must be byte for byte the same
+    @Test fun piecesEqualWhole() {
+        assumeTrue(System.getenv("NOOK_LIVE") == "1")
+        val url = "https://video.twimg.com/amplify_video/1505976308765016071/vid/1280x720/erlhaEHsNZsmXF4T.mp4"
+        val size = MediaGrab.sizeOf(url)
+        println("PIECES size=$size")
+        assertTrue(size > 0)
+        val a = java.io.File.createTempFile("whole", ".mp4"); val b = java.io.File.createTempFile("pieces", ".mp4")
+        val t0 = System.currentTimeMillis()
+        MediaGrab.download(url, emptyMap(), a) { }
+        val t1 = System.currentTimeMillis()
+        var got = 0L
+        MediaGrab.fastDownload(url, emptyMap(), b, size) { got += it }
+        val t2 = System.currentTimeMillis()
+        println("PIECES whole=${t1 - t0}ms pieces=${t2 - t1}ms bytes=$got")
+        assertEquals(a.length(), b.length()); assertEquals(size, b.length())
+        assertArrayEquals(java.security.MessageDigest.getInstance("SHA-256").digest(a.readBytes()), java.security.MessageDigest.getInstance("SHA-256").digest(b.readBytes()))
+        a.delete(); b.delete()
+    }
 }

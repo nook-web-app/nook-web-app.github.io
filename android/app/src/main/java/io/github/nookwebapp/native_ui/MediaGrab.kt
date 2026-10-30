@@ -68,22 +68,28 @@ object MediaGrab {
         // the size of the file (or of both pieces) for the card
         val size = if (info.size > 0) info.size else sizeOf(src.url, src.headers) + (src.audio?.let { sizeOf(it, src.headers) } ?: 0)
         // an X post has no picture of its own that fits: the first frame of the video is the picture of the card
-        val thumb = if (info.site == "x") firstFrame(src.url) ?: info.thumb else info.thumb
+        val thumb = if (info.site == "x") firstFrame(src.url, info.kind == "gif") ?: info.thumb else info.thumb
         Info(info.site, info.title, info.author, thumb, info.dur, info.kind, size) to src
     }
 
     // the first frame of a video file as a small picture (a data address, so it goes with the note), null when it cannot be read
-    private fun firstFrame(url: String): String? = runCatching {
+    private fun firstFrame(url: String, small: Boolean): String? = runCatching {
         val r = android.media.MediaMetadataRetriever()
+        var tmpFile: File? = null
         try {
-            r.setDataSource(url, hashMapOf("User-Agent" to DESKTOP))
+            if (small) {
+                // a gif is a few hundred kilobytes: it is read from a file, which every phone can do
+                val f = File.createTempFile("frame", ".mp4"); tmpFile = f
+                download(url, emptyMap(), f) { }
+                r.setDataSource(f.path)
+            } else r.setDataSource(url, hashMapOf("User-Agent" to DESKTOP))
             val bm = r.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: return@runCatching null
             val w = minOf(480, bm.width); val h = (bm.height * (w.toFloat() / bm.width)).toInt().coerceAtLeast(1)
             val sc = if (w == bm.width) bm else android.graphics.Bitmap.createScaledBitmap(bm, w, h, true)
             val out = java.io.ByteArrayOutputStream()
             sc.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, out)
             "data:image/jpeg;base64," + android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
-        } finally { r.release() }
+        } finally { r.release(); tmpFile?.delete() }
     }.getOrNull()
 
     private fun get(url: String, headers: Map<String, String> = emptyMap(), ua: String = DESKTOP): String {
@@ -96,7 +102,7 @@ object MediaGrab {
     }
 
     // the length of a file without downloading it: the answer to a request of its first byte says how long it is
-    private fun sizeOf(url: String, headers: Map<String, String> = emptyMap()): Long = runCatching {
+    internal fun sizeOf(url: String, headers: Map<String, String> = emptyMap()): Long = runCatching {
         val b = Request.Builder().url(url).header("User-Agent", DESKTOP).header("Range", "bytes=0-0")
         headers.forEach { (k, v) -> b.header(k, v) }
         http.newCall(b.build()).execute().use { r ->
@@ -159,7 +165,7 @@ object MediaGrab {
             if (best == null || v.optInt("height") * v.optInt("width") > best.optInt("height") * best.optInt("width")) best = v
         }
         val v = best ?: throw Fail("That post has no video or gif")
-        val gif = v.optString("type") == "gif"
+        val gif = v.optString("type") == "gif" || v.optString("url").contains("/tweet_video/")
         val info = Info("x", if (name.isNotEmpty()) "$name (@$handle)" else "@$handle", "@$handle", v.optString("thumbnail_url").takeIf { it.startsWith("https://") }, v.optDouble("duration", 0.0).toInt(), if (gif) "gif" else "video")
         return info to Src(v.optString("url"), "video/mp4", "mp4")
     }
@@ -180,7 +186,7 @@ object MediaGrab {
             if (best == null || v.optInt("bitrate") > best.optInt("bitrate")) best = v
         }
         val file = best?.optString("url").orEmpty().takeIf { it.startsWith("https://") } ?: throw Fail("No file found in that post")
-        val gif = vid?.optString("type") == "animated_gif"
+        val gif = vid?.optString("type") == "animated_gif" || file.contains("/tweet_video/")
         val thumb = (vid?.optString("media_url_https") ?: j.optJSONObject("video")?.optString("poster")).orEmpty().takeIf { it.startsWith("https://") }
         val ms = vid?.optJSONObject("video_info")?.optLong("duration_millis") ?: 0L
         val info = Info("x", (if (name.isNotEmpty()) "$name (@$handle)" else "@$handle"), "@$handle", thumb, (ms / 1000).toInt(), if (gif) "gif" else "video")
@@ -324,7 +330,51 @@ object MediaGrab {
         return "$base ${System.currentTimeMillis() % 100000}.$ext"
     }
 
-    private fun download(src: String, headers: Map<String, String>, to: File, onBytes: (Long) -> Unit) {
+    // a file in pieces of 4 MB with six connections at once: one connection to YouTube is slowed down by the site, pieces are not;
+    // the pieces are written to their place in the file, and a piece that fails is tried three times
+    internal fun fastDownload(src: String, headers: Map<String, String>, to: File, total: Long, onBytes: (Long) -> Unit) {
+        if (total < 8L shl 20) { download(src, headers, to, onBytes); return }
+        val chunk = 4L shl 20
+        val count = ((total + chunk - 1) / chunk).toInt()
+        val next = java.util.concurrent.atomic.AtomicInteger(0)
+        val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+        val yt = src.contains("googlevideo.com")
+        java.io.RandomAccessFile(to, "rw").use { raf ->
+            raf.setLength(total)
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(6)
+            try {
+                val jobs = (0 until 6).map {
+                    pool.submit {
+                        while (failure.get() == null) {
+                            val i = next.getAndIncrement(); if (i >= count) break
+                            val a = i * chunk; val b = minOf(total - 1, a + chunk - 1)
+                            var ok = false; var last: Throwable? = null
+                            for (t in 0 until 3) {
+                                try {
+                                    // the pieces of YouTube are asked for with the range in the address (that way they are not slowed down)
+                                    val u = if (yt) src + (if (src.contains('?')) "&" else "?") + "range=$a-$b" else src
+                                    val rq = Request.Builder().url(u).header("User-Agent", DESKTOP).apply { headers.forEach { (k, v) -> header(k, v) }; if (!yt) header("Range", "bytes=$a-$b") }.build()
+                                    http.newCall(rq).execute().use { r ->
+                                        if (!r.isSuccessful) throw Fail("The download was refused (" + r.code + ")")
+                                        val data = r.body?.bytes() ?: throw Fail("Nothing came back")
+                                        if (data.size.toLong() != b - a + 1) throw Fail("A piece came back short")
+                                        synchronized(raf) { raf.seek(a); raf.write(data) }
+                                        onBytes(data.size.toLong())
+                                    }
+                                    ok = true; break
+                                } catch (e: Throwable) { last = e }
+                            }
+                            if (!ok) { failure.compareAndSet(null, last ?: Fail("The download failed")); break }
+                        }
+                    }
+                }
+                jobs.forEach { it.get() }
+            } finally { pool.shutdownNow() }
+        }
+        failure.get()?.let { throw it }
+    }
+
+    internal fun download(src: String, headers: Map<String, String>, to: File, onBytes: (Long) -> Unit) {
         val req = Request.Builder().url(src).header("User-Agent", DESKTOP).apply { headers.forEach { (k, v) -> header(k, v) } }.build()
         http.newCall(req).execute().use { r ->
             if (!r.isSuccessful) throw Fail("The download was refused (" + r.code + ")")
@@ -342,12 +392,12 @@ object MediaGrab {
         try {
             r.setDataSource(clip.path)
             val durMs = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: return null
-            val fps = 12
-            val n = minOf(120, maxOf(2, (durMs * fps / 1000).toInt()))
+            val fps = 10
+            val n = minOf(80, maxOf(2, (durMs * fps / 1000).toInt()))
             val frames = ArrayList<IntArray>(); var w = 0; var h = 0
             for (i in 0 until n) {
                 val bm = r.getFrameAtTime(i * 1_000_000L / fps, android.media.MediaMetadataRetriever.OPTION_CLOSEST) ?: continue
-                if (w == 0) { w = minOf(480, bm.width); h = (bm.height * (w.toFloat() / bm.width)).toInt().coerceAtLeast(1) }
+                if (w == 0) { w = minOf(360, bm.width); h = (bm.height * (w.toFloat() / bm.width)).toInt().coerceAtLeast(1) }
                 val sc = if (bm.width == w) bm else android.graphics.Bitmap.createScaledBitmap(bm, w, h, true)
                 val px = IntArray(w * h); sc.getPixels(px, 0, w, 0, 0, w, h); frames.add(px)
             }
@@ -380,6 +430,9 @@ object MediaGrab {
     }
 
     // the file goes to Movies/Nook (Pictures/Nook for a picture), where the gallery finds it; progress is a number from 0 to 1
+    // what the last save wants to tell the person besides "saved"
+    @Volatile var note: String? = null
+
     suspend fun save(ctx: Context, url: String, q: String, onProgress: (Float) -> Unit): Uri = withContext(Dispatchers.IO) {
         val (info, first) = resolve(url, q)
         val tmp = File(ctx.cacheDir, "media").apply { mkdirs() }
@@ -396,7 +449,7 @@ object MediaGrab {
                 try {
                     val v = File(tmp, "v.part"); val a = File(tmp, "a.part")
                     val tick = { n: Long -> got += n; onProgress((got / total * 0.92f).coerceIn(0f, 0.92f)) }
-                    download(first.url, first.headers, v, tick); download(audio, first.headers, a, tick)
+                    fastDownload(first.url, first.headers, v, sizeOf(first.url, first.headers), tick); fastDownload(audio, first.headers, a, sizeOf(audio, first.headers), tick)
                     mux(v, a, made, first.webm)
                     final = made
                 } catch (e: Exception) {
@@ -407,16 +460,19 @@ object MediaGrab {
             if (final == null) {
                 val one = File(tmp, "one." + src.ext)
                 val share = if (src === first) total else 1f
-                download(src.url, src.headers, one) { n -> got += n; if (src === first) onProgress((got / share * 0.92f).coerceIn(0f, 0.92f)) }
+                fastDownload(src.url, src.headers, one, sizeOf(src.url, src.headers)) { n -> got += n; if (src === first) onProgress((got / share * 0.92f).coerceIn(0f, 0.92f)) }
                 final = one
             }
             var cur: File = final!!
             // the file says what it is: a gif stays a gif, and a looping clip that X calls a gif is made a real gif file
             val head = ByteArray(12).also { b -> cur.inputStream().use { it.read(b) } }
             val isGifFile = head[0] == 'G'.code.toByte() && head[1] == 'I'.code.toByte() && head[2] == 'F'.code.toByte()
+            note = null
             if (!isGifFile && info.kind == "gif") {
-                val g = runCatching { toGif(cur) }.getOrNull()
-                if (g != null) { val gf = File(tmp, "clip.gif"); gf.writeBytes(g); cur = gf }
+                val g = runCatching { toGif(cur) }
+                val bytes = g.getOrNull()
+                if (bytes != null) { val gf = File(tmp, "clip.gif"); gf.writeBytes(bytes); cur = gf }
+                else note = "Saved as a looping video, a gif could not be made" + (g.exceptionOrNull()?.let { " (" + (it.message ?: it.javaClass.simpleName).take(40) + ")" } ?: "")
             }
             val file: File = cur
             val ext = if (isGifFile || file.extension == "gif") "gif" else file.extension

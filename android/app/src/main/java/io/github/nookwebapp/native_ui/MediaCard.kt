@@ -19,6 +19,7 @@ import kotlinx.coroutines.launch
 
 // where each "/media" card stands on this phone: the share of the file that came, or the place it was saved at
 class MediaDl {
+    companion object { val shared = MediaDl(); val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main) }
     class St(val progress: Float, val saved: String?, val error: String?)
     val state = mutableStateMapOf<String, St>()
     fun saved(ctx: android.content.Context, id: String): String? = state[id]?.saved ?: ctx.getSharedPreferences("mdl", 0).getString(id, null)
@@ -59,12 +60,17 @@ fun MediaCard(m: LMsg) {
                     runCatching { openFile(ctx, Uri.parse(saved), card.optString("k")) }.onFailure { app.say("Could not open it. Look in your gallery") }
                 } else {
                     app.mdl.state[m.id] = MediaDl.St(0f, null, null)
-                    app.scope.launch {
+                    // the download belongs to the process, not to the screen: it goes on when the app is left or the screen is closed
+                    val title = card.optString("t").ifEmpty { "Nook" }
+                    MediaDl.scope.launch {
                         try {
-                            val uri = Keep.around(ctx) { MediaGrab.save(ctx, card.optString("u"), card.optString("q")) { p -> app.mdl.state[m.id] = MediaDl.St(p, null, null) } }
+                            val uri = Keep.around(ctx) {
+                                Keep.progress(ctx, title, 0)
+                                MediaGrab.save(ctx, card.optString("u"), card.optString("q")) { p -> app.mdl.state[m.id] = MediaDl.St(p, null, null); Keep.progress(ctx, title, (p * 100).toInt()) }
+                            }
                             app.mdl.keep(ctx, m.id, uri.toString())
                             app.mdl.state[m.id] = MediaDl.St(1f, uri.toString(), null)
-                            app.say("Saved in your gallery (Nook)")
+                            app.say(MediaGrab.note ?: "Saved in your gallery")
                         } catch (e: Exception) {
                             app.mdl.state[m.id] = MediaDl.St(0f, null, e.message ?: "failed")
                             app.say(if (e is MediaGrab.Fail) e.message ?: "Could not save it" else "Could not save it (" + (e.message ?: e.javaClass.simpleName).lineSequence().first().take(80) + ")")

@@ -25,6 +25,21 @@ object Keep {
         synchronized(this) { n = maxOf(0, n - 1); if (n > 0) return }
         runCatching { ctx.stopService(Intent(ctx, KeepService::class.java)) }
     }
+    // the notification of a download: its name and a bar from 0 to 100 (only when the number moved)
+    private var lastPct = -1; private var lastAt = 0L
+    fun progress(ctx: Context?, title: String, pct: Int) {
+        ctx ?: return
+        val now = System.currentTimeMillis()
+        if (pct == lastPct || (pct in 1..99 && now - lastAt < 400)) return
+        lastPct = pct; lastAt = now
+        runCatching {
+            val nm = ctx.getSystemService(NotificationManager::class.java)
+            if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel("nook_work") == null) nm.createNotificationChannel(NotificationChannel("nook_work", "Nook working", NotificationManager.IMPORTANCE_LOW))
+            val n = NotificationCompat.Builder(ctx, "nook_work").setSmallIcon(R.drawable.ic_stat).setContentTitle(title.take(60)).setContentText("$pct%")
+                .setProgress(100, pct.coerceIn(0, 100), false).setPriority(NotificationCompat.PRIORITY_LOW).setOngoing(true).setOnlyAlertOnce(true).setSilent(true).build()
+            nm.notify(7, n)
+        }
+    }
     suspend fun <T> around(ctx: Context?, f: suspend () -> T): T { begin(ctx); try { return f() } finally { end(ctx) } }
 }
 

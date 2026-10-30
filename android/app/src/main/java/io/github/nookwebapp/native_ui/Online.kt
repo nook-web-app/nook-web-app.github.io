@@ -20,6 +20,8 @@ class Online(val app: AppState) {
     var me by mutableStateOf<SbUser?>(null)
     // "loading" until the first answer, "error" when the posts could not be fetched, "ok" after a good answer
     var feedStatus by mutableStateOf("loading")
+    // the feed is asked for at once when this phone already passed the age check, before the ban and account checks are back
+    var feedEarly = false
     var feedTries = 0
     private var feedRetry: kotlinx.coroutines.Job? = null
     private var feedBusy = false

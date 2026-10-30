@@ -66,7 +66,7 @@ fun MediaCard(m: LMsg) {
                             app.say("Saved in your gallery (Nook)")
                         } catch (e: Exception) {
                             app.mdl.state[m.id] = MediaDl.St(0f, null, e.message ?: "failed")
-                            app.say(if (e is MediaGrab.Fail) e.message ?: "Could not save it" else "Could not save it. Check your connection")
+                            app.say(if (e is MediaGrab.Fail) e.message ?: "Could not save it" else "Could not save it (" + (e.message ?: e.javaClass.simpleName).lineSequence().first().take(80) + ")")
                         }
                     }
                 }

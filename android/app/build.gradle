@@ -2,7 +2,7 @@ plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android'; id 'a
 android {
     namespace 'io.github.nookwebapp.native_ui'
     compileSdk 34
-    defaultConfig { applicationId 'io.github.nookwebapp.nativeui'; minSdk 26; targetSdk 34; versionCode 33000; versionName '3.30.0' }
+    defaultConfig { applicationId 'io.github.nookwebapp.nativeui'; minSdk 26; targetSdk 34; versionCode 33001; versionName '3.30.1' }
     // the release key never lives in the repository: NOOK_KS points at it and NOOK_KS_PASS opens it;
     // without them a release build is signed with the local debug key so it still installs for testing
     def ks = System.getenv('NOOK_KS')
@@ -11,7 +11,7 @@ android {
     } } }
     // a release built without the release key is only fit for testing: say so loudly, and never publish it
     if (!ks) project.gradle.taskGraph.whenReady { g -> if (g.allTasks.any { it.name.startsWith('assembleRelease') || it.name.startsWith('bundleRelease') }) project.logger.warn('WARNING: NOOK_KS is not set, so this release build is signed with the local DEBUG key. Do not publish it.') }
-    buildTypes { release { signingConfig ks ? signingConfigs.release : signingConfigs.debug; minifyEnabled true; shrinkResources true; proguardFiles getDefaultProguardFile('proguard-android-optimize.txt') } }
+    buildTypes { release { signingConfig ks ? signingConfigs.release : signingConfigs.debug; minifyEnabled true; shrinkResources true; proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro' } }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = '17' }
     buildFeatures { compose true }
@@ -19,6 +19,8 @@ android {
     // the live test runs the app's own server code on the JVM, where Android's calls answer with nothing
     testOptions { unitTests.returnDefaultValues = true; unitTests.all { it.environment('NOOK_LIVE', System.getenv('NOOK_LIVE') ?: '') } }
 }
+// one jsoup for the whole build: the extractor of NewPipe needs a recent one, the test tools bring an older one
+configurations.all { resolutionStrategy.force 'org.jsoup:jsoup:1.17.2' }
 dependencies {
     implementation platform('androidx.compose:compose-bom:2024.06.00')
     implementation 'androidx.activity:activity-compose:1.9.0'
@@ -34,6 +36,8 @@ dependencies {
     implementation 'com.google.android.gms:play-services-fido:20.1.0'
     implementation 'com.google.firebase:firebase-messaging:23.4.1'
     implementation 'androidx.fragment:fragment:1.6.2'
+    // YouTube: the extractor of NewPipe works out the address of a video (signatures, throttling) the way the site's own player does
+    implementation 'com.github.TeamNewPipe:NewPipeExtractor:v0.26.5'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.json:json:20231013'
     testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'

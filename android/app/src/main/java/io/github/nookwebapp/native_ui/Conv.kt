@@ -153,7 +153,7 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
                                     val m = LMsg(uid(), link, Clock.now(), emptyList()).also { it.mcard = MediaGrab.cleanCard(MediaGrab.card(link, info)) }
                                     chat.msgs.add(m); app.persist()
                                 } catch (e: Exception) {
-                                    app.say(if (e is MediaGrab.Fail) e.message ?: "Could not get it" else "Could not get it. Check your connection")
+                                    app.say(if (e is MediaGrab.Fail) e.message ?: "Could not get it" else "Could not get it (" + (e.message ?: e.javaClass.simpleName).lineSequence().first().take(80) + ")")
                                 }
                             }
                         }

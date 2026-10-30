@@ -136,6 +136,10 @@ object MediaGrab {
     )
 
     private fun ytResolve(id: String): Pair<Info, Src> {
+        // the extractor of NewPipe first; the player of the phone apps (below) when it cannot
+        val first = runCatching { YtExtract.get(id) }
+        first.getOrNull()?.let { g -> return Info("youtube", g.title.ifEmpty { "YouTube video" }, g.author, g.thumb ?: "https://i.ytimg.com/vi/$id/hqdefault.jpg", g.dur, "video") to Src(g.url, "video/mp4", "mp4") }
+        val extractorWhy = first.exceptionOrNull()?.let { e -> if (e is Fail) e.message else (e.message ?: e.javaClass.simpleName) }.orEmpty().lineSequence().firstOrNull().orEmpty().take(120)
         var title = ""; var author = ""; var dur = 0
         var src: Src? = null
         var why = ""
@@ -147,7 +151,7 @@ object MediaGrab {
                 .post(body.toString().toRequestBody("application/json".toMediaType())).build()
             val j = try { http.newCall(req).execute().use { r -> JSONObject(r.body?.string() ?: "") } } catch (e: Exception) { why = "network"; continue }
             val ps = j.optJSONObject("playabilityStatus")
-            if (ps?.optString("status") != "OK") { why = ps?.optString("reason").orEmpty().ifEmpty { "not playable" }; continue }
+            if (ps?.optString("status") != "OK") { why = c.name + ": " + (ps?.optString("status").orEmpty() + " " + ps?.optString("reason").orEmpty()).trim(); continue }
             val det = j.optJSONObject("videoDetails")
             if (det?.optBoolean("isLive") == true || det?.optBoolean("isLiveContent") == true && det.optString("lengthSeconds") == "0") throw Fail("Live streams cannot be saved")
             title = det?.optString("title").orEmpty(); author = det?.optString("author").orEmpty(); dur = det?.optString("lengthSeconds")?.toIntOrNull() ?: 0
@@ -162,7 +166,7 @@ object MediaGrab {
             if (best != null) { src = Src(best.optString("url"), "video/mp4", "mp4", mapOf("User-Agent" to c.ua)); break }
             why = "no file for this video"
         }
-        val s = src ?: throw Fail(if (why.isEmpty()) "Could not get this video" else "Could not get this video ($why)")
+        val s = src ?: throw Fail("Could not get this video (" + listOf(extractorWhy, why).filter { it.isNotEmpty() }.joinToString("; ").ifEmpty { "not playable" } + ")")
         // the title and the picture come from the public card of the video when the player did not give them
         if (title.isEmpty()) {
             runCatching { JSONObject(get("https://www.youtube.com/oembed?format=json&url=" + java.net.URLEncoder.encode("https://www.youtube.com/watch?v=$id", "UTF-8"))) }.getOrNull()?.let { title = it.optString("title"); author = it.optString("author_name") }

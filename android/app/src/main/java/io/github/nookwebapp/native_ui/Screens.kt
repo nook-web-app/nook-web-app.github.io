@@ -75,9 +75,11 @@ fun Fab(icon: String, onClick: () -> Unit) {
 }
 
 // postList(): the posts, or the empty state when there are none
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 fun LazyListScope.postList(a: List<LPost>, empty: @Composable () -> Unit, lab: ((LPost) -> String?)? = null, pin: Boolean = false, replyTo: Boolean = false) {
     if (a.isEmpty()) item { empty() }
-    items(a, key = { it.id }) { PostCard(it, lab = lab?.invoke(it), pin = pin, replyTo = replyTo) }
+    // a post that arrives or moves slides into place instead of popping in
+    items(a, key = { it.id }) { Box(Modifier.animateItemPlacement()) { PostCard(it, lab = lab?.invoke(it), pin = pin, replyTo = replyTo) } }
 }
 
 // .empty with "Loading..."

@@ -85,6 +85,8 @@ suspend fun Online.boot() {
     if (Sb.user == null) { me = null; s.signedIn = false; app.root(Route.Auth); return }
     val okKey = "age-ok:" + u.id
     var verified = Cache.read(okKey)?.v == true
+    feedEarly = false
+    if (verified) { feedEarly = true; loadFeed() }
     val (ban, acct, ageQ) = coroutineScope {
         val a = async { Sb.get(Q("bans").select("user_id").eq("user_id", u.id)) }
         val b = async { Sb.get(Q("accounts").select("id, deactivated, username, avatar, display_name").eq("id", u.id)) }
@@ -132,7 +134,7 @@ suspend fun Online.boot() {
     if (ageHeld) { app.root(Route.Age); return }
     if (app.top == Route.Auth || app.top == Route.Banned || app.top == Route.Age) app.root(Route.Home)
     app.notice?.let { if (it.startsWith("Welcome")) { app.say(it); app.notice = null } }
-    loadFeed()
+    if (!feedEarly) loadFeed()
     app.scope.launch { loadSocial() }
     app.scope.launch { runCatching { ensureE2E() } }
     startRealtime()

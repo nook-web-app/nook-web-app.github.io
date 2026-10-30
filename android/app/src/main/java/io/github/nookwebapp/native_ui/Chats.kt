@@ -181,13 +181,13 @@ fun DmScreen(id: String) {
                 // one of Zenith's messages pulled to the right starts an answer to him (the owner's chats only)
                 val mineM = m.sender == on.uid && !m.ai
                 val anim = remember(m) { (if (!m.fresh) MsgAnim.None else if (!mineM) MsgAnim.In else if (m.tmp) MsgAnim.Send else MsgAnim.Land).also { m.fresh = false } }
-                Box(Modifier.msgIn(anim, mineM)) { SwipeReply(m.ai && zOn(), { l.fill?.invoke("@zenith ") }) { DmBubble(m, id, open === m, onTap = { open = if (open === m) null else m }) {
+                FoldAway(m.leaving) { Box(Modifier.msgIn(anim, mineM)) { SwipeReply(m.ai && zOn(), { l.fill?.invoke("@zenith ") }) { DmBubble(m, id, open === m, onTap = { open = if (open === m) null else m }) {
                     val body = m.text ?: m.body
                     app.open(listOfNotNull(
                         if (body.isNotEmpty()) SheetItem("Copy message", "copy") { app.clipboard(body) } else null,
                         if (m.sender == on.uid && m.id != null) SheetItem("Delete message", "trash", danger = true) { app.confirm("Delete this message?", "Delete") { on.deleteDm(m, id) } } else null,
                     ).ifEmpty { return@DmBubble })
-                } } }
+                } } } }
             }
             // .trow: the typing dots, in a slot that grows smoothly
             item(key = "typing") {

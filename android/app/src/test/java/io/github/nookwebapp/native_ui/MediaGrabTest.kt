@@ -15,6 +15,32 @@ class MediaGrabTest {
         assertNull(MediaGrab.command("/media a b"))
     }
 
+    @Test fun qualities() {
+        assertEquals("2k", MediaGrab.quality("/media /2k https://youtu.be/abcdefghijk"))
+        assertEquals("https://youtu.be/abcdefghijk", MediaGrab.command("/media /2K https://youtu.be/abcdefghijk"))
+        assertEquals("4k", MediaGrab.quality("/media /4k https://x.com/a/status/1"))
+        assertEquals("", MediaGrab.quality("/media https://x.com/a/status/1"))
+        assertEquals("720p", MediaGrab.quality("/media /720p https://x.com/a/status/1"))
+        assertNull(MediaGrab.command("/media /8k https://x.com/a/status/1"))
+        assertEquals(2160, MediaGrab.maxHeight("4k")); assertEquals(1440, MediaGrab.maxHeight("2k")); assertEquals(1080, MediaGrab.maxHeight("")); assertEquals(720, MediaGrab.maxHeight("720p"))
+        assertEquals("youtube.com", MediaGrab.domain("youtube")); assertEquals("x.com", MediaGrab.domain("x")); assertEquals("instagram.com", MediaGrab.domain("instagram"))
+    }
+
+    @Test fun xSizes() {
+        val j = JSONObject("""{"mediaDetails":[{"type":"video","video_info":{"variants":[
+            {"content_type":"application/x-mpegURL","url":"https://video.twimg.com/a.m3u8"},
+            {"bitrate":256000,"content_type":"video/mp4","url":"https://video.twimg.com/v/vid/480x270/a.mp4"},
+            {"bitrate":832000,"content_type":"video/mp4","url":"https://video.twimg.com/v/vid/640x360/a.mp4"},
+            {"bitrate":2176000,"content_type":"video/mp4","url":"https://video.twimg.com/v/vid/1280x720/a.mp4"},
+            {"bitrate":10368000,"content_type":"video/mp4","url":"https://video.twimg.com/v/vid/1920x1080/a.mp4"}]}}]}""")
+        val f = MediaGrab.xFiles(j)
+        assertEquals(4, f.size)
+        assertEquals("https://video.twimg.com/v/vid/1920x1080/a.mp4", MediaGrab.xPick(f, 1080))
+        assertEquals("https://video.twimg.com/v/vid/1280x720/a.mp4", MediaGrab.xPick(f, 720))
+        assertEquals("https://video.twimg.com/v/vid/1920x1080/a.mp4", MediaGrab.xPick(f, 2160))
+        assertEquals("https://video.twimg.com/v/vid/480x270/a.mp4", MediaGrab.xPick(f, 100))
+    }
+
     @Test fun sites() {
         assertEquals("x", MediaGrab.site("https://x.com/jack/status/20"))
         assertEquals("x", MediaGrab.site("https://twitter.com/jack/status/20?s=20"))
@@ -93,5 +119,9 @@ class MediaGrabTest {
         assertNull(MediaGrab.cleanCard(JSONObject(ok.toString()).put("u", "https://evil.example/watch?v=jNQXAC9IVRw")))
         assertNull(MediaGrab.cleanCard(null))
         assertEquals("", MediaGrab.cleanCard(JSONObject(ok.toString()).put("i", "javascript:alert(1)"))!!.optString("i"))
+        // the first frame of a video travels inside the card
+        assertTrue(MediaGrab.cleanCard(JSONObject(ok.toString()).put("i", "data:image/jpeg;base64,/9j/4AAQ").put("q", "2k"))!!.optString("i").startsWith("data:image/jpeg"))
+        assertEquals("2k", MediaGrab.cleanCard(JSONObject(ok.toString()).put("q", "2k"))!!.optString("q"))
+        assertEquals("", MediaGrab.cleanCard(JSONObject(ok.toString()).put("q", "8k"))!!.optString("q"))
     }
 }

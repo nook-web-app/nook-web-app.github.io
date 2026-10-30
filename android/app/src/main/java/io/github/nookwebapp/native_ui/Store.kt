@@ -76,6 +76,8 @@ class LMsg(val id: String, text: String, t: Long, imgs: List<String>, val ai: Bo
     var zpost by mutableStateOf(zpost)
     // "/media": the card of a video kept in a note (link, title, picture), see MediaGrab
     var mcard by mutableStateOf<JSONObject?>(null)
+    // folding away after a delete (foldAway of the web app)
+    var leaving by mutableStateOf(false)
     // the copies of the photos of a chat with Zenith that went up to the server: [{ h, d }]
     var zm: JSONArray? = null
 }

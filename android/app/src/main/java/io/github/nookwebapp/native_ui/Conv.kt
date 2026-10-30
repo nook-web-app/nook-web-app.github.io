@@ -86,12 +86,12 @@ fun ConvScreen(id: String) {
             items(chat.msgs.drop(shownFrom), key = { it.id }) { m ->
                 // pulling one of Zenith's messages to the right starts an answer to him
                 val anim = remember(m.id) { if (m.id in had) MsgAnim.None else if (m.ai) MsgAnim.In else MsgAnim.Send }
-                Box(Modifier.msgIn(anim, !m.ai)) { SwipeReply(m.ai, { fill[0]?.invoke("@zenith ") }) { Bubble(m, open == m.id, onTap = { open = if (open == m.id) null else m.id }) {
+                FoldAway(m.leaving) { Box(Modifier.msgIn(anim, !m.ai)) { SwipeReply(m.ai, { fill[0]?.invoke("@zenith ") }) { Bubble(m, open == m.id, onTap = { open = if (open == m.id) null else m.id }) {
                     app.open(listOfNotNull(
                         if (m.text.isNotEmpty()) SheetItem("Copy message", "copy") { app.clipboard(m.text) } else null,
-                        SheetItem("Delete message", "trash", danger = true) { chat.msgs.remove(m); app.persist() },
+                        SheetItem("Delete message", "trash", danger = true) { app.foldOut(chat.msgs, m) { m.leaving = it } },
                     ))
-                } } }
+                } } } }
             }
             // his answer while it is still being typed out
             if (typing != null) item(key = "zen-typing") {
@@ -140,6 +140,7 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
             Box(Modifier.size(42.dp).alpha(if (can) 1f else 0.45f).clip(CircleShape).background(c.fill).pressTap(CircleShape, enabled = can) {
                 // "/media <link>" in a note: the card of the video is made instead of a message with the words
                 val link = if (chat.isNotes && pend.isEmpty()) MediaGrab.command(text) else null
+                val qual = MediaGrab.quality(text)
                 if (link != null) {
                     when {
                         link.isEmpty() -> app.say("Type /media and a link of YouTube, Instagram or X")
@@ -149,8 +150,8 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
                             app.say("Getting the video...")
                             app.scope.launch {
                                 try {
-                                    val (info, _) = MediaGrab.resolve(link)
-                                    val m = LMsg(uid(), "/media $link", Clock.now(), emptyList()).also { it.mcard = MediaGrab.cleanCard(MediaGrab.card(link, info)) }
+                                    val (info, _) = MediaGrab.resolve(link, qual)
+                                    val m = LMsg(uid(), "/media " + (if (qual.isNotEmpty()) "/$qual " else "") + link, Clock.now(), emptyList()).also { it.mcard = MediaGrab.cleanCard(MediaGrab.card(link, info, qual)) }
                                     chat.msgs.add(m); app.persist()
                                 } catch (e: Exception) {
                                     app.say(if (e is MediaGrab.Fail) e.message ?: "Could not get it" else "Could not get it (" + (e.message ?: e.javaClass.simpleName).lineSequence().first().take(80) + ")")
@@ -183,7 +184,7 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onLong: () -> Unit
         if (m.imgs.isNotEmpty()) Box(Modifier.width(minOf(w * 0.82f, 320.dp)).clip(RoundedCornerShape(Rad.bubble))) { ImgGrid(m.imgs, whenText(m.t), framed = false) }
         // "/media link": the command stays in view with its link shortened, and the card of the video answers on the left
         m.mcard?.let { card ->
-            MediaCmd(card.optString("u"), tap, onLong)
+            MediaCmd(card.optString("u"), card.optString("s"), card.optString("q"), tap, onLong)
             Box(Modifier.align(Alignment.Start).padding(top = 4.dp)) { MediaCard(m) }
         }
         m.rpost?.let { Box(Modifier.padding(top = if (m.imgs.isNotEmpty()) 4.dp else 0.dp)) { RCard(it.id, it.u) } }

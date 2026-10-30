@@ -359,3 +359,12 @@ fun Modifier.shimmer(): Modifier = composed {
         drawRect(Brush.horizontalGradient(0.3f to Color.Transparent, 0.5f to c.line, 0.7f to Color.Transparent, startX = x, endX = x + w))
     }
 }
+
+// foldAway(): the height of a row goes to nothing in .2 s while it fades in .16 s; nothing plays when the row comes in
+@Composable
+fun FoldAway(gone: Boolean, content: @Composable () -> Unit) {
+    androidx.compose.animation.AnimatedVisibility(
+        !gone, enter = androidx.compose.animation.EnterTransition.None,
+        exit = androidx.compose.animation.shrinkVertically(androidx.compose.animation.core.tween(200)) + androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(160)),
+    ) { content() }
+}

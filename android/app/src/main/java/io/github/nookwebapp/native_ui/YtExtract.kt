@@ -39,20 +39,20 @@ object YtExtract {
 
     private fun sizeOf(item: org.schabi.newpipe.extractor.services.youtube.ItagItem?): Long = item?.contentLength?.takeIf { it > 0 } ?: 0L
 
-    // up to 4K, but above full HD only streams of 30 pictures a second (a 4K video that has only 60 goes down to the next size); the
-    // codec AV1 is left out, the phone's file joiner does not take it everywhere
-    fun get(id: String): Got {
+    // the tallest picture the size asked for allows (4K only with 30 pictures a second; a 4K video that has only 60 goes down to the
+    // next size) and, at that size, the one with the most data; the codec AV1 is left out, the phone's file joiner does not take it everywhere
+    fun get(id: String, maxH: Int, maxFps: Int): Got {
         init()
         val info = StreamInfo.getInfo(ServiceList.YouTube, "https://www.youtube.com/watch?v=$id")
         val whole = info.videoStreams.filter { !it.isVideoOnly && it.isUrl && it.format?.mimeType == "video/mp4" }.maxByOrNull { it.height }
             ?: throw MediaGrab.Fail("YouTube gave no file with sound for this video")
         val plain = Part(whole.content, sizeOf(whole.itagItem), false)
         val dash = info.videoOnlyStreams.filter { s ->
-            s.isUrl && s.isVideoOnly && s.height in 1..2160 && s.codec?.startsWith("av01", true) != true &&
-                (s.format?.mimeType == "video/mp4" || s.format?.mimeType == "video/webm") && (s.height <= 1080 || s.fps <= 30)
-        }.maxWithOrNull(compareBy({ it.height }, { it.fps }))
+            s.isUrl && s.isVideoOnly && s.height in 1..maxH && s.codec?.startsWith("av01", true) != true &&
+                (s.format?.mimeType == "video/mp4" || s.format?.mimeType == "video/webm") && (s.height <= 1080 || s.fps <= maxFps) && (maxFps >= 60 || s.fps <= maxFps)
+        }.maxWithOrNull(compareBy({ it.height }, { it.fps }, { it.bitrate }))
         var video: Part? = null; var audio: Part? = null
-        if (dash != null && dash.height > whole.height) {
+        if (dash != null && dash.height >= whole.height) {
             val webm = dash.format?.mimeType == "video/webm"
             // sound of the same kind of file: m4a goes with mp4, opus with webm
             val a = info.audioStreams.filter { it.isUrl && it.format?.mimeType == (if (webm) "audio/webm" else "audio/mp4") }.maxByOrNull { it.averageBitrate }

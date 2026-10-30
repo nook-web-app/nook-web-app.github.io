@@ -10,6 +10,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- nothing of the app (logins, the message key, chats) goes into phone backups or to another phone by cable, and
          nothing is ever sent without encryption -->
+    <!-- the phone's gallery and video player are looked for, to open a saved video without asking -->
+    <queries>
+        <intent><action android:name="android.intent.action.VIEW" /><data android:mimeType="video/*" /></intent>
+        <intent><action android:name="android.intent.action.VIEW" /><data android:mimeType="image/*" /></intent>
+    </queries>
     <application android:name=".NookApplication" android:icon="@mipmap/ic_launcher" android:label="Nook" android:supportsRtl="true" android:theme="@style/Theme.Nook"
         android:allowBackup="false" android:fullBackupContent="false" android:dataExtractionRules="@xml/no_backup" android:usesCleartextTraffic="false">
         <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize" android:launchMode="singleTask"

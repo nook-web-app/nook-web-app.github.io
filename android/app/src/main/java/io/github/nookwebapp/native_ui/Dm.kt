@@ -36,6 +36,8 @@ class DmMsg(val id: Long?, val sender: String, val recipient: String, val body: 
     var plain = false
     // shown while it is still on its way (.tmpm)
     var tmp by mutableStateOf(false)
+    // folding away after a delete (foldAway of the web app)
+    var leaving by mutableStateOf(false)
     var fresh = false
     val t get() = parseIso(created)
     fun sig() = body + "|" + (0 until media.length()).joinToString(",") { media.optJSONObject(it)?.optString("url").orEmpty() }
@@ -653,7 +655,7 @@ private fun Online.inboxDrop(other: String, id: Long) {
 fun Online.deleteDm(m: DmMsg, other: String) {
     val id = m.id ?: return
     val paths = (0 until m.media.length()).mapNotNull { Sb.pathOf(m.media.optJSONObject(it)?.optString("url"), "dm-media") }
-    dm.live?.rows?.remove(m)
+    app.foldOut(dm.live?.rows, m) { m.leaving = it }
     app.scope.launch {
         val r = Sb.delete(Q("messages").eq("id", id), select = "id")
         if (!r.ok || r.rows.isEmpty()) { app.say(if (!r.ok) "Could not delete that message. " + plainErr(r.error?.message, "Try again") else "Could not delete that message"); dm.live?.let { if (it.id == other) refreshLive(it, full = true) }; return@launch }
@@ -672,7 +674,7 @@ suspend fun Online.deleteDmMedia(m: DmMsg, i: Int, other: String): Boolean {
     if (!r.ok) { app.say("Could not delete that photo"); return false }
     path?.let { app.scope.launch { Sb.remove("dm-media", listOf(it)) } }
     val d = r.data as? JSONObject
-    if (d?.optBoolean("deleted") == true) { threadDrop(other, id); inboxDrop(other, id); dm.live?.rows?.remove(m) }
+    if (d?.optBoolean("deleted") == true) { threadDrop(other, id); inboxDrop(other, id); app.foldOut(dm.live?.rows, m) { m.leaving = it } }
     else d?.optJSONArray("media")?.let { m.media = it }
     app.say("Photo deleted")
     return true
@@ -1020,7 +1022,7 @@ private fun Online.onIncomingNote(n: JSONObject) {
 
 private fun Online.onDeletedMsg(id: Long) {
     if (id == 0L) return
-    dm.live?.let { l -> l.rows.firstOrNull { it.id == id }?.let { m -> l.rows.remove(m); threadDrop(l.id, id) } }
+    dm.live?.let { l -> l.rows.firstOrNull { it.id == id }?.let { m -> app.foldOut(l.rows, m) { m.leaving = it }; threadDrop(l.id, id) } }
     app.scope.launch { delay(300); refreshBadge(false); runCatching { warmInbox() } }
 }
 

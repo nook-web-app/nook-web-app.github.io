@@ -281,6 +281,13 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
         persist(); say("You will see less like this")
     }
 
+    // a message that is deleted folds away (its height goes to nothing while it fades, as foldAway of the web app) and then leaves the list
+    fun <T> foldOut(list: MutableList<T>?, item: T, leave: (Boolean) -> Unit) {
+        list ?: return
+        leave(true)
+        scope.launch { kotlinx.coroutines.delay(280); list.remove(item); persist() }
+    }
+
     fun newChat() {
         val c = LChat(uid(), if (store.chats.isNotEmpty()) "Chat " + (store.chats.size + 1) else "Notes to self", System.currentTimeMillis())
         store.chats.add(c); persist(); go(Route.Conv(c.id))

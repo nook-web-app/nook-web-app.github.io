@@ -49,22 +49,19 @@ fun MediaCard(m: LMsg) {
             T(meta, Fs.xs, color = c.muted)
             val label = when {
                 busy -> if (st!!.progress > 0f) "Downloading " + (st.progress * 100).toInt() + "%" else "Downloading..."
-                saved != null -> "Saved. Open"
+                saved != null -> "Open"
                 st?.error != null -> "Try again"
                 else -> "Download"
             }
             Pill(label, Btn.Pri, small = true, enabled = !busy, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
                 ctx ?: return@Pill
                 if (saved != null && st?.error == null) {
-                    runCatching {
-                        val kind = if (card.optString("k") == "image") "image/*" else "video/*"
-                        ctx.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(saved), kind).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION))
-                    }.onFailure { app.say("Could not open it. Look in your gallery") }
+                    runCatching { openFile(ctx, Uri.parse(saved), card.optString("k")) }.onFailure { app.say("Could not open it. Look in your gallery") }
                 } else {
                     app.mdl.state[m.id] = MediaDl.St(0f, null, null)
                     app.scope.launch {
                         try {
-                            val uri = Keep.around(ctx) { MediaGrab.save(ctx, card.optString("u")) { p -> app.mdl.state[m.id] = MediaDl.St(p, null, null) } }
+                            val uri = Keep.around(ctx) { MediaGrab.save(ctx, card.optString("u"), card.optString("q")) { p -> app.mdl.state[m.id] = MediaDl.St(p, null, null) } }
                             app.mdl.keep(ctx, m.id, uri.toString())
                             app.mdl.state[m.id] = MediaDl.St(1f, uri.toString(), null)
                             app.say("Saved in your gallery (Nook)")
@@ -81,25 +78,40 @@ fun MediaCard(m: LMsg) {
 }
 
 // the picture of the card comes from the site itself, so it is loaded on its own, like the picture of a link
+// the file opens in the phone's own gallery or player at once, without the list "open with" (the only one asked when there is none)
+private fun openFile(ctx: android.content.Context, uri: Uri, kind: String) {
+    val type = ctx.contentResolver.getType(uri) ?: if (kind == "image" || kind == "gif") "image/*" else "video/*"
+    val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, type).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    val pm = ctx.packageManager
+    val def = pm.resolveActivity(view, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+    if (def == null || def.activityInfo.packageName == "android") {
+        val all = pm.queryIntentActivities(view, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+        val best = all.firstOrNull { Regex("gallery|photos|video|player|media", RegexOption.IGNORE_CASE).containsMatchIn(it.activityInfo.packageName) }
+            ?: all.firstOrNull { it.activityInfo.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM != 0 } ?: all.firstOrNull()
+        if (best != null) view.setPackage(best.activityInfo.packageName)
+    }
+    ctx.startActivity(view)
+}
+
 @Composable
 private fun LinkPicBox(src: String) {
     if (androidx.compose.ui.platform.LocalInspectionMode.current || Photos.sync) return
     val ctx = androidx.compose.ui.platform.LocalContext.current
-    val req = remember(src) { coil.request.ImageRequest.Builder(ctx).data(src).setHeader("Referer", "").build() }
+    val req = remember(src) { coil.request.ImageRequest.Builder(ctx).data(Img.model(src)).setHeader("Referer", "").build() }
     coil.compose.AsyncImage(req, null, modifier = Modifier.fillMaxSize(), imageLoader = Img.loader(ctx), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
 }
 
-// the message of the command: "/media" and the word "link" in the colour of links in my own messages; a tap on "link" opens the page
+// the message of the command: "/media", the size if one was typed, and the name of the site in the colour of links in my own messages; a tap on the name opens the page
 @Composable
-fun MediaCmd(url: String, tap: () -> Unit, onLong: () -> Unit) {
+fun MediaCmd(url: String, site: String, quality: String, tap: () -> Unit, onLong: () -> Unit) {
     val c = LocalNook.current
     val uri = androidx.compose.ui.platform.LocalUriHandler.current
     val shape = RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.xs, Rad.bubble)
-    val ann = remember(url) {
+    val ann = remember(url, site, quality) {
         androidx.compose.ui.text.buildAnnotatedString {
-            append("/media ")
+            append("/media " + (if (quality.isNotEmpty()) "/$quality " else ""))
             pushStringAnnotation("url", url)
-            withStyle(androidx.compose.ui.text.SpanStyle(color = androidx.compose.ui.graphics.Color.White, textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline)) { append("link") }
+            withStyle(androidx.compose.ui.text.SpanStyle(color = androidx.compose.ui.graphics.Color.White)) { append(MediaGrab.domain(site)) }
             pop()
         }
     }

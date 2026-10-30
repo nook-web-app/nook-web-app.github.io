@@ -78,9 +78,9 @@ class Shots {
         shot("45-age", start = Route.Age)
         shot("50-offline") { online = false }
         shot("52-media-card") {
-            val card = org.json.JSONObject().put("u", "https://youtu.be/jNQXAC9IVRw").put("s", "youtube").put("t", "Me at the zoo").put("a", "jawed").put("k", "video").put("d", 19)
+            val card = org.json.JSONObject().put("u", "https://youtu.be/jNQXAC9IVRw").put("s", "youtube").put("t", "Me at the zoo").put("a", "jawed").put("k", "video").put("d", 1235).put("z", 700_000_000L)
             store.chats.add(LChat("c-media", "Notes to self", System.currentTimeMillis(), listOf(
-                LMsg("m-media", "https://youtu.be/jNQXAC9IVRw", System.currentTimeMillis(), emptyList()).also { it.mcard = card },
+                LMsg("m-media", "/media https://youtu.be/jNQXAC9IVRw", System.currentTimeMillis(), emptyList()).also { it.mcard = card },
                 LMsg("m-text", "saved for later", System.currentTimeMillis(), emptyList()))))
             go(Route.Conv("c-media"))
         }

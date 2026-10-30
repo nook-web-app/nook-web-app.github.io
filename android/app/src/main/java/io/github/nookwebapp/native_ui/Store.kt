@@ -135,6 +135,8 @@ class Store(private val dir: File?) {
     val pendDel = mutableListOf<String>()
     // link previews: url -> { t, d, i, s, v, f }
     val previews = LinkedHashMap<String, JSONObject>()
+    // the people this account follows, kept so the order of the home feed is right from the first frame
+    var folSeed: Set<String> = emptySet()
     // Zenith's state (S.zen) and the notes sync bookkeeping (S.notesSync), kept as the web app keeps them
     var zen = JSONObject().put("log", JSONArray()).put("next", 0).put("since", System.currentTimeMillis())
     var notesSync: JSONObject? = null
@@ -202,6 +204,7 @@ class Store(private val dir: File?) {
         pendDel.clear(); pendDel.addAll(j.optJSONArray("pendDel").strings())
         previews.clear(); j.optJSONObject("previews")?.let { o -> o.keys().forEach { k -> o.optJSONObject(k)?.let { previews[k] = it } } }
         j.optJSONObject("zen")?.let { zen = it }
+        folSeed = j.optJSONArray("fol").strings().toSet()
         notesSync = j.optJSONObject("notesSync")
     }
 
@@ -234,6 +237,7 @@ class Store(private val dir: File?) {
         sv?.let { s -> j.put("sv", JSONObject().apply { s.toList().forEach { put(it, 1) } }) }
         j.put("pendDel", JSONArray(pendDel.toList()))
         j.put("previews", JSONObject().apply { previews.toList().forEach { (k, v) -> put(k, v) } })
+        j.put("fol", JSONArray(folSeed.toList()))
         j.put("zen", zen)
         notesSync?.let { j.put("notesSync", it) }
         return j
@@ -247,7 +251,7 @@ class Store(private val dir: File?) {
         posts.clear(); chats.clear(); lists.clear(); hidden.clear(); lessWords.clear(); lessA.clear(); dmPins.clear(); draft = null
         profile.name = "Me"; profile.handle = "me"; profile.bio = ""; profile.avatar = null; profile.banner = null; profile.bannerTheme = "default"
         profile.handleChangedAt = null; profile.avSynced = null; profile.bnSynced = null; profile.avSrv = null; profile.bnSrv = null
-        sv = null; pendDel.clear(); previews.clear(); notesSync = null; localUid = null
+        sv = null; pendDel.clear(); previews.clear(); folSeed = emptySet(); notesSync = null; localUid = null
         zen = JSONObject().put("log", JSONArray()).put("next", 0).put("since", System.currentTimeMillis())
         signedIn = false
         mediaDir?.listFiles()?.forEach { it.delete() }

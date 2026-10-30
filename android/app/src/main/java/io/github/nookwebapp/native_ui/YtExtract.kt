@@ -14,8 +14,6 @@ import java.util.concurrent.TimeUnit
 // YouTube through the extractor of NewPipe: it reads the page and the player of the site the way the site's own player does,
 // so the address of a file comes out right (signature, throttling) without a key of ours
 object YtExtract {
-    class Got(val title: String, val author: String, val dur: Int, val thumb: String?, val url: String)
-
     private class Dl : Downloader() {
         private val http = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
         override fun execute(req: Request): Response {
@@ -35,13 +33,32 @@ object YtExtract {
     @Volatile private var ready = false
     private fun init() { if (!ready) synchronized(this) { if (!ready) { NewPipe.init(Dl()); ready = true } } }
 
-    // the best file with picture and sound together (mp4); null with the reason when YouTube gives none
+    class Part(val url: String, val size: Long, val webm: Boolean)
+    // plain: one file with picture and sound together (up to 720p); video and audio: the best picture and sound as two files
+    class Got(val title: String, val author: String, val dur: Int, val thumb: String?, val plain: Part, val video: Part?, val audio: Part?)
+
+    private fun sizeOf(item: org.schabi.newpipe.extractor.services.youtube.ItagItem?): Long = item?.contentLength?.takeIf { it > 0 } ?: 0L
+
+    // up to 4K, but above full HD only streams of 30 pictures a second (a 4K video that has only 60 goes down to the next size); the
+    // codec AV1 is left out, the phone's file joiner does not take it everywhere
     fun get(id: String): Got {
         init()
         val info = StreamInfo.getInfo(ServiceList.YouTube, "https://www.youtube.com/watch?v=$id")
-        val best = info.videoStreams.filter { !it.isVideoOnly && it.isUrl && it.format?.mimeType == "video/mp4" }.maxByOrNull { it.height }
+        val whole = info.videoStreams.filter { !it.isVideoOnly && it.isUrl && it.format?.mimeType == "video/mp4" }.maxByOrNull { it.height }
             ?: throw MediaGrab.Fail("YouTube gave no file with sound for this video")
+        val plain = Part(whole.content, sizeOf(whole.itagItem), false)
+        val dash = info.videoOnlyStreams.filter { s ->
+            s.isUrl && s.isVideoOnly && s.height in 1..2160 && s.codec?.startsWith("av01", true) != true &&
+                (s.format?.mimeType == "video/mp4" || s.format?.mimeType == "video/webm") && (s.height <= 1080 || s.fps <= 30)
+        }.maxWithOrNull(compareBy({ it.height }, { it.fps }))
+        var video: Part? = null; var audio: Part? = null
+        if (dash != null && dash.height > whole.height) {
+            val webm = dash.format?.mimeType == "video/webm"
+            // sound of the same kind of file: m4a goes with mp4, opus with webm
+            val a = info.audioStreams.filter { it.isUrl && it.format?.mimeType == (if (webm) "audio/webm" else "audio/mp4") }.maxByOrNull { it.averageBitrate }
+            if (a != null) { video = Part(dash.content, sizeOf(dash.itagItem), webm); audio = Part(a.content, sizeOf(a.itagItem), webm) }
+        }
         val thumb = info.thumbnails.maxByOrNull { it.height }?.url?.takeIf { it.startsWith("https://") }
-        return Got(info.name, info.uploaderName.orEmpty(), info.duration.toInt().coerceAtLeast(0), thumb, best.content)
+        return Got(info.name, info.uploaderName.orEmpty(), info.duration.toInt().coerceAtLeast(0), thumb, plain, video, audio)
     }
 }

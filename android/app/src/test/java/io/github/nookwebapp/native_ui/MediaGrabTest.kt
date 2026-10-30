@@ -57,18 +57,36 @@ class MediaGrabTest {
         try { MediaGrab.xParse(JSONObject("""{"user":{"screen_name":"a"},"text":"words only"}""")); fail() } catch (e: MediaGrab.Fail) { }
     }
 
-    @Test fun instagram() {
-        val html = """<script>{"shortcode_media":{"video_url":"https:\/\/scontent.cdninstagram.com\/v\/t50\/a.mp4?x=1&y=2","display_url":"https:\/\/scontent.cdninstagram.com\/v\/a.jpg","owner":{"username":"some.one"}}}</script>"""
-        val (info, src) = MediaGrab.igParse(html)
+    @Test fun xFromTheOpenService() {
+        val j = JSONObject("""{"code":200,"tweet":{"author":{"name":"Nasa","screen_name":"nasa"},"media":{"videos":[
+            {"type":"video","width":1280,"height":720,"url":"https://video.twimg.com/a/720.mp4","thumbnail_url":"https://pbs.twimg.com/a.jpg","duration":12.5},
+            {"type":"video","width":1920,"height":1080,"url":"https://video.twimg.com/a/1080.mp4","thumbnail_url":"https://pbs.twimg.com/a.jpg","duration":12.5}]}}}""")
+        val (info, src) = MediaGrab.xFromFx(j)
+        assertEquals("https://video.twimg.com/a/1080.mp4", src.url); assertEquals(12, info.dur); assertEquals("Nasa (@nasa)", info.title)
+        try { MediaGrab.xFromFx(JSONObject("""{"tweet":{"author":{"screen_name":"a"},"media":{"photos":[{"url":"https://pbs.twimg.com/a.jpg"}]}}}""")); fail("a post with only pictures must be refused") } catch (e: MediaGrab.Fail) { assertTrue(e.message!!.contains("no video")) }
+        try { MediaGrab.xFromFx(JSONObject("""{"code":404}""")); fail() } catch (e: MediaGrab.Fail) { }
+    }
+
+    @Test fun instagramPage() {
+        val html = """<html><head><meta property="og:title" content="Instagram (@some.one)" /><meta property="og:video" content="https://scontent.cdninstagram.com/v/t50/a.mp4?x=1&amp;y=2" /><meta property="og:image" content="https://scontent.cdninstagram.com/v/a.jpg" /></head></html>"""
+        val (info, src) = MediaGrab.igFromHtml(html)
         assertEquals("https://scontent.cdninstagram.com/v/t50/a.mp4?x=1&y=2", src.url)
         assertEquals("@some.one", info.author); assertEquals("video", info.kind)
-        val pic = MediaGrab.igParse("""{"display_url":"https:\/\/scontent.cdninstagram.com\/v\/a.jpg","username":"x"}""")
+        val pic = MediaGrab.igFromHtml("""<meta content="https://scontent.cdninstagram.com/v/a.jpg" property="og:image"/>""")
         assertEquals("image", pic.first.kind); assertEquals("jpg", pic.second.ext)
-        try { MediaGrab.igParse("<html>login</html>"); fail() } catch (e: MediaGrab.Fail) { }
+        try { MediaGrab.igFromHtml("<html>login</html>"); fail() } catch (e: MediaGrab.Fail) { }
+    }
+
+    @Test fun sizes() {
+        assertEquals("", MediaGrab.sizeText(0))
+        assertEquals("850 KB", MediaGrab.sizeText(850_000))
+        assertEquals("1.5 MB", MediaGrab.sizeText(1_500_000))
+        assertEquals("700 MB", MediaGrab.sizeText(700_000_000))
+        assertEquals("1.2 GB", MediaGrab.sizeText(1_230_000_000))
     }
 
     @Test fun cleanCard() {
-        val ok = JSONObject().put("u", "https://youtu.be/jNQXAC9IVRw").put("s", "youtube").put("t", "Me at the zoo").put("a", "jawed").put("k", "video").put("d", 19).put("i", "https://i.ytimg.com/vi/x/hq.jpg")
+        val ok = JSONObject().put("u", "https://youtu.be/jNQXAC9IVRw").put("s", "youtube").put("t", "Me at the zoo").put("a", "jawed").put("k", "video").put("d", 19).put("z", 12345678L).put("i", "https://i.ytimg.com/vi/x/hq.jpg")
         assertNotNull(MediaGrab.cleanCard(ok))
         assertNull(MediaGrab.cleanCard(JSONObject(ok.toString()).put("u", "http://youtu.be/jNQXAC9IVRw")))
         assertNull(MediaGrab.cleanCard(JSONObject(ok.toString()).put("s", "x")))

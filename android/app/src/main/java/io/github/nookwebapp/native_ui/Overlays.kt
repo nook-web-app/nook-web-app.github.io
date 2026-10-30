@@ -158,7 +158,8 @@ fun ToastHost(app: AppState) {
     val t = app.toast
     if (t != null) shown = t
     LaunchedEffect(t) { if (t != null) { delay(if (t.label != null) 5000 else 1900); if (app.toast == t) app.toast = null } }
-    Box(Modifier.fillMaxSize().navigationBarsPadding().padding(bottom = 72.dp), contentAlignment = Alignment.BottomCenter) {
+    // above the keyboard when it is open, above the bottom bar when it is not
+    Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)).padding(bottom = 72.dp), contentAlignment = Alignment.BottomCenter) {
         AnimatedVisibility(t != null, enter = fadeIn(tween(180)) + slideInVertically(tween(180)) { 8 }, exit = fadeOut(tween(180)) + slideOutVertically(tween(180)) { 8 }) {
             val s = shown ?: return@AnimatedVisibility
             Row(

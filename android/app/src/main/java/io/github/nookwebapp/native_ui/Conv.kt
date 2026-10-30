@@ -150,7 +150,7 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
                             app.scope.launch {
                                 try {
                                     val (info, _) = MediaGrab.resolve(link)
-                                    val m = LMsg(uid(), link, Clock.now(), emptyList()).also { it.mcard = MediaGrab.cleanCard(MediaGrab.card(link, info)) }
+                                    val m = LMsg(uid(), "/media $link", Clock.now(), emptyList()).also { it.mcard = MediaGrab.cleanCard(MediaGrab.card(link, info)) }
                                     chat.msgs.add(m); app.persist()
                                 } catch (e: Exception) {
                                     app.say(if (e is MediaGrab.Fail) e.message ?: "Could not get it" else "Could not get it (" + (e.message ?: e.javaClass.simpleName).lineSequence().first().take(80) + ")")
@@ -181,7 +181,11 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onLong: () -> Unit
     val tap = { if (!opened) fx.pop(); onTap() }
     Column(Modifier.fillMaxWidth().pointerInput(m.id) { detectTapGestures(onTap = { tap() }, onLongPress = { AppState.current?.buzz(); onLong() }) }, horizontalAlignment = if (left) Alignment.Start else Alignment.End) {
         if (m.imgs.isNotEmpty()) Box(Modifier.width(minOf(w * 0.82f, 320.dp)).clip(RoundedCornerShape(Rad.bubble))) { ImgGrid(m.imgs, whenText(m.t), framed = false) }
-        m.mcard?.let { Box(Modifier.padding(top = if (m.imgs.isNotEmpty()) 4.dp else 0.dp)) { MediaCard(m) } }
+        // "/media link": the command stays in view with its link shortened, and the card of the video answers on the left
+        m.mcard?.let { card ->
+            MediaCmd(card.optString("u"), tap, onLong)
+            Box(Modifier.align(Alignment.Start).padding(top = 4.dp)) { MediaCard(m) }
+        }
         m.rpost?.let { Box(Modifier.padding(top = if (m.imgs.isNotEmpty()) 4.dp else 0.dp)) { RCard(it.id, it.u) } }
         m.zpost?.let { Box(Modifier.padding(top = 4.dp)) { ZCard(it) } }
         // the text of a "/media" message is only its link (it is what the web app shows), the card is drawn instead

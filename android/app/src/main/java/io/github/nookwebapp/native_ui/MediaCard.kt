@@ -3,12 +3,16 @@ package io.github.nookwebapp.native_ui
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -35,7 +39,7 @@ fun MediaCard(m: LMsg) {
     val st = app.mdl.state[m.id]
     val saved = remember(m.id, st?.saved) { ctx?.let { app.mdl.saved(it, m.id) } }
     val busy = st != null && st.saved == null && st.error == null
-    val meta = listOf(MediaGrab.siteName(card.optString("s")), clock(card.optInt("d"))).filter { it.isNotEmpty() }.joinToString(" · ")
+    val meta = listOf(MediaGrab.siteName(card.optString("s")), clock(card.optInt("d")), MediaGrab.sizeText(card.optLong("z"))).filter { it.isNotEmpty() }.joinToString(" · ")
     Column(Modifier.fillMaxWidth(0.82f).widthIn(max = 320.dp).clip(shape).background(c.bg2)) {
         card.optString("i").takeIf { it.isNotEmpty() }?.let { img ->
             Box(Modifier.fillMaxWidth().aspectRatio(1f).background(c.bg2)) { LinkPicBox(img) }
@@ -83,4 +87,35 @@ private fun LinkPicBox(src: String) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val req = remember(src) { coil.request.ImageRequest.Builder(ctx).data(src).setHeader("Referer", "").build() }
     coil.compose.AsyncImage(req, null, modifier = Modifier.fillMaxSize(), imageLoader = Img.loader(ctx), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+}
+
+// the message of the command: "/media" and the word "link" in the colour of links in my own messages; a tap on "link" opens the page
+@Composable
+fun MediaCmd(url: String, tap: () -> Unit, onLong: () -> Unit) {
+    val c = LocalNook.current
+    val uri = androidx.compose.ui.platform.LocalUriHandler.current
+    val shape = RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.xs, Rad.bubble)
+    val ann = remember(url) {
+        androidx.compose.ui.text.buildAnnotatedString {
+            append("/media ")
+            pushStringAnnotation("url", url)
+            withStyle(androidx.compose.ui.text.SpanStyle(color = androidx.compose.ui.graphics.Color.White, textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline)) { append("link") }
+            pop()
+        }
+    }
+    var layout by remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
+    Box(Modifier.clip(shape).background(c.accent).padding(horizontal = 14.dp, vertical = 9.dp)) {
+        androidx.compose.material3.Text(
+            ann,
+            Modifier.pointerInput(ann) {
+                detectTapGestures(onLongPress = { onLong() }) { pos ->
+                    val l = layout ?: return@detectTapGestures
+                    val o = l.getOffsetForPosition(pos)
+                    ann.getStringAnnotations("url", o, o).firstOrNull()?.let { runCatching { uri.openUri(it.item) }; return@detectTapGestures }
+                    tap()
+                }
+            },
+            style = androidx.compose.material3.LocalTextStyle.current.copy(fontSize = Fs.base, lineHeight = (15 * 1.38).sp, color = c.on), onTextLayout = { layout = it },
+        )
+    }
 }

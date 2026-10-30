@@ -26,7 +26,7 @@ class Online(val app: AppState) {
     private var feedRetry: kotlinx.coroutines.Job? = null
     private var feedBusy = false
     private var feedAgain = false
-    var follows by mutableStateOf<Set<String>>(emptySet())
+    var follows by mutableStateOf<Set<String>>(app.store.folSeed)
     // the bell's dot and the number on the chats button
     var unreadN by mutableIntStateOf(0)
     var unreadPeople by mutableIntStateOf(0)
@@ -220,7 +220,7 @@ class Online(val app: AppState) {
         if (rpFailed || !myLikes.ok || !myReposts.ok || !blocksOut.ok || !blocksIn.ok || likeRows == null || repostRows == null || !myMutes.ok) { feedFail(); return@coroutineScope }
         if (uid != me) return@coroutineScope
         feedStatus = "ok"; feedTries = 0
-        if (myFollows.ok) { follows = myFollows.rows.map { it.optString("followee_id") }.toSet(); Cache.write("follows:$me", JSONArray(follows.toList())) }
+        if (myFollows.ok) { follows = myFollows.rows.map { it.optString("followee_id") }.toSet(); s.folSeed = follows; Cache.write("follows:$me", JSONArray(follows.toList())) }
         meRow.one?.let { takeMeRow(it) }
         // posts of mine that the server no longer has (removed by the AI check or deleted elsewhere) go away here too
         val mine = s.posts.filter { it.remote != null && it.mine && System.currentTimeMillis() - it.t > 120_000 }.take(200)

@@ -1,0 +1,79 @@
+package io.github.nookwebapp.native_ui
+
+import org.json.JSONObject
+import org.junit.Assert.*
+import org.junit.Test
+
+// the parts of "/media" that need no connection: the command, the link kinds, the token of the X embed, how the answers of X and
+// Instagram are read, and the check of a card that came from outside
+class MediaGrabTest {
+    @Test fun command() {
+        assertEquals("https://x.com/a/status/1", MediaGrab.command("/media https://x.com/a/status/1"))
+        assertEquals("", MediaGrab.command("/media"))
+        assertEquals("https://youtu.be/abcdefghijk", MediaGrab.command("  /MEDIA   https://youtu.be/abcdefghijk  "))
+        assertNull(MediaGrab.command("hello /media https://x.com"))
+        assertNull(MediaGrab.command("/media a b"))
+    }
+
+    @Test fun sites() {
+        assertEquals("x", MediaGrab.site("https://x.com/jack/status/20"))
+        assertEquals("x", MediaGrab.site("https://twitter.com/jack/status/20?s=20"))
+        assertEquals("youtube", MediaGrab.site("https://www.youtube.com/watch?v=jNQXAC9IVRw"))
+        assertEquals("youtube", MediaGrab.site("https://youtu.be/jNQXAC9IVRw"))
+        assertEquals("youtube", MediaGrab.site("https://www.youtube.com/shorts/jNQXAC9IVRw"))
+        assertEquals("instagram", MediaGrab.site("https://www.instagram.com/reel/Cabc123_-x/"))
+        assertEquals("instagram", MediaGrab.site("https://www.instagram.com/p/Cabc123/?igsh=1"))
+        assertNull(MediaGrab.site("https://example.com/video"))
+        assertNull(MediaGrab.site("https://x.com/jack"))
+    }
+
+    @Test fun xToken() {
+        // the same digits as (id / 1e15 * Math.PI).toString(36) without zeros and dot in a browser
+        assertEquals("6dq1a2xwd93", MediaGrab.xToken("20"))
+        assertEquals("3tvpsgldru", MediaGrab.xToken("1580000000000000000"))
+        assertEquals("4hgc178kz8u", MediaGrab.xToken("1850123456789012345"))
+        assertEquals("4uj6o5owj98", MediaGrab.xToken("1999999999999999999"))
+    }
+
+    @Test fun xVideo() {
+        val j = JSONObject("""{"user":{"name":"Jack","screen_name":"jack"},"mediaDetails":[{"type":"video","media_url_https":"https://pbs.twimg.com/ext_tw_video_thumb/1/pu/img/a.jpg","video_info":{"duration_millis":12500,"variants":[
+            {"content_type":"application/x-mpegURL","url":"https://video.twimg.com/a.m3u8"},
+            {"bitrate":832000,"content_type":"video/mp4","url":"https://video.twimg.com/low.mp4"},
+            {"bitrate":2176000,"content_type":"video/mp4","url":"https://video.twimg.com/high.mp4"}]}}]}""")
+        val (info, src) = MediaGrab.xParse(j)
+        assertEquals("https://video.twimg.com/high.mp4", src.url)
+        assertEquals("video", info.kind); assertEquals(12, info.dur); assertEquals("Jack (@jack)", info.title)
+        assertEquals("x", info.site); assertNotNull(info.thumb)
+    }
+
+    @Test fun xGif() {
+        val j = JSONObject("""{"user":{"name":"A","screen_name":"a"},"mediaDetails":[{"type":"animated_gif","media_url_https":"https://pbs.twimg.com/tweet_video_thumb/a.jpg","video_info":{"variants":[{"bitrate":0,"content_type":"video/mp4","url":"https://video.twimg.com/tweet_video/a.mp4"}]}}]}""")
+        assertEquals("gif", MediaGrab.xParse(j).first.kind)
+    }
+
+    @Test fun xPhotosOnlyIsRefused() {
+        val j = JSONObject("""{"user":{"name":"A","screen_name":"a"},"mediaDetails":[{"type":"photo","media_url_https":"https://pbs.twimg.com/media/a.jpg"}],"photos":[{"url":"https://pbs.twimg.com/media/a.jpg"}]}""")
+        try { MediaGrab.xParse(j); fail("a post with only pictures must be refused") } catch (e: MediaGrab.Fail) { assertTrue(e.message!!.contains("no video")) }
+        try { MediaGrab.xParse(JSONObject("""{"user":{"screen_name":"a"},"text":"words only"}""")); fail() } catch (e: MediaGrab.Fail) { }
+    }
+
+    @Test fun instagram() {
+        val html = """<script>{"shortcode_media":{"video_url":"https:\/\/scontent.cdninstagram.com\/v\/t50\/a.mp4?x=1&y=2","display_url":"https:\/\/scontent.cdninstagram.com\/v\/a.jpg","owner":{"username":"some.one"}}}</script>"""
+        val (info, src) = MediaGrab.igParse(html)
+        assertEquals("https://scontent.cdninstagram.com/v/t50/a.mp4?x=1&y=2", src.url)
+        assertEquals("@some.one", info.author); assertEquals("video", info.kind)
+        val pic = MediaGrab.igParse("""{"display_url":"https:\/\/scontent.cdninstagram.com\/v\/a.jpg","username":"x"}""")
+        assertEquals("image", pic.first.kind); assertEquals("jpg", pic.second.ext)
+        try { MediaGrab.igParse("<html>login</html>"); fail() } catch (e: MediaGrab.Fail) { }
+    }
+
+    @Test fun cleanCard() {
+        val ok = JSONObject().put("u", "https://youtu.be/jNQXAC9IVRw").put("s", "youtube").put("t", "Me at the zoo").put("a", "jawed").put("k", "video").put("d", 19).put("i", "https://i.ytimg.com/vi/x/hq.jpg")
+        assertNotNull(MediaGrab.cleanCard(ok))
+        assertNull(MediaGrab.cleanCard(JSONObject(ok.toString()).put("u", "http://youtu.be/jNQXAC9IVRw")))
+        assertNull(MediaGrab.cleanCard(JSONObject(ok.toString()).put("s", "x")))
+        assertNull(MediaGrab.cleanCard(JSONObject(ok.toString()).put("u", "https://evil.example/watch?v=jNQXAC9IVRw")))
+        assertNull(MediaGrab.cleanCard(null))
+        assertEquals("", MediaGrab.cleanCard(JSONObject(ok.toString()).put("i", "javascript:alert(1)"))!!.optString("i"))
+    }
+}

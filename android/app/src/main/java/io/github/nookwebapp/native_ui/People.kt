@@ -92,11 +92,13 @@ fun LinkCard(url0: String, chat: Boolean = false) {
         if (loading && dd == null) { Box(Modifier.fillMaxWidth().height(150.dp).background(c.bg2).shimmer()); return@Column }
         val (title, cap) = remember(dd, url) { cardText(dd, url) }
         val img = dd?.optString("i")?.ifEmpty { null }
-        if (img != null) {
+        // a picture that cannot be loaded leaves no empty frame behind
+        var imgFailed by remember(url) { mutableStateOf(false) }
+        if (img != null && !imgFailed) {
             var focus by remember(url) { mutableStateOf<Pair<Float, Float>?>(null) }
             LaunchedEffect(img) { if (!chat) focus = runCatching { app.on.getFocus(url, img) }.getOrNull() }
             Box(Modifier.fillMaxWidth().aspectRatio(if (chat) 1f else 4f / 3f).background(c.bg2)) {
-                LinkPic(img, focus)
+                LinkPic(img, focus) { imgFailed = true }
             }
         }
         Column(Modifier.padding(start = if (chat) 16.dp else 12.dp, end = if (chat) 16.dp else 12.dp, top = if (chat) 14.dp else 8.dp, bottom = if (chat) 14.dp else 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -110,12 +112,12 @@ fun LinkCard(url0: String, chat: Boolean = false) {
 // the picture of a link card comes from the linked site itself (not this app's storage), so it is loaded on its own
 // (no referrer is sent, like referrerpolicy=no-referrer); it is kept on disk like every other photo
 @Composable
-private fun LinkPic(src: String, focus: Pair<Float, Float>?) {
+private fun LinkPic(src: String, focus: Pair<Float, Float>?, onFail: () -> Unit) {
     if (androidx.compose.ui.platform.LocalInspectionMode.current || Photos.sync) return
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val req = remember(src) { coil.request.ImageRequest.Builder(ctx).data(src).setHeader("Referer", "").build() }
     val align = focus?.let { (x, y) -> androidx.compose.ui.BiasAlignment((x / 50f - 1f).coerceIn(-1f, 1f), (y / 50f - 1f).coerceIn(-1f, 1f)) } ?: Alignment.Center
-    coil.compose.AsyncImage(req, null, modifier = Modifier.fillMaxSize(), imageLoader = Img.loader(ctx), alignment = align, contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+    coil.compose.AsyncImage(req, null, modifier = Modifier.fillMaxSize(), imageLoader = Img.loader(ctx), alignment = align, contentScale = androidx.compose.ui.layout.ContentScale.Crop, onError = { onFail() })
 }
 
 // .zcard: a post shared into a chat, as a card: only that post, no profile and no replies behind it

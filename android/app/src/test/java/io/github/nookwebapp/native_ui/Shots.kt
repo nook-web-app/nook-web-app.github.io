@@ -77,6 +77,13 @@ class Shots {
         shot("44-banned", start = Route.Banned)
         shot("45-age", start = Route.Age)
         shot("50-offline") { online = false }
+        shot("52-media-card") {
+            val card = org.json.JSONObject().put("u", "https://youtu.be/jNQXAC9IVRw").put("s", "youtube").put("t", "Me at the zoo").put("a", "jawed").put("k", "video").put("d", 19)
+            store.chats.add(LChat("c-media", "Notes to self", System.currentTimeMillis(), listOf(
+                LMsg("m-media", "https://youtu.be/jNQXAC9IVRw", System.currentTimeMillis(), emptyList()).also { it.mcard = card },
+                LMsg("m-text", "saved for later", System.currentTimeMillis(), emptyList()))))
+            go(Route.Conv("c-media"))
+        }
         shot("51-edited") { store.posts.filter { it.parent == null }.take(2).forEach { it.edited = true } }
         shot("46-add-account") { root(Route.Settings); panels.add(Panel.AddAccount) }
         shot("47-totp") { root(Route.Settings); panels.add(Panel.TotpSetup) }

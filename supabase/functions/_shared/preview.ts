@@ -95,9 +95,36 @@ function metaOf(html: string): Record<string, string> {
   return out;
 }
 export type Preview = { title: string; description: string; image: string; site: string };
+// a post on X is a page that needs a browser to draw, so its card comes from the public embed data of the post instead
+const X_POST = /^https:\/\/(?:www\.|mobile\.)?(?:x|twitter)\.com\/[^/?#]+\/status(?:es)?\/(\d{1,20})/i;
+async function xPreview(url: string, deadline: number): Promise<Preview | null> {
+  const m = X_POST.exec(url);
+  if (!m) return null;
+  const token = ((Number(m[1]) / 1e15) * Math.PI).toString(36).replace(/(0+|\.)/g, "");
+  const got = await get("https://cdn.syndication.twimg.com/tweet-result?id=" + m[1] + "&token=" + encodeURIComponent(token), "application/json", deadline);
+  if (!got || !got.res.ok) return null;
+  let j: Record<string, unknown>;
+  try { j = JSON.parse(new TextDecoder().decode(await readCapped(got.res, MAX_BYTES, deadline))); } catch { return null; }
+  const user = (j.user || {}) as Record<string, unknown>;
+  const name = String(user.name || "").slice(0, 80), handle = String(user.screen_name || "").slice(0, 40);
+  if (!handle) return null;
+  const media = (Array.isArray(j.mediaDetails) ? j.mediaDetails : []) as Record<string, unknown>[];
+  const photos = (Array.isArray(j.photos) ? j.photos : []) as Record<string, unknown>[];
+  const pic = String((media[0] && media[0].media_url_https) || (photos[0] && photos[0].url) || "");
+  let image = "";
+  try { const iu = new URL(pic); image = iu.protocol === "https:" && iu.hostname.endsWith(".twimg.com") ? iu.href : ""; } catch { image = ""; }
+  return {
+    title: (name ? name + " (@" + handle + ")" : "@" + handle) + " on X",
+    description: String(j.text || "").replace(/\s*https:\/\/t\.co\/\w+\s*$/i, "").slice(0, 600),
+    image,
+    site: "X",
+  };
+}
 export async function pagePreview(url: string): Promise<Preview | null> {
   const deadline = Date.now() + TOTAL_MS;
   try {
+    const xp = await xPreview(url, deadline).catch(() => null);
+    if (xp) return xp;
     const got = await get(url, "text/html,application/xhtml+xml", deadline);
     if (!got || !got.res.ok) return null;
     const type = (got.res.headers.get("content-type") || "").toLowerCase();

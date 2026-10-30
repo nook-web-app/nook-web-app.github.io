@@ -48,6 +48,10 @@ class LiveTest {
         runCatching { a.on.ensureE2E() }.onFailure { println("A keys: $it") }
         check("A row", row("accounts", "id", aId, "username")?.optString("username") == "lva_$tag")
 
+        // the card of a post on X comes from its embed data (the page itself has no picture or text for a browserless fetch)
+        val pv = Sb.fn("preview", org.json.JSONObject().put("url", "https://x.com/jack/status/20"))
+        check("X link preview", pv.ok && pv.body.optString("title").contains("(@jack) on X") && pv.body.optString("description").contains("twttr"), pv.body.toString().take(160))
+
         a.newPost("hello from the live test $tag", emptyList(), null)
         val p = a.store.posts.last()
         check("post saved", waitFor { p.remote != null } && row("posts", "id", p.remote!!)?.optString("body") == "hello from the live test $tag")

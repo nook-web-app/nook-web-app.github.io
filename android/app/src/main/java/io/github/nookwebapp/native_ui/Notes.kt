@@ -16,16 +16,16 @@ private fun h(s: String): String { var a = 0x811c9dc5.toInt(); var b = 0x5bd1e99
 private fun cSig(c: LChat) = h("c|" + c.name + "|" + c.t)
 private fun imgSig(m: LMsg) = m.imgs.joinToString(",") { h(it) }
 // the signature of a message is worked out again only when the message changed
-private class SigMemo(val text: String, val t: Long, val imgs: List<String>, val rp: RPost?, val zp: ZPost?, val sig: String)
+private class SigMemo(val text: String, val t: Long, val imgs: List<String>, val rp: RPost?, val zp: ZPost?, val mc: String, val sig: String)
 private val sigMemo = java.util.WeakHashMap<LMsg, SigMemo>()
 private fun mSig(m: LMsg): String {
-    val text = m.text; val t = m.t; val imgs = m.imgs; val rp = m.rpost; val zp = m.zpost
-    synchronized(sigMemo) { sigMemo[m]?.let { if (it.text == text && it.t == t && it.imgs == imgs && it.rp == rp && it.zp == zp) return it.sig } }
+    val text = m.text; val t = m.t; val imgs = m.imgs; val rp = m.rpost; val zp = m.zpost; val mc = m.mcard?.toString() ?: ""
+    synchronized(sigMemo) { sigMemo[m]?.let { if (it.text == text && it.t == t && it.imgs == imgs && it.rp == rp && it.zp == zp && it.mc == mc) return it.sig } }
     val sig = mSigOf(m)
-    synchronized(sigMemo) { sigMemo[m] = SigMemo(text, t, imgs.toList(), rp, zp, sig) }
+    synchronized(sigMemo) { sigMemo[m] = SigMemo(text, t, imgs.toList(), rp, zp, mc, sig) }
     return sig
 }
-private fun mSigOf(m: LMsg) = h("m|" + m.text + "|" + m.t + "|" + imgSig(m) + "|" + (m.rpost?.let { "${it.id}/${it.u}" } ?: "") + (m.zpost?.let { "${it.x}/${it.t}/${it.a}" } ?: ""))
+private fun mSigOf(m: LMsg) = h("m|" + m.text + "|" + m.t + "|" + imgSig(m) + "|" + (m.rpost?.let { "${it.id}/${it.u}" } ?: "") + (m.zpost?.let { "${it.x}/${it.t}/${it.a}" } ?: "") + (m.mcard?.toString() ?: ""))
 private fun pSig(p: LPost) = h("p|" + p.text + "|" + p.t + "|" + (p.parent ?: "") + "|" + (if (p.liked) 1 else 0) + (if (p.reposted) 1 else 0) + (if (p.saved) 1 else 0))
 
 private var notesOn = false
@@ -165,7 +165,8 @@ private suspend fun Online.noteTake(ns: JSONObject, key: ByteArray, r: JSONObjec
     val have = pm.optJSONObject(rowId)
     val rp = p.optJSONObject("rp")?.let { o -> o.optString("id").takeIf { Regex("^[0-9a-f-]{36}$", RegexOption.IGNORE_CASE).matches(it) }?.let { RPost(it, o.optStr("u")) } }
     val zp = p.optJSONObject("zp")?.let { o -> if (o.has("x")) ZPost(o.optString("x").take(600), o.optLong("t").takeIf { it > 0 } ?: System.currentTimeMillis(), o.optStr("a")?.takeIf { it.startsWith("$SB_URL/storage/v1/object/public/media/") && it.length < 400 }) else null }
-    if (m != null && m.text == text && m.t == t && have != null && canonJson(have.optJSONArray("e")) == canonJson(media) && m.rpost == rp && m.zpost == zp) return false
+    val mc = MediaGrab.cleanCard(p.optJSONObject("mc"))
+    if (m != null && m.text == text && m.t == t && have != null && canonJson(have.optJSONArray("e")) == canonJson(media) && m.rpost == rp && m.zpost == zp && m.mcard?.toString() == mc?.toString()) return false
     // a photo that cannot be fetched stops the pull here (unless it has been missing for three rounds in a row)
     val imgs = ArrayList<String>()
     for (md in media.objs()) {
@@ -174,11 +175,11 @@ private suspend fun Online.noteTake(ns: JSONObject, key: ByteArray, r: JSONObjec
     if (c == null) { c = LChat(cid, "Notes to self", t); s.chats.add(c); pushed.put("c:$cid", cSig(c)) }
     noteFails.remove(rowId)
     if (m == null) {
-        m = LMsg(rid, text, t, imgs, rpost = rp, zpost = zp)
+        m = LMsg(rid, text, t, imgs, rpost = rp, zpost = zp).also { it.mcard = mc }
         val at = c.msgs.indexOfFirst { it.t > t }
         if (at < 0) c.msgs.add(m) else c.msgs.add(at, m)
         msgIdx?.put(rid, c to m)
-    } else { m.text = text; m.t = t; m.imgs = imgs; m.rpost = rp; m.zpost = zp }
+    } else { m.text = text; m.t = t; m.imgs = imgs; m.rpost = rp; m.zpost = zp; m.mcard = mc }
     pushed.put(rowId, mSig(m))
     pm.put(rowId, JSONObject().put("h", imgSig(m)).put("e", media))
     return true
@@ -290,6 +291,7 @@ private suspend fun Online.notesPush(ns: JSONObject, key: ByteArray): Boolean {
                     val body = JSONObject().put("c", x.c.id).put("t", x.m.t).put("x", x.m.text)
                     x.m.rpost?.let { body.put("rp", JSONObject().put("id", it.id).put("u", it.u ?: JSONObject.NULL)) }
                     x.m.zpost?.let { body.put("zp", JSONObject().put("x", it.x).put("t", it.t).put("a", it.a ?: JSONObject.NULL)) }
+                    x.m.mcard?.let { body.put("mc", it) }
                     rows.put(JSONObject().put("owner_id", me).put("id", x.id).put("body", noteSeal(key, body, x.id)).put("media", media).put("deleted", false))
                     done.add(x to JSONObject().put("h", hh).put("e", media))
                 } else {

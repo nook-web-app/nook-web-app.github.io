@@ -36,6 +36,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 
 // convV: a chat on this phone. Messages sit at the bottom, a tap shows a message's time, a hold offers copy and delete;
 // the text box keeps what was typed (the draft) and up to four photos can go with a message.
@@ -137,6 +138,28 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
             )
             val can = text.isNotBlank() || pend.isNotEmpty()
             Box(Modifier.size(42.dp).alpha(if (can) 1f else 0.45f).clip(CircleShape).background(c.fill).pressTap(CircleShape, enabled = can) {
+                // "/media <link>" in a note: the card of the video is made instead of a message with the words
+                val link = if (chat.isNotes && pend.isEmpty()) MediaGrab.command(text) else null
+                if (link != null) {
+                    when {
+                        link.isEmpty() -> app.say("Type /media and a link of YouTube, Instagram or X")
+                        MediaGrab.site(link) == null -> app.say("Use a link of YouTube, Instagram or X")
+                        else -> {
+                            setText("")
+                            app.say("Getting the video...")
+                            app.scope.launch {
+                                try {
+                                    val (info, _) = MediaGrab.resolve(link)
+                                    val m = LMsg(uid(), link, Clock.now(), emptyList()).also { it.mcard = MediaGrab.cleanCard(MediaGrab.card(link, info)) }
+                                    chat.msgs.add(m); app.persist()
+                                } catch (e: Exception) {
+                                    app.say(if (e is MediaGrab.Fail) e.message ?: "Could not get it" else "Could not get it. Check your connection")
+                                }
+                            }
+                        }
+                    }
+                    return@pressTap
+                }
                 val m = LMsg(uid(), cleanText(text.trim()), Clock.now(), pend.toList())
                 chat.msgs.add(m)
                 pend.clear(); setText("")
@@ -158,11 +181,13 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onLong: () -> Unit
     val tap = { if (!opened) fx.pop(); onTap() }
     Column(Modifier.fillMaxWidth().pointerInput(m.id) { detectTapGestures(onTap = { tap() }, onLongPress = { AppState.current?.buzz(); onLong() }) }, horizontalAlignment = if (left) Alignment.Start else Alignment.End) {
         if (m.imgs.isNotEmpty()) Box(Modifier.width(minOf(w * 0.82f, 320.dp)).clip(RoundedCornerShape(Rad.bubble))) { ImgGrid(m.imgs, whenText(m.t), framed = false) }
+        m.mcard?.let { Box(Modifier.padding(top = if (m.imgs.isNotEmpty()) 4.dp else 0.dp)) { MediaCard(m) } }
         m.rpost?.let { Box(Modifier.padding(top = if (m.imgs.isNotEmpty()) 4.dp else 0.dp)) { RCard(it.id, it.u) } }
         m.zpost?.let { Box(Modifier.padding(top = 4.dp)) { ZCard(it) } }
-        val url = firstUrl(m.text)
+        // the text of a "/media" message is only its link (it is what the web app shows), the card is drawn instead
+        val url = if (m.mcard != null) null else firstUrl(m.text)
         if (url != null) Box(Modifier.padding(top = if (m.imgs.isNotEmpty() || m.rpost != null) 4.dp else 0.dp)) { LinkCard(url, chat = true) }
-        if (m.text.isNotEmpty()) {
+        if (m.text.isNotEmpty() && m.mcard == null) {
             val shape = if (left) RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.bubble, Rad.xs) else RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.xs, Rad.bubble)
             Box(
                 Modifier.padding(top = if (m.imgs.isNotEmpty() || url != null || m.rpost != null) 4.dp else 0.dp).bubbleFx(fx, left).widthIn(max = w * 0.82f)

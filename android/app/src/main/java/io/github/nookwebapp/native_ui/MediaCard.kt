@@ -104,6 +104,14 @@ fun MediaCard(m: LMsg) {
 // the picture of the card comes from the site itself, so it is loaded on its own, like the picture of a link
 // the file opens in the phone's own gallery or player at once, without the list "open with" (the only one asked when there is none)
 private fun openFile(ctx: android.content.Context, uri: Uri, kind: String) {
+    // a sound opens in Samsung Music at once (when the phone has it), without the list "open with"
+    if (kind == "audio") {
+        val tryView = Intent(Intent.ACTION_VIEW).setDataAndType(uri, ctx.contentResolver.getType(uri) ?: "audio/*").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        for (pkg in listOf("com.sec.android.app.music", "com.samsung.android.app.musicplayer")) {
+            val ok = runCatching { ctx.startActivity(Intent(tryView).setPackage(pkg)) }.isSuccess
+            if (ok) return
+        }
+    }
     val type = ctx.contentResolver.getType(uri) ?: if (kind == "image" || kind == "gif") "image/*" else if (kind == "audio") "audio/*" else "video/*"
     val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, type).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
     val pm = ctx.packageManager

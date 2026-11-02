@@ -101,9 +101,17 @@ object MediaGrab {
     suspend fun resolveAll(url: String, q: String = "", light: Boolean = false): List<Item> = withContext(Dispatchers.IO) {
         val raw = rawItems(url, q)
         if (light) return@withContext raw.map { (i, s) -> Item(i, s) }
-        kotlinx.coroutines.coroutineScope { raw.map { (i, s) -> async { finish(i, s) } }.awaitAll() }
+        kotlinx.coroutines.coroutineScope { raw.map { (i, s) -> async { finish(i, s, q) } }.awaitAll() }
     }
+    // what a link gave a moment ago (the card and the download of the same link share it, so a tap on Download starts at once)
+    private val resolved = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<Pair<Info, Src>>>>()
     private fun rawItems(url: String, q: String): List<Pair<Info, Src>> {
+        val key = "$url|$q"
+        resolved[key]?.let { (t, v) -> if (System.currentTimeMillis() - t < 4 * 60_000L) return v }
+        if (resolved.size > 30) resolved.clear()
+        return rawItemsFresh(url, q).also { resolved[key] = System.currentTimeMillis() to it }
+    }
+    private fun rawItemsFresh(url: String, q: String): List<Pair<Info, Src>> {
         return when (site(url)) {
             "x" -> X_POST.find(url)!!.let { xResolve(it.groupValues[1], it.groupValues[2]) }
             "youtube" -> listOf(ytResolve(YT_ID.find(url)!!.groupValues[1], q))
@@ -117,12 +125,17 @@ object MediaGrab {
 
     // the size of the file (or of both pieces) and the picture of the card: the first frame of a video (a picture is shrunk), so no
     // link is left without a preview, even when the site gives none or its picture cannot be loaded later
-    private suspend fun finish(info: Info, src: Src): Item = kotlinx.coroutines.coroutineScope {
+    private suspend fun finish(info: Info, src: Src, q: String = ""): Item = kotlinx.coroutines.coroutineScope {
         val size = async { sizeFor(info, src) }
         val own = info.thumb?.takeIf { info.site == "youtube" }
         // the picture a mirror gives for an Instagram video has a play button drawn in it: it is not used
-        val thumb = async { own ?: preview(src, info.kind) ?: info.thumb?.takeIf { !(info.site == "instagram" && info.kind == "video") } }
-        Item(Info(info.site, info.title, info.author, thumb.await(), info.dur, info.kind, size.await()), src)
+        val dur = IntArray(1)
+        val thumb = async { own ?: preview(src, info.kind, dur) ?: info.thumb?.takeIf { !(info.site == "instagram" && info.kind == "video") } }
+        val pic = thumb.await()
+        val secs = if (info.dur > 0) info.dur else dur[0]
+        // /audio: the size shown is the one of the mp3 that will be made (192 kbit a second is 24000 bytes), not the one of the video
+        val shown = if (q == "audio" && info.kind != "image" && secs > 0) secs * 24_000L + 70_000L else size.await()
+        Item(Info(info.site, info.title, info.author, pic, secs, info.kind, shown), src)
     }
 
     // the size of the file (or of both pieces): the one the site gave, else asked for (both pieces together)
@@ -135,7 +148,7 @@ object MediaGrab {
     }
 
     // a small picture (a data address, so it goes with the note) from the file of an item, null when it cannot be read
-    private fun preview(src: Src, kind: String): String? = runCatching {
+    private fun preview(src: Src, kind: String, durOut: IntArray? = null): String? = runCatching {
         var bm: android.graphics.Bitmap? = null
         if (kind == "image") {
             val b = Request.Builder().url(src.url).header("User-Agent", DESKTOP).apply { src.headers.forEach { (k, v) -> header(k, v) } }.build()
@@ -156,6 +169,7 @@ object MediaGrab {
                         // the phone's own reader does not pass the client above: the address is checked first
                         if (java.net.InetAddress.getAllByName(java.net.URI(src.url).host).any { isPrivate(it) }) throw Fail("That address is not allowed")
                         r.setDataSource(src.url, HashMap(src.headers + ("User-Agent" to DESKTOP)))
+                        durOut?.set(0, ((r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L) / 1000).toInt())
                         r.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: r.getFrameAtTime(0)
                     }.getOrNull()
                     // read from the web it failed: the file is fetched (when it is not huge) and read from the phone instead
@@ -163,7 +177,7 @@ object MediaGrab {
                         val f = File.createTempFile("frame", ".mp4"); tmpFile = f
                         download(src.url, src.headers, f, 40_000_000L) { }
                         val r2 = android.media.MediaMetadataRetriever()
-                        try { r2.setDataSource(f.path); bm = r2.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: r2.getFrameAtTime(0) } finally { runCatching { r2.release() } }
+                        try { r2.setDataSource(f.path); durOut?.set(0, ((r2.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L) / 1000).toInt()); bm = r2.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: r2.getFrameAtTime(0) } finally { runCatching { r2.release() } }
                     }
                 }
             } finally { runCatching { r.release() }; tmpFile?.delete() }
@@ -565,7 +579,7 @@ object MediaGrab {
         val yt = src.contains("googlevideo.com")
         java.io.RandomAccessFile(to, "rw").use { raf ->
             raf.setLength(total)
-            val pool = java.util.concurrent.Executors.newFixedThreadPool(8)
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(12)
             try {
                 val jobs = (0 until 8).map {
                     pool.submit {

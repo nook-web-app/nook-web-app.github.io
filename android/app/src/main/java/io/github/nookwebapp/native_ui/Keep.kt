@@ -58,8 +58,13 @@ class KeepService : Service() {
     override fun onBind(i: Intent?): IBinder? = null
     override fun onStartCommand(i: Intent?, flags: Int, id: Int): Int {
         val nm = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel("nook_work") == null) nm.createNotificationChannel(NotificationChannel("nook_work", "Nook working", NotificationManager.IMPORTANCE_MIN))
-        val n: Notification = NotificationCompat.Builder(this, "nook_work").setSmallIcon(R.drawable.ic_stat).setContentTitle("Nook is working").setContentText("Finishing what you started")
+        // Android wants a notification for a service that runs in the background; its channel is switched off, so nothing shows in the
+        // notification list (the old "Nook working" channel is removed)
+        if (Build.VERSION.SDK_INT >= 26) {
+            if (nm.getNotificationChannel("nook_work") != null) nm.deleteNotificationChannel("nook_work")
+            if (nm.getNotificationChannel("nook_hold") == null) nm.createNotificationChannel(NotificationChannel("nook_hold", "Background work", NotificationManager.IMPORTANCE_NONE))
+        }
+        val n: Notification = NotificationCompat.Builder(this, "nook_hold").setSmallIcon(R.drawable.ic_stat).setContentTitle("Nook")
             .setPriority(NotificationCompat.PRIORITY_MIN).setOngoing(true).setSilent(true).build()
         if (Build.VERSION.SDK_INT >= 29) startForeground(7, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) else startForeground(7, n)
         return START_NOT_STICKY

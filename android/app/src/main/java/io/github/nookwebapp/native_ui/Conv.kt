@@ -139,20 +139,27 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
             val can = text.isNotBlank() || pend.isNotEmpty()
             Box(Modifier.size(42.dp).alpha(if (can) 1f else 0.45f).clip(CircleShape).background(c.fill).pressTap(CircleShape, enabled = can) {
                 // "/media <link>" in a note: the card of the video is made instead of a message with the words
-                val link = if (chat.isNotes && pend.isEmpty()) MediaGrab.command(text) else null
-                val qual = MediaGrab.quality(text)
+                // (any chat of the notes list, also one that holds an answer of Zenith: earlier messages never stop the command)
+                val link = if (pend.isEmpty()) MediaGrab.command(text) else null
+                // a size counts only for a YouTube link
+                val qual = if (link != null && MediaGrab.site(link) == "youtube") MediaGrab.quality(text) else ""
                 if (link != null) {
                     when {
-                        link.isEmpty() -> app.say("Type /media and a link of YouTube, Instagram or X")
-                        MediaGrab.site(link) == null -> app.say("Use a link of YouTube, Instagram or X")
+                        link.isEmpty() -> app.say("Type /media and a link")
+                        MediaGrab.site(link) == null -> app.say("Use a link that starts with https://")
                         else -> {
                             setText("")
-                            app.say("Getting the video...")
+                            app.say("Getting media...")
                             app.scope.launch {
                                 try {
-                                    val (info, _) = MediaGrab.resolve(link, qual)
-                                    val m = LMsg(uid(), "/media " + (if (qual.isNotEmpty()) "/$qual " else "") + link, Clock.now(), emptyList()).also { it.mcard = MediaGrab.cleanCard(MediaGrab.card(link, info, qual)) }
-                                    chat.msgs.add(m); app.persist()
+                                    // a post with several files gets a card for each one, one after another (the command shows on the first)
+                                    val items = MediaGrab.resolveAll(link, qual)
+                                    val t0 = Clock.now()
+                                    items.forEachIndexed { n, it ->
+                                        val m = LMsg(uid(), "/media " + (if (qual.isNotEmpty()) "/$qual " else "") + link, t0 + n, emptyList()).also { x -> x.mcard = MediaGrab.cleanCard(MediaGrab.card(link, it.info, qual, n, items.size)) }
+                                        chat.msgs.add(m)
+                                    }
+                                    app.persist()
                                 } catch (e: Exception) {
                                     app.say(if (e is MediaGrab.Fail) e.message ?: "Could not get it" else "Could not get it (" + (e.message ?: e.javaClass.simpleName).lineSequence().first().take(80) + ")")
                                 }
@@ -184,8 +191,8 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onLong: () -> Unit
         if (m.imgs.isNotEmpty()) Box(Modifier.width(minOf(w * 0.82f, 320.dp)).clip(RoundedCornerShape(Rad.bubble))) { ImgGrid(m.imgs, whenText(m.t), framed = false) }
         // "/media link": the command stays in view with its link shortened, and the card of the video answers on the left
         m.mcard?.let { card ->
-            MediaCmd(card.optString("u"), card.optString("s"), card.optString("q"), tap, onLong)
-            Box(Modifier.align(Alignment.Start).padding(top = 4.dp)) { MediaCard(m) }
+            if (card.optInt("n") == 0) MediaCmd(card.optString("u"), card.optString("s"), card.optString("q"), tap, onLong)
+            Box(Modifier.align(Alignment.Start).padding(top = if (card.optInt("n") == 0) 4.dp else 0.dp)) { MediaCard(m) }
         }
         m.rpost?.let { Box(Modifier.padding(top = if (m.imgs.isNotEmpty()) 4.dp else 0.dp)) { RCard(it.id, it.u) } }
         m.zpost?.let { Box(Modifier.padding(top = 4.dp)) { ZCard(it) } }
@@ -200,7 +207,7 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onLong: () -> Unit
             ) { Tx(m.text, color = if (left) c.fg else c.on, linkColor = if (left) null else Color.White, onTap = tap, onLong = onLong, cut = false) }
         }
         AnimatedVisibility(open, enter = expandVertically(tween(240)) + fadeIn(tween(200)), exit = shrinkVertically(tween(240)) + fadeOut(tween(200))) {
-            T(whenText(m.t), Fs.xs, color = c.muted, align = if (left) TextAlign.Start else TextAlign.End, modifier = Modifier.fillMaxWidth().padding(top = 4.dp, end = 2.dp, start = 2.dp))
+            T(whenText(m.t), Fs.xs, color = c.muted, align = if (left && m.mcard == null) TextAlign.Start else TextAlign.End, modifier = Modifier.fillMaxWidth().padding(top = 4.dp, end = 2.dp, start = 2.dp))
         }
     }
 }

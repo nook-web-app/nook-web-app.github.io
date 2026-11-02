@@ -11,6 +11,8 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -19,7 +21,7 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.util.concurrent.TimeUnit
 
-// "/media <link>" in a notes chat: the card of a video or gif of YouTube, Instagram or X, with a button that saves it on this
+// "/media <link>" in a notes chat: the card of a video, gif or picture of YouTube, Instagram, TikTok or X, with a button that saves it on this
 // phone. Everything runs on the phone itself (its own connection, nothing goes through the server); only the card (the link,
 // the title, the picture and the size) is kept in the note and synced, the video is downloaded where the button is pressed.
 object MediaGrab {
@@ -27,70 +29,101 @@ object MediaGrab {
     class Info(val site: String, val title: String, val author: String, val thumb: String?, val dur: Int, val kind: String, val size: Long = 0)
     // one file (picture and sound together), or a picture file with a sound file that are joined on the phone ("audio");
     // "plain" is the one-piece file of a lower quality to fall back to when the pieces cannot be joined
-    class Src(val url: String, val mime: String, val ext: String, val headers: Map<String, String> = emptyMap(), val audio: String? = null, val webm: Boolean = false, val plain: Src? = null)
+    class Src(val url: String, val mime: String, val ext: String, val headers: Map<String, String> = emptyMap(), val audio: String? = null, val webm: Boolean = false, val plain: Src? = null, val size: Long = 0, val asize: Long = 0)
+    // one file of a post (a post can hold several: every one gets its own card)
+    class Item(val info: Info, val src: Src)
 
     private val X_POST = Regex("^https?://(?:www\\.|mobile\\.)?(?:x|twitter)\\.com/([^/?#]+)/status(?:es)?/(\\d{1,20})", RegexOption.IGNORE_CASE)
     private val IG_POST = Regex("^https?://(?:www\\.)?instagram\\.com/(?:[\\w.]+/)?(p|reel|reels|tv)/([\\w-]+)", RegexOption.IGNORE_CASE)
+    private val TT = Regex("^https?://(?:www\\.|m\\.|vm\\.|vt\\.)?tiktok\\.com/\\S+", RegexOption.IGNORE_CASE)
     private val YT_ID = Regex("(?:youtube\\.com/(?:watch\\?(?:.*&)?v=|shorts/|embed/|live/)|youtu\\.be/)([\\w-]{6,})", RegexOption.IGNORE_CASE)
     private val CMD = Regex("^/media(?:\\s+/(4k|2k|1080p|720p))?(?:\\s+(\\S+))?\\s*$", RegexOption.IGNORE_CASE)
     private const val DESKTOP = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
     private const val BOT = "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)"
 
-    private val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).followRedirects(true).build()
+    // the default of 5 connections to one host would hold back the pieces of a download: 16 may run together
+    private val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).followRedirects(true)
+        .dispatcher(okhttp3.Dispatcher().apply { maxRequests = 64; maxRequestsPerHost = 16 }).build()
     private val still: OkHttpClient = http.newBuilder().followRedirects(false).build()
 
     // the link of a "/media" message: null when the text is not that command, "" when the link is missing
     fun command(text: String): String? = CMD.find(text.trim())?.let { it.groupValues[2] }
     // the size asked for in "/media /2k link": "4k", "2k", "1080p" or "720p"; "" when none was typed
     fun quality(text: String): String = CMD.find(text.trim())?.groupValues?.get(1)?.lowercase().orEmpty()
-    // the tallest picture each size allows
-    fun maxHeight(q: String) = when (q) { "4k" -> 2160; "2k" -> 1440; "720p" -> 720; else -> 1080 }
+    // the tallest picture each size allows (only YouTube has sizes; without one it is 2K at 60 pictures a second, the top is 4K at 30)
+    fun maxHeight(q: String) = when (q) { "4k" -> 2160; "1080p" -> 1080; "720p" -> 720; else -> 1440 }
     // the name of the site as the link would show it
-    fun domain(site: String) = when (site) { "x" -> "x.com"; "youtube" -> "youtube.com"; else -> "instagram.com" }
+    fun domain(site: String, url: String = "") = when (site) { "x" -> "x.com"; "youtube" -> "youtube.com"; "tiktok" -> "tiktok.com"; "web" -> host(url).ifEmpty { "link" }; else -> "instagram.com" }
 
-    // "x", "youtube" or "instagram"; null for any other link
+    // "x", "youtube", "instagram" or "tiktok"; null for any other link
     fun site(url: String): String? = when {
         X_POST.containsMatchIn(url) -> "x"
         YT_ID.containsMatchIn(url) -> "youtube"
         IG_POST.containsMatchIn(url) -> "instagram"
+        TT.containsMatchIn(url) -> "tiktok"
+        // any other web link: the page (or the file itself) is read for what it holds
+        url.length < 600 && Regex("^https://[^/\\s]+\\.[^/\\s]+", RegexOption.IGNORE_CASE).containsMatchIn(url) -> "web"
         else -> null
     }
-    fun siteName(site: String) = when (site) { "x" -> "X"; "youtube" -> "YouTube"; else -> "Instagram" }
+    fun host(url: String) = runCatching { java.net.URI(url).host.orEmpty().removePrefix("www.") }.getOrDefault("")
+    fun siteName(site: String, url: String = "") = when (site) { "x" -> "X"; "youtube" -> "YouTube"; "tiktok" -> "TikTok"; "web" -> host(url).ifEmpty { "Web" }; else -> "Instagram" }
 
-    // the card and the address of the file, worked out together (the address of a file runs out, so it is asked again at download)
-    suspend fun resolve(url: String, q: String = ""): Pair<Info, Src> = withContext(Dispatchers.IO) {
-        val (info, src) = when (site(url)) {
-            "x" -> X_POST.find(url)!!.let { xResolve(it.groupValues[1], it.groupValues[2], q) }
-            "youtube" -> ytResolve(YT_ID.find(url)!!.groupValues[1], q)
+    // the cards and the addresses of the files of a post, worked out together (the address of a file runs out, so it is asked again at
+    // download); a post with several pictures or videos gives one item for each, and every item gets its card at once
+    suspend fun resolveAll(url: String, q: String = ""): List<Item> = withContext(Dispatchers.IO) {
+        val raw: List<Pair<Info, Src>> = when (site(url)) {
+            "x" -> X_POST.find(url)!!.let { xResolve(it.groupValues[1], it.groupValues[2]) }
+            "youtube" -> listOf(ytResolve(YT_ID.find(url)!!.groupValues[1], q))
             "instagram" -> igResolve(IG_POST.find(url)!!.let { it.groupValues[1] to it.groupValues[2] })
-            else -> throw Fail("Use a link of YouTube, Instagram or X")
+            "tiktok" -> ttResolve(url)
+            "web" -> webResolve(url)
+            else -> throw Fail("Use a link that starts with https://")
         }
-        // the size of the file (or of both pieces) for the card
-        val size = if (info.size > 0) info.size else sizeOf(src.url, src.headers) + (src.audio?.let { sizeOf(it, src.headers) } ?: 0)
-        // an X post has no picture of its own that fits: the first frame of the video is the picture of the card
-        val thumb = if (info.site == "x") firstFrame(src.url, info.kind == "gif") ?: info.thumb else info.thumb
-        Info(info.site, info.title, info.author, thumb, info.dur, info.kind, size) to src
+        kotlinx.coroutines.coroutineScope { raw.map { (i, s) -> async { finish(i, s) } }.awaitAll() }
+    }
+    suspend fun resolve(url: String, q: String = ""): Pair<Info, Src> = resolveAll(url, q).first().let { it.info to it.src }
+
+    // the size of the file (or of both pieces) and the picture of the card: the first frame of a video (a picture is shrunk), so no
+    // link is left without a preview, even when the site gives none or its picture cannot be loaded later
+    private suspend fun finish(info: Info, src: Src): Item = kotlinx.coroutines.coroutineScope {
+        val size = async { if (info.size > 0) info.size else if (src.size > 0) src.size + src.asize else sizeOf(src.url, src.headers) + (src.audio?.let { sizeOf(it, src.headers) } ?: 0) }
+        val own = info.thumb?.takeIf { info.site == "youtube" }
+        val thumb = async { own ?: preview(src, info.kind) ?: info.thumb }
+        Item(Info(info.site, info.title, info.author, thumb.await(), info.dur, info.kind, size.await()), src)
     }
 
-    // the first frame of a video file as a small picture (a data address, so it goes with the note), null when it cannot be read
-    private fun firstFrame(url: String, small: Boolean): String? = runCatching {
-        val r = android.media.MediaMetadataRetriever()
-        var tmpFile: File? = null
-        try {
-            if (small) {
-                // a gif is a few hundred kilobytes: it is read from a file, which every phone can do
-                val f = File.createTempFile("frame", ".mp4"); tmpFile = f
-                download(url, emptyMap(), f) { }
-                r.setDataSource(f.path)
-            } else r.setDataSource(url, hashMapOf("User-Agent" to DESKTOP))
-            val bm = r.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: return@runCatching null
-            val w = minOf(480, bm.width); val h = (bm.height * (w.toFloat() / bm.width)).toInt().coerceAtLeast(1)
-            val sc = if (w == bm.width) bm else android.graphics.Bitmap.createScaledBitmap(bm, w, h, true)
-            val out = java.io.ByteArrayOutputStream()
-            sc.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, out)
-            "data:image/jpeg;base64," + android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
-        } finally { r.release(); tmpFile?.delete() }
+    // a small picture (a data address, so it goes with the note) from the file of an item, null when it cannot be read
+    private fun preview(src: Src, kind: String): String? = runCatching {
+        var bm: android.graphics.Bitmap? = null
+        if (kind == "image") {
+            val b = Request.Builder().url(src.url).header("User-Agent", DESKTOP).apply { src.headers.forEach { (k, v) -> header(k, v) } }.build()
+            val data = http.newCall(b).execute().use { r -> if (!r.isSuccessful) null else r.body?.bytes()?.takeIf { it.size < 12_000_000 } }
+            bm = data?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }
+        } else {
+            val r = android.media.MediaMetadataRetriever()
+            var tmpFile: File? = null
+            try {
+                if (kind == "gif") {
+                    // a gif is a few hundred kilobytes: it is read from a file, which every phone can do
+                    val f = File.createTempFile("frame", ".mp4"); tmpFile = f
+                    download(src.url, emptyMap(), f) { }
+                    r.setDataSource(f.path)
+                } else r.setDataSource(src.url, HashMap(src.headers + ("User-Agent" to DESKTOP)))
+                bm = r.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: r.getFrameAtTime(0)
+            } finally { runCatching { r.release() }; tmpFile?.delete() }
+        }
+        val b = bm ?: return@runCatching null
+        val w = minOf(400, b.width); val h = (b.height * (w.toFloat() / b.width)).toInt().coerceAtLeast(1)
+        val sc = if (w == b.width) b else android.graphics.Bitmap.createScaledBitmap(b, w, h, true)
+        val out = java.io.ByteArrayOutputStream()
+        sc.compress(android.graphics.Bitmap.CompressFormat.JPEG, 70, out)
+        if (out.size() > 60_000) null else "data:image/jpeg;base64," + android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
     }.getOrNull()
+
+    // what kind of file an address holds: its type as the server says it
+    private fun typeOf(url: String): String = runCatching {
+        http.newCall(Request.Builder().url(url).header("User-Agent", BOT).header("Range", "bytes=0-0").build()).execute().use { it.header("Content-Type").orEmpty() }
+    }.getOrDefault("")
 
     private fun get(url: String, headers: Map<String, String> = emptyMap(), ua: String = DESKTOP): String {
         val b = Request.Builder().url(url).header("User-Agent", ua)
@@ -152,45 +185,62 @@ object MediaGrab {
         return ip.reverse().toString() + (if (frac.isEmpty()) "" else "." + frac.joinToString("") { chars[it].toString() })
     }
 
-    // the answer of the open data service: tweet.media.videos[] { url, thumbnail_url, duration, type, width, height }
-    internal fun xFromFx(j: JSONObject): Pair<Info, Src> {
+    // the answer of the open data service: tweet.media.all[] { type, url, thumbnail_url, duration, width, height }, every file of the post
+    internal fun xFromFx(j: JSONObject): List<Pair<Info, Src>> {
         val t = j.optJSONObject("tweet") ?: throw Fail("That post could not be read")
         val au = t.optJSONObject("author")
         val handle = au?.optString("screen_name").orEmpty(); val name = au?.optString("name").orEmpty()
-        val vids = t.optJSONObject("media")?.optJSONArray("videos")
-        var best: JSONObject? = null
-        if (vids != null) for (i in 0 until vids.length()) {
-            val v = vids.optJSONObject(i) ?: continue
-            if (!v.optString("url").startsWith("https://")) continue
-            if (best == null || v.optInt("height") * v.optInt("width") > best.optInt("height") * best.optInt("width")) best = v
+        val title = if (name.isNotEmpty()) "$name (@$handle)" else "@$handle"
+        val media = t.optJSONObject("media")
+        val all = media?.optJSONArray("all")
+        val list = ArrayList<JSONObject>()
+        if (all != null) for (i in 0 until all.length()) all.optJSONObject(i)?.let(list::add)
+        else {
+            media?.optJSONArray("videos")?.let { a -> for (i in 0 until a.length()) a.optJSONObject(i)?.let(list::add) }
+            media?.optJSONArray("photos")?.let { a -> for (i in 0 until a.length()) a.optJSONObject(i)?.let { o -> list.add(JSONObject(o.toString()).put("type", "photo")) } }
         }
-        val v = best ?: throw Fail("That post has no video or gif")
-        val gif = v.optString("type") == "gif" || v.optString("url").contains("/tweet_video/")
-        val info = Info("x", if (name.isNotEmpty()) "$name (@$handle)" else "@$handle", "@$handle", v.optString("thumbnail_url").takeIf { it.startsWith("https://") }, v.optDouble("duration", 0.0).toInt(), if (gif) "gif" else "video")
-        return info to Src(v.optString("url"), "video/mp4", "mp4")
+        val out = ArrayList<Pair<Info, Src>>()
+        for (v in list) {
+            val u = v.optString("url"); if (!u.startsWith("https://")) continue
+            val type = v.optString("type")
+            if (type == "photo") {
+                val full = if (u.contains("pbs.twimg.com/media/") && !u.contains("name=")) u + (if (u.contains('?')) "&" else "?") + "name=orig" else u
+                out.add(Info("x", title, "@$handle", u, 0, "image") to Src(full, "image/jpeg", "jpg"))
+            } else {
+                val gif = type == "gif" || u.contains("/tweet_video/")
+                out.add(Info("x", title, "@$handle", v.optString("thumbnail_url").takeIf { it.startsWith("https://") }, v.optDouble("duration", 0.0).toInt(), if (gif) "gif" else "video") to Src(u, "video/mp4", "mp4"))
+            }
+        }
+        if (out.isEmpty()) throw Fail("That post has no video, gif or picture")
+        return out
     }
 
-    internal fun xParse(j: JSONObject): Pair<Info, Src> {
+    internal fun xParse(j: JSONObject): List<Pair<Info, Src>> {
         val user = j.optJSONObject("user")
         val handle = user?.optString("screen_name").orEmpty()
         val name = user?.optString("name").orEmpty()
+        val title = if (name.isNotEmpty()) "$name (@$handle)" else "@$handle"
         val items = ArrayList<JSONObject>()
         j.optJSONArray("mediaDetails")?.let { a -> for (i in 0 until a.length()) a.optJSONObject(i)?.let(items::add) }
-        val vid = items.firstOrNull { it.optString("type") == "video" || it.optString("type") == "animated_gif" }
-        val variants = vid?.optJSONObject("video_info")?.optJSONArray("variants") ?: j.optJSONObject("video")?.optJSONArray("variants")
-        if (variants == null) throw Fail("That post has no video or gif")
-        var best: JSONObject? = null
-        for (i in 0 until variants.length()) {
-            val v = variants.optJSONObject(i) ?: continue
-            if (!v.optString("content_type", v.optString("type")).contains("mp4")) continue
-            if (best == null || v.optInt("bitrate") > best.optInt("bitrate")) best = v
+        val out = ArrayList<Pair<Info, Src>>()
+        for (it in items) {
+            val type = it.optString("type")
+            val pic = it.optString("media_url_https").takeIf { u -> u.startsWith("https://") }
+            if (type == "photo") { if (pic != null) out.add(Info("x", title, "@$handle", pic, 0, "image") to Src(pic + "?name=orig", "image/jpeg", "jpg")); continue }
+            val variants = it.optJSONObject("video_info")?.optJSONArray("variants") ?: continue
+            var best: JSONObject? = null
+            for (i in 0 until variants.length()) {
+                val v = variants.optJSONObject(i) ?: continue
+                if (!v.optString("content_type", v.optString("type")).contains("mp4")) continue
+                if (best == null || v.optInt("bitrate") > best.optInt("bitrate")) best = v
+            }
+            val file = best?.optString("url").orEmpty().takeIf { u -> u.startsWith("https://") } ?: continue
+            val gif = type == "animated_gif" || file.contains("/tweet_video/")
+            val ms = it.optJSONObject("video_info")?.optLong("duration_millis") ?: 0L
+            out.add(Info("x", title, "@$handle", pic, (ms / 1000).toInt(), if (gif) "gif" else "video") to Src(file, "video/mp4", "mp4"))
         }
-        val file = best?.optString("url").orEmpty().takeIf { it.startsWith("https://") } ?: throw Fail("No file found in that post")
-        val gif = vid?.optString("type") == "animated_gif" || file.contains("/tweet_video/")
-        val thumb = (vid?.optString("media_url_https") ?: j.optJSONObject("video")?.optString("poster")).orEmpty().takeIf { it.startsWith("https://") }
-        val ms = vid?.optJSONObject("video_info")?.optLong("duration_millis") ?: 0L
-        val info = Info("x", (if (name.isNotEmpty()) "$name (@$handle)" else "@$handle"), "@$handle", thumb, (ms / 1000).toInt(), if (gif) "gif" else "video")
-        return info to Src(file, "video/mp4", "mp4")
+        if (out.isEmpty()) throw Fail("That post has no video, gif or picture")
+        return out
     }
 
     // the file of an X video for the size asked for: the tallest one that fits, with the most data in it (X names the size in the address)
@@ -213,38 +263,30 @@ object MediaGrab {
         return out
     }
 
-    private fun xResolve(user: String, id: String, q: String): Pair<Info, Src> {
+    // X has no sizes: the file with the most data is taken (the full size of the video, 4K at 30 where the post has it)
+    private fun xResolve(user: String, id: String): List<Pair<Info, Src>> {
         var why: Fail? = null
-        val maxH = maxHeight(q)
         // 1. the open data service (its files go up to the full size of the video)
         val a = runCatching { xFromFx(JSONObject(get("https://api.fxtwitter.com/$user/status/$id"))) }
+        a.getOrNull()?.let { return it }
         a.exceptionOrNull()?.let { if (it is Fail) why = it }
-        // 2. the embed data of the post: it lists every size, so a smaller one can be chosen
-        val bj = runCatching { JSONObject(get("https://cdn.syndication.twimg.com/tweet-result?id=$id&token=" + xToken(id))) }
-        val b = bj.mapCatching { xParse(it) }
-        val files = bj.getOrNull()?.let { xFiles(it) }.orEmpty()
-        val picked = xPick(files, maxH)
-        val base = a.getOrNull() ?: b.getOrNull()
-        if (base != null) {
-            val fxHeight = files.firstOrNull { it.first == base.second.url }?.second ?: 0
-            // the full size file is kept when it fits what was asked for, otherwise the size that fits is taken
-            val use = if (picked != null && (q.isNotEmpty() || fxHeight > maxH || fxHeight == 0 && files.isNotEmpty())) picked else base.second.url
-            return base.first to Src(use, "video/mp4", "mp4")
-        }
-        // a post that really has no video says so; a service that did not answer says that
+        // 2. the embed data of the post
+        val b = runCatching { xParse(JSONObject(get("https://cdn.syndication.twimg.com/tweet-result?id=$id&token=" + xToken(id)))) }
+        b.getOrNull()?.let { return it }
+        // a post that really has nothing to save says so; a service that did not answer says that
         val f = b.exceptionOrNull()
         val first = why
         if (first != null && f is Fail && f.message?.contains("no video") == true) throw first
         throw (f as? Fail) ?: first ?: Fail("Could not read that post (" + (f?.message ?: "no answer").take(60) + ")")
     }
 
-    // ---- YouTube: the extractor of NewPipe; the best picture up to 4K (30 pictures a second above full HD) joined with the best sound ----
+    // ---- YouTube: the extractor of NewPipe; 2K at 60 pictures a second unless a size is typed (the top is 4K at 30), joined with the best sound ----
     private fun ytResolve(id: String, q: String): Pair<Info, Src> {
         val first = runCatching { YtExtract.get(id, maxHeight(q), if (q == "4k") 30 else 60) }
         first.getOrNull()?.let { g ->
             val plain = Src(g.plain.url, "video/mp4", "mp4")
             val v = g.video; val a = g.audio
-            val src = if (v != null && a != null) Src(v.url, if (v.webm) "video/webm" else "video/mp4", if (v.webm) "webm" else "mp4", audio = a.url, webm = v.webm, plain = plain) else plain
+            val src = if (v != null && a != null) Src(v.url, if (v.webm) "video/webm" else "video/mp4", if (v.webm) "webm" else "mp4", audio = a.url, webm = v.webm, plain = plain, size = v.size, asize = a.size) else plain
             val size = if (v != null && a != null) (if (v.size > 0 && a.size > 0) v.size + a.size else 0L) else g.plain.size
             return Info("youtube", g.title.ifEmpty { "YouTube video" }, g.author, g.thumb ?: "https://i.ytimg.com/vi/$id/hqdefault.jpg", g.dur, "video", size) to src
         }
@@ -274,53 +316,165 @@ object MediaGrab {
         else Info("instagram", author.ifEmpty { "Instagram" }, author, p, 0, "image") to Src(p!!, "image/jpeg", "jpg")
     }
 
-    private fun igResolve(p: Pair<String, String>): Pair<Info, Src> {
+    // one file of a post from one mirror; index 0 is the post itself, 1 and up are the pictures and videos of a post with several
+    private fun igOne(m: String, kind: String, code: String, index: Int): Pair<Info, Src> {
+        // a mirror answers a link bot with the page of the post, or sends the file itself
+        val tail = if (index > 0) "$index" else ""
+        val req = Request.Builder().url("https://$m/$kind/$code/$tail").header("User-Agent", BOT).header("Accept-Language", "en-US,en;q=0.9").build()
+        val (info, src) = still.newCall(req).execute().use { r ->
+            val loc = r.header("Location")
+            when {
+                r.code in 300..399 && loc != null && loc.startsWith("https://") -> {
+                    // a reel is a video unless the file says it is a picture; a post is told by its address or the type of the file
+                    val t = typeOf(loc)
+                    val vid = t.startsWith("video") || Regex("\\.mp4(\\?|$)").containsMatchIn(loc) || loc.contains("/video") ||
+                        (kind != "p" && !t.startsWith("image") && !Regex("\\.(jpe?g|png|webp)(\\?|$)", RegexOption.IGNORE_CASE).containsMatchIn(loc))
+                    if (vid) Info("instagram", "Instagram", "", null, 0, "video") to Src(loc, "video/mp4", "mp4")
+                    else Info("instagram", "Instagram", "", loc, 0, "image") to Src(loc, "image/jpeg", "jpg")
+                }
+                r.isSuccessful -> igFromHtml(r.body?.string().orEmpty())
+                else -> throw Fail("answer " + r.code)
+            }
+        }
+        // an address of the mirror itself is followed to the file behind it
+        val real = if (src.url.contains("//$m/")) runCatching { still.newCall(Request.Builder().url(src.url).header("User-Agent", BOT).build()).execute().use { it.header("Location") } }.getOrNull()?.takeIf { it.startsWith("https://") } ?: src.url else src.url
+        return info to Src(real, src.mime, src.ext)
+    }
+
+    private fun igResolve(p: Pair<String, String>): List<Pair<Info, Src>> {
         val kind = if (p.first.equals("reels", true)) "reel" else p.first.lowercase()
         val code = p.second
         var why = "no answer"
         for (m in mirrors) {
             try {
-                // a mirror answers a link bot with the page of the post, or sends the file itself (a picture)
-                val req = Request.Builder().url("https://$m/$kind/$code/").header("User-Agent", BOT).header("Accept-Language", "en-US,en;q=0.9").build()
-                val (info, src) = still.newCall(req).execute().use { r ->
-                    val loc = r.header("Location")
-                    when {
-                        r.code in 300..399 && loc != null && loc.startsWith("https://") -> {
-                            val vid = Regex("\\.mp4(\\?|$)").containsMatchIn(loc) || loc.contains("/video")
-                            if (vid) Info("instagram", "Instagram", "", null, 0, "video") to Src(loc, "video/mp4", "mp4")
-                            else Info("instagram", "Instagram", "", loc, 0, "image") to Src(loc, "image/jpeg", "jpg")
-                        }
-                        r.isSuccessful -> igFromHtml(r.body?.string().orEmpty())
-                        else -> throw Fail("answer " + r.code)
-                    }
-                }
+                val (info, src) = igOne(m, kind, code, 0)
+                // a reel or a video that came out as a picture is not what was asked for: the next mirror is tried
+                if (kind != "p" && info.kind == "image") { why = "no video"; continue }
                 // the page of the post says who wrote it and shows the picture of a video
                 val meta = if (info.author.isEmpty() || info.kind == "video" && info.thumb == null) runCatching { igFromHtml(get("https://$m/p/$code/", ua = BOT)).first }.getOrNull() else null
-                val i2 = if (meta != null) Info(info.site, meta.title, meta.author.ifEmpty { info.author }, meta.thumb ?: info.thumb, info.dur, info.kind) else info
-                // an address of the mirror itself is followed to the file behind it
-                val real = if (src.url.contains("//$m/")) runCatching { still.newCall(Request.Builder().url(src.url).header("User-Agent", BOT).build()).execute().use { it.header("Location") } }.getOrNull()?.takeIf { it.startsWith("https://") } ?: src.url else src.url
-                return i2 to Src(real, src.mime, src.ext)
+                fun named(i: Info) = if (meta != null) Info(i.site, meta.title, meta.author.ifEmpty { i.author }, i.thumb ?: meta.thumb.takeIf { i.kind == "video" }, i.dur, i.kind) else i
+                val out = arrayListOf(named(info) to src)
+                // a post with several pictures or videos: the mirror gives each by its number (the first one is also number 1)
+                if (kind == "p") {
+                    val pool = java.util.concurrent.Executors.newFixedThreadPool(5)
+                    try {
+                        val jobs = (2..10).map { n -> pool.submit<Pair<Info, Src>?> { runCatching { igOne(m, kind, code, n) }.getOrNull() } }
+                        for (j in jobs) {
+                            val one = runCatching { j.get(25, TimeUnit.SECONDS) }.getOrNull() ?: break
+                            if (out.any { it.second.url == one.second.url }) break
+                            out.add(named(one.first) to one.second)
+                        }
+                    } finally { pool.shutdownNow() }
+                }
+                return out
             } catch (e: Exception) { why = (e as? Fail)?.message ?: e.javaClass.simpleName }
         }
         throw Fail("Could not read this post (it may be private; $why)")
     }
 
+    // ---- TikTok: the open service tikwm hands out the file (no mark) of a video, or the pictures of a slideshow ----
+    private fun ttResolve(url: String): List<Pair<Info, Src>> {
+        var why = "no answer"
+        for (attempt in 0 until 3) {
+            try {
+                val j = JSONObject(get("https://www.tikwm.com/api/?hd=1&url=" + java.net.URLEncoder.encode(url, "UTF-8"), ua = DESKTOP))
+                if (j.optInt("code") != 0) { why = j.optString("msg").take(60).ifEmpty { "no answer" }; if (why.contains("limit", true)) { Thread.sleep(1300); continue } else break }
+                val d = j.optJSONObject("data") ?: break
+                fun abs(u: String) = if (u.startsWith("//")) "https:$u" else if (u.startsWith("/")) "https://www.tikwm.com$u" else u
+                val who = d.optJSONObject("author")?.let { a -> a.optString("unique_id").takeIf { it.isNotEmpty() } ?: a.optString("nickname") }.orEmpty()
+                val author = if (who.isNotEmpty()) "@$who" else ""
+                val title = d.optString("title").ifEmpty { author.ifEmpty { "TikTok" } }
+                val cover = abs(d.optString("cover").ifEmpty { d.optString("origin_cover") }).takeIf { it.startsWith("https://") }
+                val imgs = d.optJSONArray("images")
+                if (imgs != null && imgs.length() > 0) {
+                    val out = ArrayList<Pair<Info, Src>>()
+                    for (i in 0 until imgs.length()) { val u = abs(imgs.optString(i)); if (u.startsWith("https://")) out.add(Info("tiktok", title, author, u, 0, "image") to Src(u, "image/jpeg", "jpg")) }
+                    if (out.isNotEmpty()) return out
+                }
+                val file = abs(d.optString("hdplay").ifEmpty { d.optString("play") }).takeIf { it.startsWith("https://") } ?: throw Fail("That TikTok has no video")
+                val size = d.optLong("hd_size").takeIf { it > 0 && d.optString("hdplay").isNotEmpty() } ?: d.optLong("size")
+                return listOf(Info("tiktok", title, author, cover, d.optInt("duration"), "video") to Src(file, "video/mp4", "mp4", size = size))
+            } catch (e: Fail) { throw e } catch (e: Exception) { why = e.javaClass.simpleName }
+        }
+        throw Fail("Could not read this TikTok ($why)")
+    }
+
+    // ---- any other link: a file itself is taken as it is; a page is read for its video and picture addresses ----
+    private fun webResolve(url: String): List<Pair<Info, Src>> {
+        val b = Request.Builder().url(url).header("User-Agent", DESKTOP).header("Accept-Language", "en-US,en;q=0.9").build()
+        var page = url; var html = ""; var direct: String? = null
+        http.newCall(b).execute().use { r ->
+            if (!r.isSuccessful) throw Fail("The site answered " + r.code)
+            page = r.request.url.toString()
+            val t = r.header("Content-Type").orEmpty().lowercase()
+            if (t.startsWith("video/") || t.startsWith("image/") || t.startsWith("audio/")) direct = t
+            else html = r.body?.source()?.let { src -> src.request(2_000_000); src.buffer.clone().readUtf8() }.orEmpty()
+        }
+        val host = host(page)
+        val ref = mapOf("Referer" to page)
+        direct?.let { t ->
+            val kind = if (t.startsWith("image/")) "image" else "video"
+            val ext = when { t.contains("gif") -> "gif"; t.contains("png") -> "png"; t.contains("webp") -> "webp"; t.startsWith("image/") -> "jpg"; t.contains("webm") -> "webm"; else -> "mp4" }
+            val name = java.net.URLDecoder.decode(page.substringBefore('?').substringAfterLast('/'), "UTF-8").substringBeforeLast('.').ifEmpty { host }
+            return listOf(Info("web", name, host, null, 0, kind) to Src(page, t, ext, ref))
+        }
+        fun abs(u: String): String? = runCatching {
+            val c = unent(u.trim().replace("\\/", "/"))
+            val r = java.net.URI(page).resolve(c).toString()
+            r.takeIf { it.startsWith("https://") || it.startsWith("http://") }?.replace("http://", "https://")
+        }.getOrNull()
+        val title = unent(metaOf(html, "og:title") ?: metaOf(html, "twitter:title") ?: Regex("<title[^>]*>([^<]*)</title>", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)?.trim().orEmpty()).ifEmpty { host }
+        val author = unent(metaOf(html, "og:site_name").orEmpty()).ifEmpty { host }
+        val poster = (metaOf(html, "og:image") ?: metaOf(html, "twitter:image"))?.let(::abs)
+        val videos = LinkedHashSet<String>()
+        listOf("og:video:secure_url", "og:video:url", "og:video", "twitter:player:stream").forEach { k -> metaOf(html, k)?.let(::abs)?.let(videos::add) }
+        Regex("<video[^>]*?\\ssrc=\"([^\"]+)\"", RegexOption.IGNORE_CASE).findAll(html).forEach { m -> abs(m.groupValues[1])?.let(videos::add) }
+        Regex("<source[^>]*?\\ssrc=\"([^\"]+)\"[^>]*>", RegexOption.IGNORE_CASE).findAll(html).forEach { m ->
+            if (!m.value.contains("type=\"image", true) && !m.value.contains("type=\"audio", true)) abs(m.groupValues[1])?.let(videos::add)
+        }
+        Regex("\"contentUrl\"\\s*:\\s*\"([^\"]+)\"").findAll(html).forEach { m -> abs(m.groupValues[1])?.takeIf { Regex("\\.(mp4|webm|mov|m4v|gif|jpe?g|png|webp)(\\?|$)", RegexOption.IGNORE_CASE).containsMatchIn(it) }?.let(videos::add) }
+        // a stream list (m3u8, mpd) cannot be saved as one file
+        val files = videos.filter { !Regex("\\.(m3u8|mpd)(\\?|$)", RegexOption.IGNORE_CASE).containsMatchIn(it) }.take(10)
+        val out = ArrayList<Pair<Info, Src>>()
+        for (f in files) {
+            val img = Regex("\\.(gif|jpe?g|png|webp)(\\?|$)", RegexOption.IGNORE_CASE).containsMatchIn(f)
+            val ext = Regex("\\.(mp4|webm|mov|m4v|gif|jpe?g|png|webp)(\\?|$)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1)?.lowercase()?.replace("jpeg", "jpg")?.replace("mov", "mp4")?.replace("m4v", "mp4") ?: "mp4"
+            out.add(Info("web", title, author, if (img) f else poster, 0, if (img) "image" else "video") to Src(f, if (img) "image/" + ext else if (ext == "webm") "video/webm" else "video/mp4", ext, ref))
+        }
+        // no video: the pictures of the page
+        if (out.isEmpty()) {
+            val pics = LinkedHashSet<String>()
+            listOf("og:image:secure_url", "og:image", "twitter:image").forEach { k -> metaOf(html, k)?.let(::abs)?.let(pics::add) }
+            Regex("\"image\"\\s*:\\s*\"([^\"]+)\"").findAll(html).forEach { m -> abs(m.groupValues[1])?.let(pics::add) }
+            for (f in pics.take(10)) {
+                val ext = Regex("\\.(gif|jpe?g|png|webp)(\\?|$)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1)?.lowercase()?.replace("jpeg", "jpg") ?: "jpg"
+                out.add(Info("web", title, author, f, 0, "image") to Src(f, "image/$ext", ext, ref))
+            }
+        }
+        if (out.isEmpty()) throw Fail("Could not find any media on that page")
+        return out
+    }
+
     // ---- the card kept in the note ----
     fun card(url: String, i: Info) = JSONObject().put("u", url).put("s", i.site).put("t", i.title.take(200)).put("a", i.author.take(80)).put("k", i.kind).put("d", i.dur).put("z", i.size)
         .apply { i.thumb?.let { put("i", it) } }
-    fun card(url: String, i: Info, q: String) = card(url, i).apply { if (q.isNotEmpty()) put("q", q) }
+    // the size is kept only for YouTube (the other sites have one size); n is the place of the file in a post with several (0 = the first
+    // one, which also shows the command), c how many files the post has
+    fun card(url: String, i: Info, q: String, n: Int = 0, c: Int = 1) = card(url, i).apply { if (q.isNotEmpty() && i.site == "youtube") put("q", q); if (n > 0) put("n", n); if (c > 1) put("c", c) }
 
     // a card that came from another phone or the server is checked before it is shown: a known site, an https picture, short texts
     fun cleanCard(o: JSONObject?): JSONObject? {
         o ?: return null
         val u = o.optString("u"); val s = o.optString("s")
-        if (!u.startsWith("https://") || u.length > 600 || s !in setOf("x", "youtube", "instagram") || site(u) != s) return null
+        if (!u.startsWith("https://") || u.length > 600 || s !in setOf("x", "youtube", "instagram", "tiktok", "web") || site(u) != s) return null
         val out = JSONObject().put("u", u).put("s", s).put("t", o.optString("t").take(200)).put("a", o.optString("a").take(80))
             .put("k", o.optString("k").takeIf { it in setOf("video", "gif", "image") } ?: "video").put("d", o.optInt("d").coerceIn(0, 86_400))
             .put("z", o.optLong("z").coerceIn(0L, 100_000_000_000L))
         // the picture is a link, or a small picture kept inside the note (the first frame of a video)
         o.optString("i").takeIf { (it.startsWith("https://") && it.length < 600) || (it.startsWith("data:image/jpeg;base64,") && it.length < 90_000) }?.let { out.put("i", it) }
         o.optString("q").takeIf { it in setOf("4k", "2k", "1080p", "720p") }?.let { out.put("q", it) }
+        o.optInt("n").takeIf { it in 1..20 }?.let { out.put("n", it) }
+        o.optInt("c").takeIf { it in 2..20 }?.let { out.put("c", it) }
         return out
     }
 
@@ -330,20 +484,21 @@ object MediaGrab {
         return "$base ${System.currentTimeMillis() % 100000}.$ext"
     }
 
-    // a file in pieces of 4 MB with six connections at once: one connection to YouTube is slowed down by the site, pieces are not;
+    // a file in pieces of 2 to 4 MB with eight connections at once: one connection to YouTube is slowed down by the site, pieces are not;
     // the pieces are written to their place in the file, and a piece that fails is tried three times
     internal fun fastDownload(src: String, headers: Map<String, String>, to: File, total: Long, onBytes: (Long) -> Unit) {
-        if (total < 8L shl 20) { download(src, headers, to, onBytes); return }
-        val chunk = 4L shl 20
+        if (total <= 0 || total < 3L shl 20) { download(src, headers, to, onBytes); return }
+        // smaller pieces for a smaller file, so all the connections have work
+        val chunk = if (total < 32L shl 20) 2L shl 20 else 4L shl 20
         val count = ((total + chunk - 1) / chunk).toInt()
         val next = java.util.concurrent.atomic.AtomicInteger(0)
         val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
         val yt = src.contains("googlevideo.com")
         java.io.RandomAccessFile(to, "rw").use { raf ->
             raf.setLength(total)
-            val pool = java.util.concurrent.Executors.newFixedThreadPool(6)
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(8)
             try {
-                val jobs = (0 until 6).map {
+                val jobs = (0 until 8).map {
                     pool.submit {
                         while (failure.get() == null) {
                             val i = next.getAndIncrement(); if (i >= count) break
@@ -430,53 +585,82 @@ object MediaGrab {
     }
 
     // the file goes to Movies/Nook (Pictures/Nook for a picture), where the gallery finds it; progress is a number from 0 to 1
-    // what the last save wants to tell the person besides "saved"
-    @Volatile var note: String? = null
+    // uri: where it was saved; note: what the save wants to tell the person besides "saved"
+    class Saved(val uri: Uri, val note: String?)
 
-    suspend fun save(ctx: Context, url: String, q: String, onProgress: (Float) -> Unit): Uri = withContext(Dispatchers.IO) {
-        val (info, first) = resolve(url, q)
-        val tmp = File(ctx.cacheDir, "media").apply { mkdirs() }
-        tmp.listFiles()?.forEach { runCatching { it.delete() } }
+    // what a file really is, told by its first bytes: (extension, type)
+    internal fun sniff(head: ByteArray): Pair<String, String>? {
+        fun at(i: Int, s: String) = head.size >= i + s.length && s.indices.all { head[i + it] == s[it].code.toByte() }
+        return when {
+            at(0, "GIF") -> "gif" to "image/gif"
+            head.size > 3 && head[0] == 0xFF.toByte() && head[1] == 0xD8.toByte() -> "jpg" to "image/jpeg"
+            head.size > 4 && head[0] == 0x89.toByte() && at(1, "PNG") -> "png" to "image/png"
+            at(0, "RIFF") && at(8, "WEBP") -> "webp" to "image/webp"
+            at(4, "ftyp") -> "mp4" to "video/mp4"
+            head.size > 4 && head[0] == 0x1A.toByte() && head[1] == 0x45.toByte() && head[2] == 0xDF.toByte() && head[3] == 0xA3.toByte() -> "webm" to "video/webm"
+            else -> null
+        }
+    }
+
+    // index: which file of a post with several (0 for the first)
+    suspend fun save(ctx: Context, url: String, q: String, index: Int, onProgress: (Float) -> Unit): Saved = withContext(Dispatchers.IO) {
+        val all = resolveAll(url, q)
+        val item = all.getOrNull(index.coerceIn(0, all.size - 1)) ?: throw Fail("Nothing to save in that post")
+        val info = item.info; val first = item.src
+        val root = File(ctx.cacheDir, "media").apply { mkdirs() }
+        // every download has its own folder, so two at once (or an old one) never touch each other's files
+        root.listFiles()?.forEach { if (System.currentTimeMillis() - it.lastModified() > 6 * 3600_000L) runCatching { it.deleteRecursively() } }
+        val tmp = File(root, "d" + System.nanoTime()).apply { mkdirs() }
         val made = File(tmp, "out." + (if (first.audio != null && first.webm) "webm" else "mp4"))
         var src = first
         val total = (info.size.takeIf { it > 0 } ?: 1L).toFloat()
-        var got = 0L
+        val got = java.util.concurrent.atomic.AtomicLong(0)
         var final: File? = null
+        var note: String? = null
         try {
             // the best quality is two files joined together; if that does not work, the one-piece file of a lower quality is used
             val audio = first.audio
             if (audio != null) {
                 try {
                     val v = File(tmp, "v.part"); val a = File(tmp, "a.part")
-                    val tick = { n: Long -> got += n; onProgress((got / total * 0.92f).coerceIn(0f, 0.92f)) }
-                    fastDownload(first.url, first.headers, v, sizeOf(first.url, first.headers), tick); fastDownload(audio, first.headers, a, sizeOf(audio, first.headers), tick)
+                    val tick = { n: Long -> onProgress((got.addAndGet(n) / total * 0.92f).coerceIn(0f, 0.92f)) }
+                    // both pieces at once
+                    val av = if (first.size > 0) first.size else sizeOf(first.url, first.headers); val aa = if (first.asize > 0) first.asize else sizeOf(audio, first.headers)
+                    kotlinx.coroutines.coroutineScope {
+                        val x = async { fastDownload(first.url, first.headers, v, av, tick) }
+                        val y = async { fastDownload(audio, first.headers, a, aa, tick) }
+                        x.await(); y.await()
+                    }
                     mux(v, a, made, first.webm)
                     final = made
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     val plain = first.plain ?: throw e
-                    runCatching { made.delete() }; src = plain; got = 0
+                    runCatching { made.delete() }; src = plain; got.set(0)
                 }
             }
             if (final == null) {
                 val one = File(tmp, "one." + src.ext)
                 val share = if (src === first) total else 1f
-                fastDownload(src.url, src.headers, one, sizeOf(src.url, src.headers)) { n -> got += n; if (src === first) onProgress((got / share * 0.92f).coerceIn(0f, 0.92f)) }
+                val size = if (src.size > 0) src.size else sizeOf(src.url, src.headers)
+                fastDownload(src.url, src.headers, one, size) { n -> val g = got.addAndGet(n); if (src === first) onProgress((g / share * 0.92f).coerceIn(0f, 0.92f)) }
                 final = one
             }
             var cur: File = final!!
-            // the file says what it is: a gif stays a gif, and a looping clip that X calls a gif is made a real gif file
-            val head = ByteArray(12).also { b -> cur.inputStream().use { it.read(b) } }
-            val isGifFile = head[0] == 'G'.code.toByte() && head[1] == 'I'.code.toByte() && head[2] == 'F'.code.toByte()
-            note = null
-            if (!isGifFile && info.kind == "gif") {
+            // the file says what it is (not the address): a gif stays a gif, a picture stays a picture, and a looping clip that X calls
+            // a gif is made a real gif file
+            val head = ByteArray(16).also { b -> cur.inputStream().use { it.read(b) } }
+            val real = sniff(head)
+            if (real?.first != "gif" && info.kind == "gif") {
                 val g = runCatching { toGif(cur) }
                 val bytes = g.getOrNull()
                 if (bytes != null) { val gf = File(tmp, "clip.gif"); gf.writeBytes(bytes); cur = gf }
                 else note = "Saved as a looping video, a gif could not be made" + (g.exceptionOrNull()?.let { " (" + (it.message ?: it.javaClass.simpleName).take(40) + ")" } ?: "")
             }
             val file: File = cur
-            val ext = if (isGifFile || file.extension == "gif") "gif" else file.extension
-            val mime = if (ext == "gif") "image/gif" else if (ext == "webm") "video/webm" else if (src.mime.startsWith("image/")) src.mime else "video/mp4"
+            val sn = if (file === final) real else ("gif" to "image/gif")
+            val ext = sn?.first ?: file.extension.ifEmpty { src.ext }
+            val mime = sn?.second ?: if (ext == "gif") "image/gif" else if (ext == "webm") "video/webm" else if (src.mime.startsWith("image/")) src.mime else "video/mp4"
             val image = mime.startsWith("image/")
             val name = safeName(info.title, ext)
             val resolver = ctx.contentResolver
@@ -498,7 +682,7 @@ object MediaGrab {
                 result = androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f)
             }
             onProgress(1f)
-            result
-        } finally { tmp.listFiles()?.forEach { runCatching { it.delete() } } }
+            Saved(result, note)
+        } finally { runCatching { tmp.deleteRecursively() } }
     }
 }

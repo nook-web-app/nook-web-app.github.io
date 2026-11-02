@@ -25,20 +25,31 @@ object Keep {
         synchronized(this) { n = maxOf(0, n - 1); if (n > 0) return }
         runCatching { ctx.stopService(Intent(ctx, KeepService::class.java)) }
     }
-    // the notification of a download: its name and a bar from 0 to 100 (only when the number moved)
-    private var lastPct = -1; private var lastAt = 0L
-    fun progress(ctx: Context?, title: String, pct: Int) {
+    // the notification of a download: its name and a bar from 0 to 100, one for each download (its own number, apart from the one of the
+    // service) that goes away at 100 or when the download ends; shown only when the number moved
+    private val last = HashMap<String, Pair<Int, Long>>()
+    private fun nid(key: String) = 1000 + (key.hashCode() and 0xffff)
+    fun progress(ctx: Context?, key: String, title: String, pct: Int) {
         ctx ?: return
+        if (pct >= 100) { clear(ctx, key); return }
         val now = System.currentTimeMillis()
-        if (pct == lastPct || (pct in 1..99 && now - lastAt < 400)) return
-        lastPct = pct; lastAt = now
+        synchronized(last) {
+            val l = last[key]
+            if (l != null && (pct == l.first || (pct > 0 && now - l.second < 400))) return
+            last[key] = pct to now
+        }
         runCatching {
             val nm = ctx.getSystemService(NotificationManager::class.java)
-            if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel("nook_work") == null) nm.createNotificationChannel(NotificationChannel("nook_work", "Nook working", NotificationManager.IMPORTANCE_LOW))
-            val n = NotificationCompat.Builder(ctx, "nook_work").setSmallIcon(R.drawable.ic_stat).setContentTitle(title.take(60)).setContentText("$pct%")
+            if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel("nook_dl") == null) nm.createNotificationChannel(NotificationChannel("nook_dl", "Downloads", NotificationManager.IMPORTANCE_LOW))
+            val n = NotificationCompat.Builder(ctx, "nook_dl").setSmallIcon(R.drawable.ic_stat).setContentTitle(title.take(60)).setContentText("$pct%")
                 .setProgress(100, pct.coerceIn(0, 100), false).setPriority(NotificationCompat.PRIORITY_LOW).setOngoing(true).setOnlyAlertOnce(true).setSilent(true).build()
-            nm.notify(7, n)
+            nm.notify(nid(key), n)
         }
+    }
+    fun clear(ctx: Context?, key: String) {
+        ctx ?: return
+        synchronized(last) { last.remove(key) }
+        runCatching { ctx.getSystemService(NotificationManager::class.java).cancel(nid(key)) }
     }
     suspend fun <T> around(ctx: Context?, f: suspend () -> T): T { begin(ctx); try { return f() } finally { end(ctx) } }
 }

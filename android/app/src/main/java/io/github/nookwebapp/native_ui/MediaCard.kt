@@ -19,7 +19,9 @@ import kotlinx.coroutines.launch
 
 // where each "/media" card stands on this phone: the share of the file that came, or the place it was saved at
 class MediaDl {
-    companion object { val shared = MediaDl(); val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main) }
+    companion object { val jobs = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>(); val shared = MediaDl(); val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main) }
+    // the running download of each card, and whether its message is still in a chat
+    fun exists(app: AppState, id: String): Boolean = app.s.chats.any { c -> c.msgs.any { it.id == id } }
     class St(val progress: Float, val saved: String?, val error: String?)
     val state = mutableStateMapOf<String, St>()
     fun saved(ctx: android.content.Context, id: String): String? = state[id]?.saved ?: ctx.getSharedPreferences("mdl", 0).getString(id, null)
@@ -40,7 +42,8 @@ fun MediaCard(m: LMsg) {
     val st = app.mdl.state[m.id]
     val saved = remember(m.id, st?.saved) { ctx?.let { app.mdl.saved(it, m.id) } }
     val busy = st != null && st.saved == null && st.error == null
-    val meta = listOf(MediaGrab.siteName(card.optString("s")), clock(card.optInt("d")), MediaGrab.sizeText(card.optLong("z"))).filter { it.isNotEmpty() }.joinToString(" · ")
+    val of = if (card.optInt("c") > 1) (card.optInt("n") + 1).toString() + "/" + card.optInt("c") else ""
+    val meta = listOf(MediaGrab.siteName(card.optString("s"), card.optString("u")), of, clock(card.optInt("d")), MediaGrab.sizeText(card.optLong("z"))).filter { it.isNotEmpty() }.joinToString(" · ")
     Column(Modifier.fillMaxWidth(0.82f).widthIn(max = 320.dp).clip(shape).background(c.bg2)) {
         card.optString("i").takeIf { it.isNotEmpty() }?.let { img ->
             Box(Modifier.fillMaxWidth().aspectRatio(1f).background(c.bg2)) { LinkPicBox(img) }
@@ -62,20 +65,31 @@ fun MediaCard(m: LMsg) {
                     app.mdl.state[m.id] = MediaDl.St(0f, null, null)
                     // the download belongs to the process, not to the screen: it goes on when the app is left or the screen is closed
                     val title = card.optString("t").ifEmpty { "Nook" }
-                    MediaDl.scope.launch {
+                    val key = m.id
+                    val index = card.optInt("n")
+                    val job = MediaDl.scope.launch {
+                        var checked = 0L
                         try {
-                            val uri = Keep.around(ctx) {
-                                Keep.progress(ctx, title, 0)
-                                MediaGrab.save(ctx, card.optString("u"), card.optString("q")) { p -> app.mdl.state[m.id] = MediaDl.St(p, null, null); Keep.progress(ctx, title, (p * 100).toInt()) }
+                            val got = Keep.around(ctx) {
+                                Keep.progress(ctx, key, title, 0)
+                                MediaGrab.save(ctx, card.optString("u"), card.optString("q"), index) { p ->
+                                    // the message was deleted while it downloads: the download stops and its notification goes
+                                    val now = System.currentTimeMillis()
+                                    if (now - checked > 700) { checked = now; if (!app.mdl.exists(app, key)) throw kotlinx.coroutines.CancellationException("deleted") }
+                                    app.mdl.state[key] = MediaDl.St(p, null, null); Keep.progress(ctx, key, title, (p * 100).toInt())
+                                }
                             }
-                            app.mdl.keep(ctx, m.id, uri.toString())
-                            app.mdl.state[m.id] = MediaDl.St(1f, uri.toString(), null)
-                            app.say(MediaGrab.note ?: "Saved in your gallery")
+                            app.mdl.keep(ctx, key, got.uri.toString())
+                            app.mdl.state[key] = MediaDl.St(1f, got.uri.toString(), null)
+                            app.say(got.note ?: "Saved in your gallery")
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            app.mdl.state.remove(key)
                         } catch (e: Exception) {
-                            app.mdl.state[m.id] = MediaDl.St(0f, null, e.message ?: "failed")
+                            app.mdl.state[key] = MediaDl.St(0f, null, e.message ?: "failed")
                             app.say(if (e is MediaGrab.Fail) e.message ?: "Could not save it" else "Could not save it (" + (e.message ?: e.javaClass.simpleName).lineSequence().first().take(80) + ")")
-                        }
+                        } finally { Keep.clear(ctx, key); MediaDl.jobs.remove(key) }
                     }
+                    MediaDl.jobs[key] = job
                 }
             }
             if (st?.error != null) T(st.error, Fs.xs, color = c.muted)
@@ -117,7 +131,7 @@ fun MediaCmd(url: String, site: String, quality: String, tap: () -> Unit, onLong
         androidx.compose.ui.text.buildAnnotatedString {
             append("/media " + (if (quality.isNotEmpty()) "/$quality " else ""))
             pushStringAnnotation("url", url)
-            withStyle(androidx.compose.ui.text.SpanStyle(color = androidx.compose.ui.graphics.Color.White)) { append(MediaGrab.domain(site)) }
+            withStyle(androidx.compose.ui.text.SpanStyle(color = androidx.compose.ui.graphics.Color.White)) { append(MediaGrab.domain(site, url)) }
             pop()
         }
     }

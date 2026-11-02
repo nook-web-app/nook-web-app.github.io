@@ -37,7 +37,7 @@ object MediaGrab {
     private val IG_POST = Regex("^https?://(?:www\\.)?instagram\\.com/(?:[\\w.]+/)?(p|reel|reels|tv)/([\\w-]+)", RegexOption.IGNORE_CASE)
     private val TT = Regex("^https?://(?:www\\.|m\\.|vm\\.|vt\\.)?tiktok\\.com/\\S+", RegexOption.IGNORE_CASE)
     private val YT_ID = Regex("(?:youtube\\.com/(?:watch\\?(?:.*&)?v=|shorts/|embed/|live/)|youtu\\.be/)([\\w-]{6,})", RegexOption.IGNORE_CASE)
-    private val CMD = Regex("^/media(?:\\s+/(4k|2k|1080p|720p))?(?:\\s+(\\S+))?\\s*$", RegexOption.IGNORE_CASE)
+    private val CMD = Regex("^/media(?:\\s+/(4k|2k|1080p|720p))?((?:\\s+\\S+)*)\\s*$", RegexOption.IGNORE_CASE)
     private const val DESKTOP = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
     private const val BOT = "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)"
 
@@ -47,7 +47,9 @@ object MediaGrab {
     private val still: OkHttpClient = http.newBuilder().followRedirects(false).build()
 
     // the link of a "/media" message: null when the text is not that command, "" when the link is missing
-    fun command(text: String): String? = CMD.find(text.trim())?.let { it.groupValues[2] }
+    fun command(text: String): String? = CMD.find(text.trim())?.let { it.groupValues[2].trim().split(Regex("\\s+"))[0] }
+    // every link of a "/media" message (several links may be pasted at once); empty when none; null when the text is not that command
+    fun commandLinks(text: String): List<String>? = CMD.find(text.trim())?.let { m -> m.groupValues[2].trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.distinct().take(10) }
     // the size asked for in "/media /2k link": "4k", "2k", "1080p" or "720p"; "" when none was typed
     fun quality(text: String): String = CMD.find(text.trim())?.groupValues?.get(1)?.lowercase().orEmpty()
     // the tallest picture each size allows (only YouTube has sizes; without one it is 2K at 60 pictures a second, the top is 4K at 30)
@@ -470,11 +472,15 @@ object MediaGrab {
         val out = JSONObject().put("u", u).put("s", s).put("t", o.optString("t").take(200)).put("a", o.optString("a").take(80))
             .put("k", o.optString("k").takeIf { it in setOf("video", "gif", "image") } ?: "video").put("d", o.optInt("d").coerceIn(0, 86_400))
             .put("z", o.optLong("z").coerceIn(0L, 100_000_000_000L))
+        // the links of a command with several of them (only the first card carries them, to name every site in the command bubble)
+        o.optJSONArray("l")?.let { a -> val l = org.json.JSONArray(); for (i in 0 until minOf(a.length(), 10)) a.optString(i).takeIf { it.startsWith("https://") && it.length < 600 }?.let { l.put(it) }; if (l.length() > 1) out.put("l", l) }
         // the picture is a link, or a small picture kept inside the note (the first frame of a video)
         o.optString("i").takeIf { (it.startsWith("https://") && it.length < 600) || (it.startsWith("data:image/jpeg;base64,") && it.length < 90_000) }?.let { out.put("i", it) }
         o.optString("q").takeIf { it in setOf("4k", "2k", "1080p", "720p") }?.let { out.put("q", it) }
         o.optInt("n").takeIf { it in 1..20 }?.let { out.put("n", it) }
         o.optInt("c").takeIf { it in 2..20 }?.let { out.put("c", it) }
+        // a card of a later link of the same command: the command bubble is not drawn again
+        if (o.optInt("x") == 1) out.put("x", 1)
         return out
     }
 

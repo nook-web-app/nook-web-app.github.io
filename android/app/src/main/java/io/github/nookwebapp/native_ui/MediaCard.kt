@@ -123,16 +123,20 @@ private fun LinkPicBox(src: String) {
 
 // the message of the command: "/media", the size if one was typed, and the name of the site in the colour of links in my own messages; a tap on the name opens the page
 @Composable
-fun MediaCmd(url: String, site: String, quality: String, tap: () -> Unit, onLong: () -> Unit) {
+fun MediaCmd(url: String, site: String, quality: String, tap: () -> Unit, onLong: () -> Unit, more: List<String> = emptyList()) {
     val c = LocalNook.current
     val uri = androidx.compose.ui.platform.LocalUriHandler.current
     val shape = RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.xs, Rad.bubble)
-    val ann = remember(url, site, quality) {
+    val ann = remember(url, site, quality, more) {
         androidx.compose.ui.text.buildAnnotatedString {
             append("/media " + (if (quality.isNotEmpty()) "/$quality " else ""))
-            pushStringAnnotation("url", url)
-            withStyle(androidx.compose.ui.text.SpanStyle(color = androidx.compose.ui.graphics.Color.White)) { append(MediaGrab.domain(site, url)) }
-            pop()
+            // one name for each link pasted, each one opens its own page
+            (if (more.size > 1) more else listOf(url)).forEachIndexed { i, link ->
+                if (i > 0) append(" ")
+                pushStringAnnotation("url", link)
+                withStyle(androidx.compose.ui.text.SpanStyle(color = androidx.compose.ui.graphics.Color.White)) { append(MediaGrab.domain(MediaGrab.site(link) ?: site, link)) }
+                pop()
+            }
         }
     }
     var layout by remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }

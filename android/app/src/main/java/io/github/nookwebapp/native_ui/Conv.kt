@@ -37,6 +37,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 
 // convV: a chat on this phone. Messages sit at the bottom, a tap shows a message's time, a hold offers copy and delete;
 // the text box keeps what was typed (the draft) and up to four photos can go with a message.
@@ -140,29 +142,35 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
             Box(Modifier.size(42.dp).alpha(if (can) 1f else 0.45f).clip(CircleShape).background(c.fill).pressTap(CircleShape, enabled = can) {
                 // "/media <link>" in a note: the card of the video is made instead of a message with the words
                 // (any chat of the notes list, also one that holds an answer of Zenith: earlier messages never stop the command)
-                val link = if (pend.isEmpty()) MediaGrab.command(text) else null
-                // a size counts only for a YouTube link
-                val qual = if (link != null && MediaGrab.site(link) == "youtube") MediaGrab.quality(text) else ""
-                if (link != null) {
+                val links = if (pend.isEmpty()) MediaGrab.commandLinks(text) else null
+                if (links != null) {
+                    val qtext = MediaGrab.quality(text)
                     when {
-                        link.isEmpty() -> app.say("Type /media and a link")
-                        MediaGrab.site(link) == null -> app.say("Use a link that starts with https://")
+                        links.isEmpty() -> app.say("Type /media and a link")
+                        links.any { MediaGrab.site(it) == null } -> app.say("Use links that start with https://")
                         else -> {
                             setText("")
                             app.say("Getting media...")
                             app.scope.launch {
-                                try {
-                                    // a post with several files gets a card for each one, one after another (the command shows on the first)
-                                    val items = MediaGrab.resolveAll(link, qual)
-                                    val t0 = Clock.now()
+                                // every link is read at the same time; the cards come in the order the links were pasted (the command shows on the first card only)
+                                val done = links.map { link -> async { runCatching { MediaGrab.resolveAll(link, if (MediaGrab.site(link) == "youtube") qtext else "") } } }.awaitAll()
+                                val t0 = Clock.now(); var k = 0; var failed: Throwable? = null
+                                val cmdText = "/media " + (if (links.any { MediaGrab.site(it) == "youtube" } && qtext.isNotEmpty()) "/$qtext " else "") + links.joinToString(" ")
+                                done.forEachIndexed { li, r ->
+                                    val items = r.getOrNull()
+                                    if (items == null) { failed = r.exceptionOrNull(); return@forEachIndexed }
+                                    val link = links[li]
+                                    val qual = if (MediaGrab.site(link) == "youtube") qtext else ""
                                     items.forEachIndexed { n, it ->
-                                        val m = LMsg(uid(), "/media " + (if (qual.isNotEmpty()) "/$qual " else "") + link, t0 + n, emptyList()).also { x -> x.mcard = MediaGrab.cleanCard(MediaGrab.card(link, it.info, qual, n, items.size)) }
-                                        chat.msgs.add(m)
+                                        val card = MediaGrab.card(link, it.info, qual, n, items.size)
+                                        if (k > 0 && n == 0) card.put("x", 1)
+                                        if (k == 0 && links.size > 1) card.put("l", org.json.JSONArray(links))
+                                        val m = LMsg(uid(), cmdText, t0 + k, emptyList()).also { x -> x.mcard = MediaGrab.cleanCard(card) }
+                                        chat.msgs.add(m); k++
                                     }
-                                    app.persist()
-                                } catch (e: Exception) {
-                                    app.say(if (e is MediaGrab.Fail) e.message ?: "Could not get it" else "Could not get it (" + (e.message ?: e.javaClass.simpleName).lineSequence().first().take(80) + ")")
                                 }
+                                if (k > 0) app.persist()
+                                failed?.let { e -> app.say(if (e is MediaGrab.Fail) e.message ?: "Could not get it" else "Could not get it (" + (e.message ?: e.javaClass.simpleName).lineSequence().first().take(80) + ")") }
                             }
                         }
                     }
@@ -191,8 +199,9 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onLong: () -> Unit
         if (m.imgs.isNotEmpty()) Box(Modifier.width(minOf(w * 0.82f, 320.dp)).clip(RoundedCornerShape(Rad.bubble))) { ImgGrid(m.imgs, whenText(m.t), framed = false) }
         // "/media link": the command stays in view with its link shortened, and the card of the video answers on the left
         m.mcard?.let { card ->
-            if (card.optInt("n") == 0) MediaCmd(card.optString("u"), card.optString("s"), card.optString("q"), tap, onLong)
-            Box(Modifier.align(Alignment.Start).padding(top = if (card.optInt("n") == 0) 4.dp else 0.dp)) { MediaCard(m) }
+            val shown = card.optInt("n") == 0 && card.optInt("x") != 1
+            if (shown) MediaCmd(card.optString("u"), card.optString("s"), card.optString("q"), tap, onLong, card.optJSONArray("l")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty())
+            Box(Modifier.align(Alignment.Start).padding(top = if (shown) 4.dp else 0.dp)) { MediaCard(m) }
         }
         m.rpost?.let { Box(Modifier.padding(top = if (m.imgs.isNotEmpty()) 4.dp else 0.dp)) { RCard(it.id, it.u) } }
         m.zpost?.let { Box(Modifier.padding(top = 4.dp)) { ZCard(it) } }

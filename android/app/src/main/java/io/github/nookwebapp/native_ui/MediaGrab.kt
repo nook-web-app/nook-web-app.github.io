@@ -237,6 +237,7 @@ object MediaGrab {
     }
 
     internal fun xParse(j: JSONObject): List<Pair<Info, Src>> {
+        if (j.optString("__typename") == "TweetTombstone") throw Fail("That post was deleted or is not public")
         val user = j.optJSONObject("user")
         val handle = user?.optString("screen_name").orEmpty()
         val name = user?.optString("name").orEmpty()
@@ -297,6 +298,7 @@ object MediaGrab {
         // a post that really has nothing to save says so; a service that did not answer says that
         val f = b.exceptionOrNull()
         val first = why
+        if (f is Fail && f.message?.contains("deleted") == true) throw f
         if (first != null && f is Fail && f.message?.contains("no video") == true) throw first
         throw (f as? Fail) ?: first ?: Fail("Could not read that post (" + (f?.message ?: "no answer").take(60) + ")")
     }
@@ -316,7 +318,7 @@ object MediaGrab {
     }
 
     // ---- Instagram: the open mirrors of Instagram embeds (they read the post with their own sign in and hand out the files) ----
-    private val mirrors = listOf("kkinstagram.com", "ddinstagram.com", "eeinstagram.com")
+    private val mirrors = listOf("vxinstagram.com", "kkinstagram.com", "eeinstagram.com", "ddinstagram.com")
     // a mirror that is slow or busy (a 5xx or no answer) is asked again once before the next one is tried
     private fun <T> twice(f: () -> T): T = try { f() } catch (e: Exception) { if (e is Fail && (e.message.orEmpty().contains("404") || e.message.orEmpty().contains("403"))) throw e; Thread.sleep(600); f() }
 
@@ -327,13 +329,15 @@ object MediaGrab {
     private fun unent(s: String) = s.replace("&amp;", "&").replace("&quot;", "\"").replace("&#x27;", "'").replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">")
 
     // what a mirror says about a post in its page (the og tags)
-    internal fun igFromHtml(html: String): Pair<Info, Src> {
+    internal fun igFromHtml(html: String, base: String = ""): Pair<Info, Src> {
         val video = metaOf(html, "og:video:secure_url") ?: metaOf(html, "og:video:url") ?: metaOf(html, "og:video")
         val pic = metaOf(html, "og:image")
         val who = Regex("\\(@([\\w.]+)\\)").find(metaOf(html, "og:title").orEmpty())?.groupValues?.get(1)
         val author = if (who != null) "@$who" else ""
-        val v = video?.let(::unent)?.takeIf { it.startsWith("https://") }
-        val p = pic?.let(::unent)?.takeIf { it.startsWith("https://") }
+        // an address that starts with "/" belongs to the mirror itself
+        fun full(u: String) = if (u.startsWith("/") && !u.startsWith("//") && base.isNotEmpty()) "https://$base$u" else u
+        val v = video?.let(::unent)?.let(::full)?.takeIf { it.startsWith("https://") }
+        val p = pic?.let(::unent)?.let(::full)?.takeIf { it.startsWith("https://") }
         if (v == null && p == null) throw Fail("Could not read this post (it may be private)")
         return if (v != null) Info("instagram", author.ifEmpty { "Instagram" }, author, p, 0, "video") to Src(v, "video/mp4", "mp4")
         else Info("instagram", author.ifEmpty { "Instagram" }, author, p, 0, "image") to Src(p!!, "image/jpeg", "jpg")
@@ -355,7 +359,7 @@ object MediaGrab {
                     if (vid) Info("instagram", "Instagram", "", null, 0, "video") to Src(loc, "video/mp4", "mp4")
                     else Info("instagram", "Instagram", "", loc, 0, "image") to Src(loc, "image/jpeg", "jpg")
                 }
-                r.isSuccessful -> igFromHtml(r.body?.string().orEmpty())
+                r.isSuccessful -> igFromHtml(r.body?.string().orEmpty(), m)
                 else -> throw Fail("answer " + r.code)
             }
         }
@@ -374,7 +378,7 @@ object MediaGrab {
                 // a reel or a video that came out as a picture is not what was asked for: the next mirror is tried
                 if (kind != "p" && info.kind == "image") { why = "no video"; continue }
                 // the page of the post says who wrote it and shows the picture of a video
-                val meta = if (info.author.isEmpty() || info.kind == "video" && info.thumb == null) runCatching { igFromHtml(get("https://$m/p/$code/", ua = BOT)).first }.getOrNull() else null
+                val meta = if (info.author.isEmpty() || info.kind == "video" && info.thumb == null) runCatching { igFromHtml(get("https://$m/p/$code/", ua = BOT), m).first }.getOrNull() else null
                 fun named(i: Info) = if (meta != null) Info(i.site, meta.title, meta.author.ifEmpty { i.author }, i.thumb ?: meta.thumb.takeIf { i.kind == "video" }, i.dur, i.kind) else i
                 val out = arrayListOf(named(info) to src)
                 // a post with several pictures or videos: the mirror gives each by its number (the first one is also number 1)

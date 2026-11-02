@@ -12,18 +12,22 @@ import java.io.File
 object ClipFrames {
     class Out(val frames: List<IntArray>, val w: Int, val h: Int, val fps: Int)
 
-    fun read(file: File, maxW: Int = 360, maxFrames: Int = 120): Out {
+    fun read(file: File, maxW: Int = 4096, maxFrames: Int = 600): Out {
         val ch = NIOUtils.readableChannel(file)
         try {
             val grab = FrameGrab.createFrameGrab(ch)
             val frames = ArrayList<IntArray>()
             var w = 0; var h = 0
+            // the original size and every picture; only a clip too big for the memory of the phone (about 30 million pixels in all) is made smaller
+            val total = grab.videoTrack.meta.totalFrames.coerceAtLeast(1)
+            val budget = 30_000_000.0
             while (frames.size < maxFrames) {
                 val pic = grab.nativeFrame ?: break
                 val rgb = Picture.create(pic.width, pic.height, ColorSpace.RGB)
                 ColorUtil.getTransform(pic.color, ColorSpace.RGB).transform(pic, rgb)
                 val sw = pic.width; val sh = pic.height
-                val dw = minOf(maxW, pic.croppedWidth); val dh = (pic.croppedHeight * (dw.toFloat() / pic.croppedWidth)).toInt().coerceAtLeast(1)
+                val fit = if (w == 0) minOf(1.0, Math.sqrt(budget / (total.toDouble() * pic.croppedWidth * pic.croppedHeight))) else 1.0
+                val dw = if (w == 0) minOf(maxW, (pic.croppedWidth * fit).toInt().coerceAtLeast(16)) else w; val dh = (pic.croppedHeight * (dw.toFloat() / pic.croppedWidth)).toInt().coerceAtLeast(1)
                 if (w == 0) { w = dw; h = dh }
                 val d = rgb.getPlaneData(0)
                 // the picture may have a cropped edge: only its visible part is used

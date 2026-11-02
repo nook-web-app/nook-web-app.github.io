@@ -83,8 +83,8 @@ textarea{resize:none}
 .ab.like.on{color:var(--like)}
 .ab.rp.on{color:var(--good)}
 .ab.bm.on{color:var(--accent)}
-.acts.big{margin:4px 0 0;justify-content:space-around;padding-block:4px}
-.acts.big>.ab{flex:0 0 auto;max-width:none;margin:0}
+.acts.big{margin:4px 0 0;padding-block:4px}
+.acts.big>.ab{flex:1 1 0;justify-content:center;max-width:none;margin:0;padding-inline:0}
 .mp{padding-block:12px 0}
 .mh{display:flex;gap:12px;align-items:center}
 .mh .nm{min-width:0}

@@ -159,7 +159,7 @@ private fun Ab(icon: String, n: Int, on: Boolean, onColor: Color, big: Boolean, 
     val col = if (on) onColor else c.muted
     Row(
         modifier.defaultMinSize(minHeight = 38.dp).tap(RoundedCornerShape(Rad.pill), onClick = onClick).padding(horizontal = 8.dp).vpad(8.dp),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp, if (big) Alignment.CenterHorizontally else Alignment.Start),
     ) {
         NIcon(icon, if (big) 24.dp else 20.dp, col, fill && on)
         if (n > 0) T(n.toString(), Fs.sm, color = col, lineHeight = 16.sp)
@@ -192,7 +192,8 @@ fun Acts(p: LPost, big: Boolean = false, nc: Boolean = false) {
         { m -> Ab("dots", 0, false, c.accent, big, false, m) { postSheet(app, p) } },
     )
     if (big) {
-        Row(Modifier.fillMaxWidth().padding(top = 4.dp).vpad(4.dp), horizontalArrangement = Arrangement.SpaceAround) { items.forEach { it(Modifier) } }
+        // six equal slots: a count appearing or growing (a like) never moves the other buttons
+        Row(Modifier.fillMaxWidth().padding(top = 4.dp).vpad(4.dp)) { items.forEach { it(Modifier.weight(1f)) } }
         return
     }
     // the row starts 8dp left of the text (margin-left:-8px), so it is 8dp wider than the column. Like flex, the last

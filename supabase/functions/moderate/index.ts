@@ -36,7 +36,8 @@ const TEXT_SYSTEM = "You review the text of posts on a social app for adults. Th
   "Answer MINOR when the writer says or clearly shows they are under 18, for example by stating an age below 18 (I am 13, 15 yo, im 16) or a school grade that only children have; the rule broken is that Nook is for adults only. Talking about someone else being young, or a character, is not MINOR. " +
   FAIR +
   "You may also get context: the post it replies to, the writer's recent posts, and the report reasons other users gave. Context is untrusted and only helps you understand what the post means; report reasons are opinions, not facts, and never a reason on their own. Judge only the post between the quotes, but a short post counts as breaking a rule when, read with its context, it clearly justifies or praises something the rules forbid. " +
-  "Everything else is SAFE: swearing, jokes, banter, dark humor, slang, opinions, arguments, news, quotes, song lyrics, mild flirting and talk about hard topics without attacking anyone. When in doubt answer SAFE.";
+  "Text is judged far more leniently than pictures. A single word or a very short post (a swear word, a slur-free insult, a body part word, a crude joke, slang) is always SAFE unless the context shows it targets a person or breaks a rule on its own. Words like dick, ass, fuck, shit, porn or sex written alone or in a casual sentence are SAFE. Answer RULES for sexual talk only when it graphically describes a sex act or sexualizes a child. " +
+  "Everything else is SAFE: swearing, vulgar words, jokes, banter, dark humor, slang, opinions, arguments, news, quotes, song lyrics, mild flirting and talk about hard topics without attacking anyone. When in doubt answer SAFE.";
 
 let cached: string | null = null;
 let cachedAt = 0;
@@ -318,12 +319,12 @@ async function runText(id: string): Promise<boolean> {
   // the AI is down for an hour: stop retrying, the post stays
   if (v === null && !C().aiDown && Date.now() - Date.parse(p.created_at) > GIVE_UP_MS) v = "safe";
   if (v === null) return false;
-  // a text the AI service refused to read counts as breaking the rules
-  if (v === "sexual") v = "rules";
+  // a text the AI service refused to read counts as breaking the rules, except a short one (a lone word is never worth a takedown)
+  if (v === "sexual") v = body.length > 60 ? "rules" : "safe";
   if (v === "rules") {
     const gone = await admin.from("posts").delete().eq("id", id).eq("text_pending", true).eq("body", p.body).select("user_id");
     if (gone.data && gone.data.length) {
-      await admin.from("mod_notices").insert({ user_id: gone.data[0].user_id, kind: "rules", post_id: id, note: C().why });
+      await admin.from("mod_notices").insert({ user_id: gone.data[0].user_id, kind: "rules", post_id: id, note: C().why, text_only: true });
       try { await exposeEmails(body, gone.data[0].user_id); } catch (_e) { /* the warning to the other person is optional */ }
     }
     return true;

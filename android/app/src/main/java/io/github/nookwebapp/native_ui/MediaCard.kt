@@ -76,7 +76,7 @@ fun MediaCard(m: LMsg) {
                         try {
                             val got = Keep.download(ctx, key, title) {
                                 Keep.progress(ctx, key, title, 0)
-                                MediaGrab.save(ctx, card.optString("u"), card.optString("q"), index, card.optString("i")) { p ->
+                                MediaGrab.save(ctx, card.optString("u"), card.optString("q"), index, card.optString("i"), card.optString("f")) { p ->
                                     // the message was deleted while it downloads: the download stops and its notification goes
                                     val now = System.currentTimeMillis()
                                     if (now - checked > 700) { checked = now; if (!app.mdl.exists(app, key)) throw kotlinx.coroutines.CancellationException("deleted") }
@@ -135,13 +135,14 @@ private fun LinkPicBox(src: String) {
 
 // the message of the command: "/media", the size if one was typed, and the name of the site in the colour of links in my own messages; a tap on the name opens the page
 @Composable
-fun MediaCmd(url: String, site: String, quality: String, tap: () -> Unit, onLong: () -> Unit, more: List<String> = emptyList()) {
+fun MediaCmd(url: String, site: String, quality: String, tap: () -> Unit, onLong: () -> Unit, more: List<String> = emptyList(), folder: String = "") {
     val c = LocalNook.current
     val uri = androidx.compose.ui.platform.LocalUriHandler.current
     val shape = RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.xs, Rad.bubble)
-    val ann = remember(url, site, quality, more) {
+    val ann = remember(url, site, quality, more, folder) {
         androidx.compose.ui.text.buildAnnotatedString {
             append(if (quality == "audio") "/audio " else "/media " + (if (quality.isNotEmpty()) "/$quality " else ""))
+            if (folder.isNotEmpty()) append("/folder/$folder ")
             // one name for each link pasted, each one opens its own page
             (if (more.size > 1) more else listOf(url)).forEachIndexed { i, link ->
                 if (i > 0) append(" ")

@@ -7,6 +7,14 @@ import org.junit.Test
 // the parts of "/media" that need no connection: the command, the link kinds, the token of the X embed, how the answers of X and
 // Instagram are read, and the check of a card that came from outside
 class MediaGrabTest {
+    @Test fun folderOption() {
+        assertEquals(listOf("https://a.com/x", "https://b.com/y"), MediaGrab.commandLinks("/media /folder/Download https://a.com/x https://b.com/y"))
+        assertEquals("download", MediaGrab.folder("/media /folder/Download https://a.com/x"))
+        assertEquals("music", MediaGrab.folder("/audio /folder/music https://a.com/x"))
+        assertEquals("", MediaGrab.folder("/media /folder/secret https://a.com/x"))
+        assertEquals("", MediaGrab.folder("/media https://a.com/x"))
+    }
+
     @Test fun command() {
         assertEquals("https://x.com/a/status/1", MediaGrab.command("/media https://x.com/a/status/1"))
         assertEquals("", MediaGrab.command("/media"))

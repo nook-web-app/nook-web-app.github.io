@@ -145,6 +145,7 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
                 val links = if (pend.isEmpty()) MediaGrab.commandLinks(text) else null
                 if (links != null) {
                     val audio = MediaGrab.isAudio(text)
+                    val folder = MediaGrab.folder(text)
                     val qtext = if (audio) "audio" else MediaGrab.quality(text)
                     when {
                         links.isEmpty() -> app.say(if (audio) "Type /audio and a link" else "Type /media and a link")
@@ -156,7 +157,7 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
                                 // every link is read at the same time; the cards come in the order the links were pasted (the command shows on the first card only)
                                 val done = links.map { link -> async { runCatching { MediaGrab.resolveAll(link, if (audio || MediaGrab.site(link) == "youtube") qtext else "") } } }.awaitAll()
                                 val t0 = Clock.now(); var k = 0; var failed: Throwable? = null
-                                val cmdText = (if (audio) "/audio " else "/media " + (if (links.any { MediaGrab.site(it) == "youtube" } && qtext.isNotEmpty()) "/$qtext " else "")) + links.joinToString(" ")
+                                val cmdText = (if (audio) "/audio " else "/media " + (if (links.any { MediaGrab.site(it) == "youtube" } && qtext.isNotEmpty()) "/$qtext " else "")) + (if (folder.isNotEmpty()) "/folder/$folder " else "") + links.joinToString(" ")
                                 done.forEachIndexed { li, r ->
                                     val items = r.getOrNull()
                                     if (items == null) { failed = r.exceptionOrNull(); return@forEachIndexed }
@@ -165,6 +166,7 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
                                     items.forEachIndexed { n, it ->
                                         val card = MediaGrab.card(link, it.info, qual, n, items.size)
                                         if (k > 0 && n == 0) card.put("x", 1)
+                                        if (folder.isNotEmpty()) card.put("f", folder)
                                         if (k == 0 && links.size > 1) card.put("l", org.json.JSONArray(links))
                                         val m = LMsg(uid(), cmdText, t0 + k, emptyList()).also { x -> x.mcard = MediaGrab.cleanCard(card) }
                                         chat.msgs.add(m); k++
@@ -201,7 +203,7 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onLong: () -> Unit
         // "/media link": the command stays in view with its link shortened, and the card of the video answers on the left
         m.mcard?.let { card ->
             val shown = card.optInt("n") == 0 && card.optInt("x") != 1
-            if (shown) MediaCmd(card.optString("u"), card.optString("s"), card.optString("q"), tap, onLong, card.optJSONArray("l")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty())
+            if (shown) MediaCmd(card.optString("u"), card.optString("s"), card.optString("q"), tap, onLong, card.optJSONArray("l")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty(), card.optString("f"))
             Box(Modifier.align(Alignment.Start).padding(top = if (shown) 4.dp else 0.dp)) { MediaCard(m) }
         }
         m.rpost?.let { Box(Modifier.padding(top = if (m.imgs.isNotEmpty()) 4.dp else 0.dp)) { RCard(it.id, it.u) } }

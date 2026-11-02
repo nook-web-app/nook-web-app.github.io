@@ -70,7 +70,22 @@ object MediaGrab {
     // every link of a "/media" message (several links may be pasted at once); empty when none; null when the text is not that command
     fun commandLinks(text: String): List<String>? {
         val rest = CMD.find(text.trim())?.groupValues?.get(2) ?: AUD.find(text.trim())?.groupValues?.get(1) ?: return null
-        return rest.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.distinct().take(10)
+        return rest.trim().split(Regex("\\s+")).filter { it.isNotEmpty() && !FOLDER.matches(it) }.distinct().take(10)
+    }
+    // "/folder/download": where the file goes (download, music, movies, pictures or dcim); "" when none was typed, so the usual folder of its kind is used
+    private val FOLDER = Regex("^/folder/(\\w+)$", RegexOption.IGNORE_CASE)
+    fun folder(text: String): String = text.trim().split(Regex("\\s+")).firstNotNullOfOrNull { FOLDER.find(it)?.groupValues?.get(1)?.lowercase() }?.takeIf { it in FOLDERS } ?: ""
+    val FOLDERS = setOf("download", "music", "movies", "pictures", "dcim")
+    // the place in the phone's shared storage: the usual folder of the kind of file (Movies, Pictures, Music, with no folder of our own),
+    // or the one that was asked for when that kind of file may go there (else the usual one); "download" takes any kind
+    private fun target(kind: String, folder: String): Triple<Uri, String, String> {
+        val d = when (kind) { "audio" -> Environment.DIRECTORY_MUSIC; "image" -> Environment.DIRECTORY_PICTURES; else -> Environment.DIRECTORY_MOVIES }
+        val col = when (kind) { "audio" -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI; "image" -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI; else -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI }
+        if (Build.VERSION.SDK_INT >= 29 && folder == "download") return Triple(MediaStore.Downloads.EXTERNAL_CONTENT_URI, Environment.DIRECTORY_DOWNLOADS, "Download")
+        val want = when (folder) { "music" -> Environment.DIRECTORY_MUSIC; "movies" -> Environment.DIRECTORY_MOVIES; "pictures" -> Environment.DIRECTORY_PICTURES; "dcim" -> Environment.DIRECTORY_DCIM; else -> d }
+        val ok = when (kind) { "audio" -> want == Environment.DIRECTORY_MUSIC; "image" -> want == Environment.DIRECTORY_PICTURES || want == Environment.DIRECTORY_DCIM; else -> want == Environment.DIRECTORY_MOVIES || want == Environment.DIRECTORY_DCIM || want == Environment.DIRECTORY_PICTURES }
+        val dir = if (ok) want else d
+        return Triple(col, dir, dir)
     }
     // "/audio link": only the sound of the video is saved
     private val AUD = Regex("^/audio((?:\\s+\\S+)*)\\s*$", RegexOption.IGNORE_CASE)
@@ -557,6 +572,7 @@ object MediaGrab {
         o.optInt("c").takeIf { it in 2..20 }?.let { out.put("c", it) }
         // a card of a later link of the same command: the command bubble is not drawn again
         if (o.optInt("x") == 1) out.put("x", 1)
+        o.optString("f").takeIf { it in FOLDERS }?.let { out.put("f", it) }
         return out
     }
 
@@ -740,7 +756,7 @@ object MediaGrab {
     }
 
     // index: which file of a post with several (0 for the first)
-    suspend fun save(ctx: Context, url: String, q: String, index: Int, cover: String? = null, onProgress: (Float) -> Unit): Saved = withContext(Dispatchers.IO) {
+    suspend fun save(ctx: Context, url: String, q: String, index: Int, cover: String? = null, folder: String = "", onProgress: (Float) -> Unit): Saved = withContext(Dispatchers.IO) {
         // only the file to save is worked out (no picture is made for the others)
         val all = rawItems(url, q)
         val pick = all.getOrNull(index.coerceIn(0, all.size - 1)) ?: throw Fail("Nothing to save in that post")
@@ -774,13 +790,14 @@ object MediaGrab {
                 val name = safeName(info.title, ext)
                 val resolver = ctx.contentResolver
                 val result: Uri
+                val place = target("audio", folder)
                 if (Build.VERSION.SDK_INT >= 29) {
                     val cv = ContentValues().apply {
                         put(MediaStore.MediaColumns.DISPLAY_NAME, name); put(MediaStore.MediaColumns.MIME_TYPE, mime)
-                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/Nook"); put(MediaStore.MediaColumns.IS_PENDING, 1)
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, place.second); put(MediaStore.MediaColumns.IS_PENDING, 1)
                         put(MediaStore.Audio.Media.TITLE, info.title); if (info.author.isNotEmpty()) put(MediaStore.Audio.Media.ARTIST, info.author.removePrefix("@"))
                     }
-                    val uri = resolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, cv) ?: throw Fail("Could not create the file")
+                    val uri = resolver.insert(place.first, cv) ?: throw Fail("Could not create the file")
                     try { (resolver.openOutputStream(uri) ?: throw Fail("Could not create the file")).use { o -> copyOut(out, o, onProgress) } }
                     catch (e: Exception) { runCatching { resolver.delete(uri, null, null) }; throw e }
                     resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
@@ -791,7 +808,7 @@ object MediaGrab {
                     result = androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f)
                 }
                 onProgress(1f)
-                return@withContext Saved(result, if (made.isSuccess) "mp3 saved in your music" else "Saved as m4a, an mp3 could not be made")
+                return@withContext Saved(result, if (made.isSuccess) "mp3 saved in " + place.third else "Saved as m4a in " + place.third + ", an mp3 could not be made")
             } finally { runCatching { tmp.deleteRecursively() } }
         }
         var src = first
@@ -847,13 +864,14 @@ object MediaGrab {
             val name = safeName(info.title, ext)
             val resolver = ctx.contentResolver
             val result: Uri
+            val place = target(if (image) "image" else "video", folder)
             if (Build.VERSION.SDK_INT >= 29) {
                 val cv = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, name); put(MediaStore.MediaColumns.MIME_TYPE, mime)
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, (if (image) Environment.DIRECTORY_PICTURES else Environment.DIRECTORY_MOVIES) + "/Nook")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, place.second)
                     put(MediaStore.MediaColumns.IS_PENDING, 1)
                 }
-                val uri = resolver.insert(if (image) MediaStore.Images.Media.EXTERNAL_CONTENT_URI else MediaStore.Video.Media.EXTERNAL_CONTENT_URI, cv) ?: throw Fail("Could not create the file")
+                val uri = resolver.insert(place.first, cv) ?: throw Fail("Could not create the file")
                 try { (resolver.openOutputStream(uri) ?: throw Fail("Could not create the file")).use { o -> copyOut(file, o, onProgress) } }
                 catch (e: Exception) { runCatching { resolver.delete(uri, null, null) }; throw e }
                 resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
@@ -864,7 +882,7 @@ object MediaGrab {
                 result = androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f)
             }
             onProgress(1f)
-            Saved(result, note)
+            Saved(result, note ?: if (folder.isNotEmpty()) "Saved in " + place.third else null)
         } finally { runCatching { tmp.deleteRecursively() } }
     }
 }

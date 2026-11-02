@@ -16,13 +16,15 @@ object ClipFrames {
         val ch = NIOUtils.readableChannel(file)
         try {
             val grab = FrameGrab.createFrameGrab(ch)
-            val frames = ArrayList<IntArray>()
+            // a clip with B-frames hands its pictures out in the order they are stored, not the order they are shown: each one keeps its time
+            val frames = ArrayList<IntArray>(); val times = ArrayList<Double>()
             var w = 0; var h = 0
             // the original size and every picture; only a clip too big for the memory of the phone (about 30 million pixels in all) is made smaller
             val total = grab.videoTrack.meta.totalFrames.coerceAtLeast(1)
             val budget = 30_000_000.0
             while (frames.size < maxFrames) {
-                val pic = grab.nativeFrame ?: break
+                val meta = grab.nativeFrameWithMetadata ?: break
+                val pic = meta.picture ?: break
                 val rgb = Picture.create(pic.width, pic.height, ColorSpace.RGB)
                 ColorUtil.getTransform(pic.color, ColorSpace.RGB).transform(pic, rgb)
                 val sw = pic.width; val sh = pic.height
@@ -41,12 +43,14 @@ object ClipFrames {
                         px[y * w + x] = (0xFF shl 24) or (((d[o].toInt() + 128) and 255) shl 16) or (((d[o + 1].toInt() + 128) and 255) shl 8) or ((d[o + 2].toInt() + 128) and 255)
                     }
                 }
-                frames.add(px)
+                frames.add(px); times.add(meta.timestamp)
             }
             if (frames.size < 2) throw MediaGrab.Fail("the clip has " + frames.size + " picture")
+            val order = frames.indices.sortedBy { times[it] }
+            val shown = order.map { frames[it] }
             val tr = grab.videoTrack.meta
             val fps = if (tr.totalDuration > 0) Math.round(tr.totalFrames / tr.totalDuration).toInt().coerceIn(5, 30) else 12
-            return Out(frames, w, h, fps)
+            return Out(shown, w, h, fps)
         } finally { runCatching { ch.close() } }
     }
 }

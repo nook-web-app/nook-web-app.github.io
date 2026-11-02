@@ -96,7 +96,8 @@ object MediaGrab {
     private suspend fun finish(info: Info, src: Src): Item = kotlinx.coroutines.coroutineScope {
         val size = async { if (info.size > 0) info.size else if (src.size > 0) src.size + src.asize else sizeOf(src.url, src.headers) + (src.audio?.let { sizeOf(it, src.headers) } ?: 0) }
         val own = info.thumb?.takeIf { info.site == "youtube" }
-        val thumb = async { own ?: preview(src, info.kind) ?: info.thumb }
+        // the picture a mirror gives for an Instagram video has a play button drawn in it: it is not used
+        val thumb = async { own ?: preview(src, info.kind) ?: info.thumb?.takeIf { !(info.site == "instagram" && info.kind == "video") } }
         Item(Info(info.site, info.title, info.author, thumb.await(), info.dur, info.kind, size.await()), src)
     }
 
@@ -116,8 +117,20 @@ object MediaGrab {
                     val f = File.createTempFile("frame", ".mp4"); tmpFile = f
                     download(src.url, emptyMap(), f) { }
                     r.setDataSource(f.path)
-                } else r.setDataSource(src.url, HashMap(src.headers + ("User-Agent" to DESKTOP)))
-                bm = r.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: r.getFrameAtTime(0)
+                    bm = r.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: r.getFrameAtTime(0)
+                } else {
+                    bm = runCatching {
+                        r.setDataSource(src.url, HashMap(src.headers + ("User-Agent" to DESKTOP)))
+                        r.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: r.getFrameAtTime(0)
+                    }.getOrNull()
+                    // read from the web it failed: the file is fetched (when it is not huge) and read from the phone instead
+                    if (bm == null && (src.size <= 0 || src.size < 40_000_000)) {
+                        val f = File.createTempFile("frame", ".mp4"); tmpFile = f
+                        download(src.url, src.headers, f) { }
+                        val r2 = android.media.MediaMetadataRetriever()
+                        try { r2.setDataSource(f.path); bm = r2.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: r2.getFrameAtTime(0) } finally { runCatching { r2.release() } }
+                    }
+                }
             } finally { runCatching { r.release() }; tmpFile?.delete() }
         }
         val b = bm ?: return@runCatching null
@@ -303,7 +316,9 @@ object MediaGrab {
     }
 
     // ---- Instagram: the open mirrors of Instagram embeds (they read the post with their own sign in and hand out the files) ----
-    private val mirrors = listOf("kkinstagram.com", "ddinstagram.com")
+    private val mirrors = listOf("kkinstagram.com", "ddinstagram.com", "eeinstagram.com")
+    // a mirror that is slow or busy (a 5xx or no answer) is asked again once before the next one is tried
+    private fun <T> twice(f: () -> T): T = try { f() } catch (e: Exception) { if (e is Fail && (e.message.orEmpty().contains("404") || e.message.orEmpty().contains("403"))) throw e; Thread.sleep(600); f() }
 
     internal fun metaOf(html: String, key: String): String? =
         Regex("<meta[^>]+(?:property|name)=\"$key\"[^>]+content=\"([^\"]*)\"", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)
@@ -355,7 +370,7 @@ object MediaGrab {
         var why = "no answer"
         for (m in mirrors) {
             try {
-                val (info, src) = igOne(m, kind, code, 0)
+                val (info, src) = twice { igOne(m, kind, code, 0) }
                 // a reel or a video that came out as a picture is not what was asked for: the next mirror is tried
                 if (kind != "p" && info.kind == "image") { why = "no video"; continue }
                 // the page of the post says who wrote it and shows the picture of a video
@@ -366,10 +381,11 @@ object MediaGrab {
                 if (kind == "p") {
                     val pool = java.util.concurrent.Executors.newFixedThreadPool(5)
                     try {
-                        val jobs = (2..10).map { n -> pool.submit<Pair<Info, Src>?> { runCatching { igOne(m, kind, code, n) }.getOrNull() } }
+                        val jobs = (2..10).map { n -> pool.submit<Pair<Info, Src>?> { runCatching { twice { igOne(m, kind, code, n) } }.getOrNull() } }
+                        // a file that could not be read is skipped (never the end of the post); a file seen already is not added twice
                         for (j in jobs) {
-                            val one = runCatching { j.get(25, TimeUnit.SECONDS) }.getOrNull() ?: break
-                            if (out.any { it.second.url == one.second.url }) break
+                            val one = runCatching { j.get(40, TimeUnit.SECONDS) }.getOrNull() ?: continue
+                            if (out.any { it.second.url == one.second.url }) continue
                             out.add(named(one.first) to one.second)
                         }
                     } finally { pool.shutdownNow() }
@@ -377,7 +393,8 @@ object MediaGrab {
                 return out
             } catch (e: Exception) { why = (e as? Fail)?.message ?: e.javaClass.simpleName }
         }
-        throw Fail("Could not read this post (it may be private; $why)")
+        // only a "not found" or "forbidden" answer says the post may be private; a busy mirror is just a failed try
+        throw Fail(if (Regex("40[34]").containsMatchIn(why)) "Could not read this post (it may be private)" else "Instagram did not answer, try again in a moment ($why)")
     }
 
     // ---- TikTok: the open service tikwm hands out the file (no mark) of a video, or the pictures of a slideshow ----
@@ -558,17 +575,30 @@ object MediaGrab {
         val r = android.media.MediaMetadataRetriever()
         try {
             r.setDataSource(clip.path)
-            val durMs = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: return null
+            val durMs = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            val count = if (Build.VERSION.SDK_INT >= 28) r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT)?.toIntOrNull() ?: 0 else 0
             val fps = 10
-            val n = minOf(80, maxOf(2, (durMs * fps / 1000).toInt()))
             val frames = ArrayList<IntArray>(); var w = 0; var h = 0
-            for (i in 0 until n) {
-                val bm = r.getFrameAtTime(i * 1_000_000L / fps, android.media.MediaMetadataRetriever.OPTION_CLOSEST) ?: continue
+            fun add(bm: android.graphics.Bitmap?) {
+                bm ?: return
                 if (w == 0) { w = minOf(360, bm.width); h = (bm.height * (w.toFloat() / bm.width)).toInt().coerceAtLeast(1) }
-                val sc = if (bm.width == w) bm else android.graphics.Bitmap.createScaledBitmap(bm, w, h, true)
+                val soft = if (bm.config == android.graphics.Bitmap.Config.HARDWARE) bm.copy(android.graphics.Bitmap.Config.ARGB_8888, false) else bm
+                val sc = if (soft.width == w) soft else android.graphics.Bitmap.createScaledBitmap(soft, w, h, true)
                 val px = IntArray(w * h); sc.getPixels(px, 0, w, 0, 0, w, h); frames.add(px)
             }
-            return if (frames.size < 2) null else Gif.encode(frames, w, h, fps)
+            // frame by frame in order when the phone can (fast, and every picture is a real one), else by time
+            if (Build.VERSION.SDK_INT >= 28 && count > 1) {
+                val step = maxOf(1, Math.round(count / (maxOf(durMs, 1L) / 1000f) / fps))
+                var i = 0
+                while (i < count && frames.size < 80) { runCatching { add(r.getFrameAtIndex(i)) }; i += step }
+            }
+            if (frames.size < 2) {
+                frames.clear(); w = 0
+                val n = minOf(80, maxOf(2, (maxOf(durMs, 300L) * fps / 1000).toInt()))
+                for (i in 0 until n) runCatching { add(r.getFrameAtTime(i * 1_000_000L / fps, android.media.MediaMetadataRetriever.OPTION_CLOSEST)) }
+            }
+            if (frames.size < 2) throw Fail("no frames could be read")
+            return Gif.encode(frames, w, h, fps)
         } finally { r.release() }
     }
 
@@ -716,7 +746,7 @@ object MediaGrab {
             val head = ByteArray(16).also { b -> cur.inputStream().use { it.read(b) } }
             val real = sniff(head)
             if (real?.first != "gif" && info.kind == "gif") {
-                val g = runCatching { toGif(cur) }
+                val g = runCatching { toGif(cur) }.also { if (it.isFailure) android.util.Log.w("nook", "gif", it.exceptionOrNull()) }
                 val bytes = g.getOrNull()
                 if (bytes != null) { val gf = File(tmp, "clip.gif"); gf.writeBytes(bytes); cur = gf }
                 else note = "Saved as a looping video, a gif could not be made" + (g.exceptionOrNull()?.let { " (" + (it.message ?: it.javaClass.simpleName).take(40) + ")" } ?: "")

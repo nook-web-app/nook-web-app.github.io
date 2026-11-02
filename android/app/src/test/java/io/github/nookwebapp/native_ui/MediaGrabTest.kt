@@ -12,7 +12,8 @@ class MediaGrabTest {
         assertEquals("", MediaGrab.command("/media"))
         assertEquals("https://youtu.be/abcdefghijk", MediaGrab.command("  /MEDIA   https://youtu.be/abcdefghijk  "))
         assertNull(MediaGrab.command("hello /media https://x.com"))
-        assertNull(MediaGrab.command("/media a b"))
+        assertEquals("a", MediaGrab.command("/media a b"))
+        assertEquals(listOf("a", "b"), MediaGrab.commandLinks("/media a b"))
     }
 
     @Test fun qualities() {
@@ -21,8 +22,8 @@ class MediaGrabTest {
         assertEquals("4k", MediaGrab.quality("/media /4k https://x.com/a/status/1"))
         assertEquals("", MediaGrab.quality("/media https://x.com/a/status/1"))
         assertEquals("720p", MediaGrab.quality("/media /720p https://x.com/a/status/1"))
-        assertNull(MediaGrab.command("/media /8k https://x.com/a/status/1"))
-        assertEquals(2160, MediaGrab.maxHeight("4k")); assertEquals(1440, MediaGrab.maxHeight("2k")); assertEquals(1080, MediaGrab.maxHeight("")); assertEquals(720, MediaGrab.maxHeight("720p"))
+        assertEquals("/8k", MediaGrab.command("/media /8k https://x.com/a/status/1"))
+        assertEquals(2160, MediaGrab.maxHeight("4k")); assertEquals(1440, MediaGrab.maxHeight("2k")); assertEquals(1440, MediaGrab.maxHeight("")); assertEquals(720, MediaGrab.maxHeight("720p"))
         assertEquals("youtube.com", MediaGrab.domain("youtube")); assertEquals("x.com", MediaGrab.domain("x")); assertEquals("instagram.com", MediaGrab.domain("instagram"))
     }
 
@@ -49,8 +50,8 @@ class MediaGrabTest {
         assertEquals("youtube", MediaGrab.site("https://www.youtube.com/shorts/jNQXAC9IVRw"))
         assertEquals("instagram", MediaGrab.site("https://www.instagram.com/reel/Cabc123_-x/"))
         assertEquals("instagram", MediaGrab.site("https://www.instagram.com/p/Cabc123/?igsh=1"))
-        assertNull(MediaGrab.site("https://example.com/video"))
-        assertNull(MediaGrab.site("https://x.com/jack"))
+        assertEquals("web", MediaGrab.site("https://example.com/video"))
+        assertEquals("web", MediaGrab.site("https://x.com/jack"))
     }
 
     @Test fun xToken() {
@@ -66,7 +67,7 @@ class MediaGrabTest {
             {"content_type":"application/x-mpegURL","url":"https://video.twimg.com/a.m3u8"},
             {"bitrate":832000,"content_type":"video/mp4","url":"https://video.twimg.com/low.mp4"},
             {"bitrate":2176000,"content_type":"video/mp4","url":"https://video.twimg.com/high.mp4"}]}}]}""")
-        val (info, src) = MediaGrab.xParse(j)
+        val (info, src) = MediaGrab.xParse(j).first()
         assertEquals("https://video.twimg.com/high.mp4", src.url)
         assertEquals("video", info.kind); assertEquals(12, info.dur); assertEquals("Jack (@jack)", info.title)
         assertEquals("x", info.site); assertNotNull(info.thumb)
@@ -74,12 +75,12 @@ class MediaGrabTest {
 
     @Test fun xGif() {
         val j = JSONObject("""{"user":{"name":"A","screen_name":"a"},"mediaDetails":[{"type":"animated_gif","media_url_https":"https://pbs.twimg.com/tweet_video_thumb/a.jpg","video_info":{"variants":[{"bitrate":0,"content_type":"video/mp4","url":"https://video.twimg.com/tweet_video/a.mp4"}]}}]}""")
-        assertEquals("gif", MediaGrab.xParse(j).first.kind)
+        assertEquals("gif", MediaGrab.xParse(j).first().first.kind)
     }
 
     @Test fun xPhotosOnlyIsRefused() {
         val j = JSONObject("""{"user":{"name":"A","screen_name":"a"},"mediaDetails":[{"type":"photo","media_url_https":"https://pbs.twimg.com/media/a.jpg"}],"photos":[{"url":"https://pbs.twimg.com/media/a.jpg"}]}""")
-        try { MediaGrab.xParse(j); fail("a post with only pictures must be refused") } catch (e: MediaGrab.Fail) { assertTrue(e.message!!.contains("no video")) }
+        assertEquals("image", MediaGrab.xParse(j).first().first.kind)
         try { MediaGrab.xParse(JSONObject("""{"user":{"screen_name":"a"},"text":"words only"}""")); fail() } catch (e: MediaGrab.Fail) { }
     }
 
@@ -87,9 +88,9 @@ class MediaGrabTest {
         val j = JSONObject("""{"code":200,"tweet":{"author":{"name":"Nasa","screen_name":"nasa"},"media":{"videos":[
             {"type":"video","width":1280,"height":720,"url":"https://video.twimg.com/a/720.mp4","thumbnail_url":"https://pbs.twimg.com/a.jpg","duration":12.5},
             {"type":"video","width":1920,"height":1080,"url":"https://video.twimg.com/a/1080.mp4","thumbnail_url":"https://pbs.twimg.com/a.jpg","duration":12.5}]}}}""")
-        val (info, src) = MediaGrab.xFromFx(j)
-        assertEquals("https://video.twimg.com/a/1080.mp4", src.url); assertEquals(12, info.dur); assertEquals("Nasa (@nasa)", info.title)
-        try { MediaGrab.xFromFx(JSONObject("""{"tweet":{"author":{"screen_name":"a"},"media":{"photos":[{"url":"https://pbs.twimg.com/a.jpg"}]}}}""")); fail("a post with only pictures must be refused") } catch (e: MediaGrab.Fail) { assertTrue(e.message!!.contains("no video")) }
+        val (info, src) = MediaGrab.xFromFx(j).first()
+        assertEquals("https://video.twimg.com/a/720.mp4", src.url); assertEquals(2, MediaGrab.xFromFx(j).size); assertEquals(12, info.dur); assertEquals("Nasa (@nasa)", info.title)
+        assertEquals("image", MediaGrab.xFromFx(JSONObject("""{"tweet":{"author":{"screen_name":"a"},"media":{"photos":[{"url":"https://pbs.twimg.com/a.jpg"}]}}}""")).first().first.kind)
         try { MediaGrab.xFromFx(JSONObject("""{"code":404}""")); fail() } catch (e: MediaGrab.Fail) { }
     }
 

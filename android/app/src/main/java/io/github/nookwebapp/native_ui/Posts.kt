@@ -307,7 +307,7 @@ fun PostCard(p: LPost, lab: String? = null, pin: Boolean = false, replyTo: Boole
             PostHead(nameOf(app, p), handleOf(app, p), ago(p.t), p.id)
             if (replyTo && p.parent != null) Row(Modifier.padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 val par by remember(p.parent) { derivedStateOf { app.store.byId(p.parent) } }
-                NIcon("reply", 14.dp, c.muted); T("Replying to " + if (par == null) "a post" else handleOf(app, par), Fs.sm, color = c.muted)
+                NIcon("reply", 14.dp, c.muted); T("Replying to " + par.let { pp -> if (pp == null) "a post" else handleOf(app, pp) }, Fs.sm, color = c.muted)
             }
             val txt = remember(p.text, p.imgs) { cardless(p) }
             if (txt.isNotEmpty()) Tx(txt, modifier = Modifier.probe("text:" + p.id), onTap = open, onLong = hold, edited = p.edited)

@@ -74,21 +74,22 @@ async function mediaInfo(mediaUrl: string | null): Promise<{ note: string; pics:
   if (!urls.length) return { note: "", pics: [] };
   const pics: unknown[] = [];
   let unseen = 0;
-  for (const u of urls) {
+  const got = await Promise.all(urls.map(async (u) => {
     const m = /\/object\/public\/media\/([^?#]+)/.exec(u);
     let path = "";
     try { path = m ? decodeURIComponent(m[1]) : ""; } catch { path = ""; }
     const { data } = path ? await admin.storage.from("media").download(path) : { data: null };
-    if (!data) { unseen++; continue; }
+    if (!data) return null;
     const b = new Uint8Array(await data.arrayBuffer());
     const type = b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff ? "image/jpeg"
       : b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 ? "image/png"
       : b.length > 12 && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50 ? "image/webp" : "";
-    if (!type || b.length > 4 * 1024 * 1024) { unseen++; continue; }
+    if (!type || b.length > 4 * 1024 * 1024) return null;
     let bin = "";
     for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode(...b.subarray(i, i + 0x8000));
-    pics.push({ inline_data: { mime_type: type, data: btoa(bin) } });
-  }
+    return { inline_data: { mime_type: type, data: btoa(bin) } };
+  }));
+  for (const g of got) { if (g) pics.push(g); else unseen++; }
   return { note: unseen ? "\n(The post also has " + (unseen === 1 ? "a video, gif or picture" : unseen + " videos, gifs or pictures") + " that you cannot see)" : "", pics };
 }
 
@@ -269,20 +270,21 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
   let budget = 4;
 
   const cand = async (q: PromiseLike<{ data: unknown }>) => ((await q).data || []) as { id: string; user_id: string; body: string | null; parent_id: string | null; media_url: string | null; created_at: string }[];
-  const seenOf = async (ids: string[]) => new Set(ids.length ? (((await admin.from("zenith_seen").select("post_id").in("post_id", ids)).data || []) as { post_id: string }[]).map((r) => r.post_id) : []);
+  // a claim older than ten minutes belongs to a run that was cut off, so it no longer counts as seen
+  const STALE = 10 * 60 * 1000;
+  const seenOf = async (ids: string[]) => new Set(ids.length ? (((await admin.from("zenith_seen").select("post_id, acted, created_at").in("post_id", ids)).data || []) as { post_id: string; acted: string; created_at: string }[]).filter((r) => !(r.acted === "claim" && Date.now() - Date.parse(r.created_at) > STALE)).map((r) => r.post_id) : []);
   // belt and braces: a post he already answered is never answered again, whatever the notes say
   // one query for a whole list of posts
   const answeredOf = async (ids: string[]) => new Set(ids.length ? (((await admin.from("posts").select("parent_id").in("parent_id", ids).eq("user_id", zen)).data || []) as { parent_id: string }[]).map((r) => r.parent_id) : []);
   // a post is claimed before it is answered: overlapping runs cannot both insert the claim, so only one of them answers
-  const claim = async (pid: string) => !(await admin.from("zenith_seen").insert({ post_id: pid, acted: "claim" })).error;
+  const claim = async (pid: string) => (await admin.from("zenith_seen").delete().eq("post_id", pid).eq("acted", "claim").lt("created_at", new Date(Date.now() - STALE).toISOString()), true) && !(await admin.from("zenith_seen").insert({ post_id: pid, acted: "claim" })).error;
   const release = async (pid: string) => { await admin.from("zenith_seen").delete().eq("post_id", pid).eq("acted", "claim"); };
   const mark = (pid: string, acted: string) => admin.from("zenith_seen").upsert({ post_id: pid, acted }, { onConflict: "post_id" });
 
   // 1 and 2: the owner's own posts, and the owner's replies inside a thread where he has spoken
   // the newest 12 are taken (so old, already seen posts cannot fill the page), then handled oldest first
   const mineNew = (await cand(admin.from("posts").select("id, user_id, body, parent_id, media_url, created_at").eq("user_id", owner).eq("mod_status", "safe").eq("text_pending", false).gt("created_at", from).lt("created_at", old).order("created_at", { ascending: false }).limit(12))).reverse();
-  const seenMine = await seenOf(mineNew.map((p) => p.id));
-  const doneMine = await answeredOf(mineNew.map((p) => p.id));
+  const [seenMine, doneMine] = await Promise.all([seenOf(mineNew.map((p) => p.id)), answeredOf(mineNew.map((p) => p.id))]);
   for (const p of mineNew) {
     if (budget <= 0) break;
     if (seenMine.has(p.id) || ((!p.body || !String(p.body).trim()) && !p.media_url)) { if (!seenMine.has(p.id)) await mark(p.id, "skip"); continue; }
@@ -292,8 +294,8 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
     if (!(await claim(p.id))) continue;
     budget--;
     let lk = { note: "", pics: [] as unknown[] };
-    try { lk = await linkInfo(String(p.body || "")); } catch { /* a post without a preview is answered all the same */ }
-    try { const md = await mediaInfo(p.media_url); lk = { note: lk.note + md.note, pics: [...lk.pics, ...md.pics] }; } catch { /* answered without the pictures */ }
+    const [li, md] = await Promise.all([linkInfo(String(p.body || "")).catch(() => null), mediaInfo(p.media_url).catch(() => null)]);
+    lk = { note: (li ? li.note : "") + (md ? md.note : ""), pics: [...(li ? li.pics : []), ...(md ? md.pics : [])] };
     let text = "";
     try { text = (await ask(replySystem, (p.parent_id ? chain.text : "Post: " + (String(p.body || "").slice(0, 2000) || "(no text, only a picture)")) + lk.note, lk.pics, true)).slice(0, 600); } catch { text = ""; }
     if (!text) { await release(p.id); continue; }
@@ -304,7 +306,7 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
     // his like on the owner's top level posts: only when he really likes it
     if (!p.parent_id) {
       try {
-        const a = await ask(LIKE_SYSTEM, String(p.body).slice(0, 1000), [], true);
+        const a = await ask(LIKE_SYSTEM, String(p.body || "(no text, only a picture)").slice(0, 1000), lk.pics, true);
         if (/^yes/i.test(a)) { await admin.from("likes").insert({ user_id: zen, post_id: p.id }); out.liked++; }
       } catch { /* no like this time */ }
     }
@@ -313,17 +315,18 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
   // 3: other people's posts: now and then (one in five) he likes one, and one in five he answers; nobody can ask him anything
   const pub = new Date(Math.max(since, now - 2 * HOUR, ROLLOUT)).toISOString();
   const others = await cand(admin.from("posts").select("id, user_id, body, parent_id, media_url, created_at").neq("user_id", owner).neq("user_id", zen).eq("mod_status", "safe").eq("text_pending", false).gt("created_at", pub).lt("created_at", old).order("created_at", { ascending: true }).limit(12));
-  const seenOth = await seenOf(others.map((p) => p.id));
+  const seenOthP = seenOf(others.map((p) => p.id));
+  const doneOthP = answeredOf(others.map((p) => p.id));
   const parents = new Map<string, string>();
   const pids = [...new Set(others.map((p) => p.parent_id).filter(Boolean))] as string[];
   if (pids.length) ((await admin.from("posts").select("id, user_id").in("id", pids)).data || []).forEach((r: { id: string; user_id: string }) => parents.set(r.id, r.user_id));
   // people who blocked or muted him are never answered or liked
   const shut = new Set<string>();
-  for (const t of ["blocks", "mutes"]) {
+  await Promise.all(["blocks", "mutes"].map(async (t) => {
     const col = t === "blocks" ? "blocker_id" : "muter_id", tgt = t === "blocks" ? "blocked_id" : "muted_id";
     ((await admin.from(t).select(col).eq(tgt, zen)).data || []).forEach((r: Record<string, string>) => shut.add(r[col]));
-  }
-  const doneOth = await answeredOf(others.map((p) => p.id));
+  }));
+  const [seenOth, doneOth] = await Promise.all([seenOthP, doneOthP]);
   for (const p of others) {
     if (seenOth.has(p.id)) continue;
     if (shut.has(p.user_id)) { await mark(p.id, "shut"); continue; }
@@ -339,8 +342,8 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
     if (likeIt) { await admin.from("likes").insert({ user_id: zen, post_id: p.id }); out.liked++; acted = "like"; }
     if (answerIt) {
       let lk = { note: "", pics: [] as unknown[] };
-      try { lk = await linkInfo(String(p.body || "")); } catch { /* fine without */ }
-      try { const md = await mediaInfo(p.media_url); lk = { note: lk.note + md.note, pics: [...lk.pics, ...md.pics] }; } catch { /* fine without */ }
+      const [li, md] = await Promise.all([linkInfo(String(p.body || "")).catch(() => null), mediaInfo(p.media_url).catch(() => null)]);
+      lk = { note: (li ? li.note : "") + (md ? md.note : ""), pics: [...(li ? li.pics : []), ...(md ? md.pics : [])] };
       let text = "";
       try { text = (await ask(replySystem + " You are replying to a post by someone you do not know, and they can never answer you, so never ask a question.", "Post: " + (String(p.body || "").slice(0, 2000) || "(no text, only a picture)") + lk.note, lk.pics, true)).slice(0, 600); } catch { text = ""; }
       if (text && (await say(zen, text, p.id))) { out.others++; acted += " reply"; }

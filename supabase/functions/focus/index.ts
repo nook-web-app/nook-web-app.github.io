@@ -93,9 +93,8 @@ Deno.serve(async (req) => {
   if (!publicHttps(url)) return json({ error: "bad url" }, 400);
   const known = asked.get(url);
   if (known) return json(known);
-  const pic = await fetchPic(url);
+  const [pic, key] = await Promise.all([fetchPic(url), geminiKey()]);
   if (!pic) { console.error("focus no picture", why); return json({ error: "no picture" }, 422); }
-  const key = await geminiKey();
   if (!key) return json({ error: "no key" }, 500);
   for (const model of MODELS) {
     const call = (think: boolean) => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {

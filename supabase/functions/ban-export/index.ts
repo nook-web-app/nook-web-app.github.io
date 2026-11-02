@@ -48,15 +48,18 @@ Deno.serve(async (req) => {
 
   const files: { bucket: string; name: string; url: string }[] = [];
   try {
-    for (const bucket of BUCKETS) {
+    const perBucket = await Promise.all(BUCKETS.map(async (bucket) => {
       const paths = await listFolder(uid + "/" + bucket);
-      for (let i = 0; i < paths.length; i += 100) {
-        const chunk = paths.slice(i, i + 100);
+      const chunks: string[][] = [];
+      for (let i = 0; i < paths.length; i += 100) chunks.push(paths.slice(i, i + 100));
+      const parts = await Promise.all(chunks.map(async (chunk) => {
         const { data: signed, error: se } = await admin.storage.from(ARCHIVE).createSignedUrls(chunk, 3600);
         if (se) throw se;
-        (signed || []).forEach((s, k) => { if (s.signedUrl) files.push({ bucket, name: chunk[k].slice((uid + "/" + bucket + "/").length), url: s.signedUrl }); });
-      }
-    }
+        return (signed || []).flatMap((s, k) => s.signedUrl ? [{ bucket, name: chunk[k].slice((uid + "/" + bucket + "/").length), url: s.signedUrl }] : []);
+      }));
+      return parts.flat();
+    }));
+    perBucket.forEach((f) => files.push(...f));
   } catch (_e) {
     return json({ error: "Could not read the saved files. Try again later." }, 500);
   }

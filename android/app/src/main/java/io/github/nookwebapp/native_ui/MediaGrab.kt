@@ -554,7 +554,7 @@ object MediaGrab {
     // the pieces are written to their place in the file, and a piece that fails is tried three times
     internal fun fastDownload(src: String, headers: Map<String, String>, to: File, total: Long, onBytes: (Long) -> Unit) {
         if (total > MAX_FILE) throw Fail("That file is too large")
-        if (total <= 0 || total < 3L shl 20) { download(src, headers, to, onBytes); return }
+        if (total <= 0 || total < 3L shl 20) { download(src, headers, to, onBytes = onBytes); return }
         // smaller pieces for a smaller file, so all the connections have work
         val chunk = if (total < 32L shl 20) 2L shl 20 else 4L shl 20
         val count = ((total + chunk - 1) / chunk).toInt()

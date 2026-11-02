@@ -294,7 +294,7 @@ fun ViewerHost(app: AppState) {
             androidx.compose.foundation.pager.HorizontalPager(pager, Modifier.fillMaxSize()) { i ->
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     val d by produceState<Pair<Int, Int>?>(null, v.imgs[i]) { value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Photos.size(v.imgs[i]) } }
-                    Pic(v.imgs[i], Modifier.fillMaxWidth().then(if (d != null) Modifier.aspectRatio(d.first.toFloat() / d.second) else Modifier).clickable(remember { MutableInteractionSource() }, null) {}, want = 2048, scale = androidx.compose.ui.layout.ContentScale.Fit)
+                    Pic(v.imgs[i], Modifier.fillMaxWidth().then(d.let { sz -> if (sz != null) Modifier.aspectRatio(sz.first.toFloat() / sz.second) else Modifier }).clickable(remember { MutableInteractionSource() }, null) {}, want = 2048, scale = androidx.compose.ui.layout.ContentScale.Fit)
                 }
             }
             Box(Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(12.dp).size(44.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.14f)).pressTap(CircleShape) { app.viewer = null }, contentAlignment = Alignment.Center) {

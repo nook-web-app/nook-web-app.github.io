@@ -80,12 +80,14 @@ Deno.serve(async (req) => {
       // a flood of sign in tries is slowed down
       const since = new Date(Date.now() - 60000).toISOString();
       const ip = await ipTag(req);
+      const recentP = Promise.resolve(admin.from("passkey_challenges").select("challenge", { count: "exact", head: true }).eq("purpose", "auth").gt("created_at", since));
       if (ip) {
         // per address first, so one noisy caller cannot make everybody else wait
-        const mine = await admin.from("passkey_challenges").select("challenge", { count: "exact", head: true }).eq("purpose", "auth").eq("ip", ip).gt("created_at", since);
+        const mineQ = admin.from("passkey_challenges").select("challenge", { count: "exact", head: true }).eq("purpose", "auth").eq("ip", ip).gt("created_at", since);
+        const [mine] = await Promise.all([mineQ, recentP]);
         if (!mine.error && (mine.count || 0) > 30) return json({ error: "busy" }, 429);
       }
-      const recent = await admin.from("passkey_challenges").select("challenge", { count: "exact", head: true }).eq("purpose", "auth").gt("created_at", since);
+      const recent = await recentP;
       if ((recent.count || 0) > 20000) return json({ error: "busy" }, 429);
       const o = await generateAuthenticationOptions({ rpID: RP_ID, userVerification: "required", timeout: 60000 });
       await keep(o.challenge, "auth", null, ip);

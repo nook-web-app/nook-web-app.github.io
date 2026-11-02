@@ -39,6 +39,7 @@ object Updater {
         val out = File(File(ctx.cacheDir, "update").apply { mkdirs() }, "nook.apk")
         val c = URL(BASE + "nook.apk?t=" + System.currentTimeMillis()).openConnection() as HttpURLConnection
         c.connectTimeout = 10000; c.readTimeout = 30000; c.useCaches = false
+        if (c.contentLengthLong > 500_000_000L) throw SecurityException("update too large")
         c.inputStream.use { i -> out.outputStream().use { o -> i.copyTo(o) } }
         // only a newer build of this same app, signed with this app's own key, is ever handed to the installer
         if (!trusted(ctx, out)) { out.delete(); throw SecurityException("update not signed by Nook") }
@@ -96,6 +97,8 @@ object Updater {
             val done = PendingIntent.getBroadcast(ctx, id, Intent(ctx, UpdateReceiver::class.java).setPackage(ctx.packageName), flags)
             s.commit(done.intentSender)
         }
+        // the bytes are in the installer's session: the copy in the cache is not kept
+        runCatching { apk.delete() }
         return true
     }
 }

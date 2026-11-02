@@ -17,13 +17,17 @@ object Keep {
     private var n = 0
     fun begin(ctx: Context?) {
         ctx ?: return
-        synchronized(this) { n++; if (n > 1) return }
-        runCatching { androidx.core.content.ContextCompat.startForegroundService(ctx, Intent(ctx, KeepService::class.java)) }
+        synchronized(this) {
+            n++; if (n > 1) return
+            runCatching { androidx.core.content.ContextCompat.startForegroundService(ctx, Intent(ctx, KeepService::class.java)) }
+        }
     }
     fun end(ctx: Context?) {
         ctx ?: return
-        synchronized(this) { n = maxOf(0, n - 1); if (n > 0) return }
-        runCatching { ctx.stopService(Intent(ctx, KeepService::class.java)) }
+        synchronized(this) {
+            n = maxOf(0, n - 1); if (n > 0) return
+            runCatching { ctx.stopService(Intent(ctx, KeepService::class.java)) }
+        }
     }
     // the notification of a download: its name and a bar from 0 to 100, one for each download (its own number, apart from the one of the
     // service) that goes away at 100 or when the download ends; shown only when the number moved

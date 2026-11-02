@@ -14,3 +14,7 @@
 -keep class com.grack.nanojson.** { *; }
 -keep class org.jsoup.** { *; }
 -dontwarn org.jspecify.annotations.**
+-keep class org.jcodec.** { *; }
+-dontwarn org.jcodec.**
+-dontwarn java.awt.**
+-dontwarn javax.imageio.**

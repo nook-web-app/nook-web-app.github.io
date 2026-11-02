@@ -2,7 +2,7 @@ plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android'; id 'a
 android {
     namespace 'io.github.nookwebapp.native_ui'
     compileSdk 34
-    defaultConfig { applicationId 'io.github.nookwebapp.nativeui'; minSdk 26; targetSdk 34; versionCode 33501; versionName '3.35.1' }
+    defaultConfig { applicationId 'io.github.nookwebapp.nativeui'; minSdk 26; targetSdk 34; versionCode 33502; versionName '3.35.2' }
     // the release key never lives in the repository: NOOK_KS points at it and NOOK_KS_PASS opens it;
     // without them a release build is signed with the local debug key so it still installs for testing
     def ks = System.getenv('NOOK_KS')
@@ -38,6 +38,8 @@ dependencies {
     implementation 'androidx.fragment:fragment:1.6.2'
     // YouTube: the extractor of NewPipe works out the address of a video (signatures, throttling) the way the site's own player does
     implementation 'com.github.TeamNewPipe:NewPipeExtractor:v0.26.5'
+    // an H.264 clip (the clip X calls a gif) read frame by frame in plain Java, so it does not depend on the phone's own video decoder
+    implementation 'org.jcodec:jcodec:0.2.5'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.json:json:20231013'
     testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'

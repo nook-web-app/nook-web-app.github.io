@@ -237,7 +237,7 @@ object MediaGrab {
     }
 
     internal fun xParse(j: JSONObject): List<Pair<Info, Src>> {
-        if (j.optString("__typename") == "TweetTombstone") throw Fail("That post was deleted or is not public")
+        if (j.optString("__typename") == "TweetTombstone") throw Fail("X does not show this post to the app (it may be 18+, private or deleted)")
         val user = j.optJSONObject("user")
         val handle = user?.optString("screen_name").orEmpty()
         val name = user?.optString("name").orEmpty()
@@ -298,7 +298,7 @@ object MediaGrab {
         // a post that really has nothing to save says so; a service that did not answer says that
         val f = b.exceptionOrNull()
         val first = why
-        if (f is Fail && f.message?.contains("deleted") == true) throw f
+        if (f is Fail && f.message?.contains("X does not show") == true) throw f
         if (first != null && f is Fail && f.message?.contains("no video") == true) throw first
         throw (f as? Fail) ?: first ?: Fail("Could not read that post (" + (f?.message ?: "no answer").take(60) + ")")
     }

@@ -142,12 +142,19 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
             Box(Modifier.size(42.dp).alpha(if (can) 1f else 0.45f).clip(CircleShape).background(c.fill).pressTap(CircleShape, enabled = can) {
                 // "/media <link>" in a note: the card of the video is made instead of a message with the words
                 // (any chat of the notes list, also one that holds an answer of Zenith: earlier messages never stop the command)
-                val links = if (pend.isEmpty()) MediaGrab.commandLinks(text) else null
+                val cmd = MediaGrab.normalize(text)
+                val links = if (pend.isEmpty()) MediaGrab.commandLinks(cmd) else null
                 if (links != null) {
-                    val audio = MediaGrab.isAudio(text)
-                    val folder = MediaGrab.folder(text)
-                    val qtext = if (audio) "audio" else MediaGrab.quality(text)
+                    val audio = MediaGrab.isAudio(cmd)
+                    val folder = MediaGrab.folder(cmd)
+                    val qtext = if (audio) "audio" else MediaGrab.quality(cmd)
                     when {
+                        links.isEmpty() && folder.isNotEmpty() -> {
+                            // no link, only a folder: it is kept, and every download after it goes there
+                            app.ctx?.let { MediaGrab.setDefaultFolder(it, audio, folder) }
+                            setText("")
+                            app.say(if (folder == "default") (if (audio) "/audio goes to the usual folder again" else "/media goes to the usual folders again") else (if (audio) "/audio saves in " else "/media saves in ") + folder)
+                        }
                         links.isEmpty() -> app.say(if (audio) "Type /audio and a link" else "Type /media and a link")
                         links.any { MediaGrab.site(it) == null } -> app.say("Use links that start with https://")
                         else -> {

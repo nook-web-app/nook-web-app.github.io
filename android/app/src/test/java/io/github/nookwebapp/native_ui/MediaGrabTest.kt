@@ -13,6 +13,10 @@ class MediaGrabTest {
         assertEquals("music", MediaGrab.folder("/audio /folder/music https://a.com/x"))
         assertEquals("", MediaGrab.folder("/media /folder/secret https://a.com/x"))
         assertEquals("", MediaGrab.folder("/media https://a.com/x"))
+        assertEquals("/media /folder/downloads", MediaGrab.normalize("/media/folder/downloads"))
+        assertEquals("download", MediaGrab.folder(MediaGrab.normalize("/media/folder/downloads")))
+        assertEquals(emptyList<String>(), MediaGrab.commandLinks(MediaGrab.normalize("/media/folder/downloads")))
+        assertEquals("default", MediaGrab.folder("/audio /folder/default"))
     }
 
     @Test fun command() {

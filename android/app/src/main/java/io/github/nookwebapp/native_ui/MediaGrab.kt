@@ -74,7 +74,13 @@ object MediaGrab {
     }
     // "/folder/download": where the file goes (download, music, movies, pictures or dcim); "" when none was typed, so the usual folder of its kind is used
     private val FOLDER = Regex("^/folder/(\\w+)$", RegexOption.IGNORE_CASE)
-    fun folder(text: String): String = text.trim().split(Regex("\\s+")).firstNotNullOfOrNull { FOLDER.find(it)?.groupValues?.get(1)?.lowercase() }?.takeIf { it in FOLDERS } ?: ""
+    fun folder(text: String): String = text.trim().split(Regex("\\s+")).firstNotNullOfOrNull { FOLDER.find(it)?.groupValues?.get(1)?.lowercase() }?.let { ALIAS[it] ?: it }?.takeIf { it in FOLDERS || it == "default" } ?: ""
+    private val ALIAS = mapOf("downloads" to "download", "video" to "movies", "videos" to "movies", "picture" to "pictures", "photos" to "pictures", "audio" to "music")
+    // "/media/folder/download" (no space) is the same as "/media /folder/download"
+    fun normalize(text: String): String = text.trim().replace(Regex("^/(media|audio)(/folder/)", RegexOption.IGNORE_CASE)) { "/" + it.groupValues[1] + " " + it.groupValues[2] }
+    // the folder kept for later: typed once as "/media /folder/download" (no link), used by every download after it ("/folder/default" clears it)
+    fun defaultFolder(ctx: Context, audio: Boolean): String = ctx.getSharedPreferences("mdl", 0).getString(if (audio) "folder_audio" else "folder_media", "").orEmpty()
+    fun setDefaultFolder(ctx: Context, audio: Boolean, folder: String) { ctx.getSharedPreferences("mdl", 0).edit().putString(if (audio) "folder_audio" else "folder_media", if (folder == "default") "" else folder).apply() }
     val FOLDERS = setOf("download", "music", "movies", "pictures", "dcim")
     // the place in the phone's shared storage: the usual folder of the kind of file (Movies, Pictures, Music, with no folder of our own),
     // or the one that was asked for when that kind of file may go there (else the usual one); "download" takes any kind
@@ -758,6 +764,7 @@ object MediaGrab {
     // index: which file of a post with several (0 for the first)
     suspend fun save(ctx: Context, url: String, q: String, index: Int, cover: String? = null, folder: String = "", onProgress: (Float) -> Unit): Saved = withContext(Dispatchers.IO) {
         // only the file to save is worked out (no picture is made for the others)
+        val folder = folder.ifEmpty { defaultFolder(ctx, q == "audio") }
         val all = rawItems(url, q)
         val pick = all.getOrNull(index.coerceIn(0, all.size - 1)) ?: throw Fail("Nothing to save in that post")
         val item = Item(Info(pick.first.site, pick.first.title, pick.first.author, pick.first.thumb, pick.first.dur, pick.first.kind, sizeFor(pick.first, pick.second)), pick.second)

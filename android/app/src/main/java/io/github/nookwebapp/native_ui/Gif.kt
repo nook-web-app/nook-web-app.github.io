@@ -85,7 +85,7 @@ object Gif {
 
     private val BAYER = intArrayOf(0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5)
 
-    fun encode(fr: List<IntArray>, w: Int, h: Int, fps: Int): ByteArray {
+    fun encode(fr: List<IntArray>, w: Int, h: Int, fps: Int, dither: Double = 1.2): ByteArray {
         val P = w * h
         val tot = fr.size.toLong() * P
         val st = maxOf(1L, tot / 30000)
@@ -121,7 +121,7 @@ object Gif {
             val px = fr[f]
             for (p in 0 until P) {
                 val y = p / w; val x = p % w
-                val t = ((BAYER[((y and 3) shl 2) or (x and 3)] - 7.5) * 1.2)
+                val t = ((BAYER[((y and 3) shl 2) or (x and 3)] - 7.5) * dither)
                 val v = px[p]
                 val r = (((v shr 16) and 255) + t).coerceIn(0.0, 255.0).toInt()
                 val gg = (((v shr 8) and 255) + t).coerceIn(0.0, 255.0).toInt()

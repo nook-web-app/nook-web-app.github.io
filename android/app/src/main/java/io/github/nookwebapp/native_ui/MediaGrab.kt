@@ -574,7 +574,7 @@ object MediaGrab {
     internal fun toGif(clip: File): ByteArray? {
         // first the clip is read in plain Java (the same on every phone); the phone's own decoder is only the second way
         val plain = runCatching { ClipFrames.read(clip) }
-        plain.getOrNull()?.let { o -> return Gif.encode(o.frames, o.w, o.h, o.fps) }
+        plain.getOrNull()?.let { o -> return Gif.encode(o.frames, o.w, o.h, o.fps, 0.4) }
         val first = plain.exceptionOrNull()
         try { return toGifPhone(clip) } catch (e: Exception) { throw Fail((first?.message ?: first?.javaClass?.simpleName ?: "") + " / " + (e.message ?: e.javaClass.simpleName)) }
     }

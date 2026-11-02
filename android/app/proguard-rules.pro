@@ -18,3 +18,6 @@
 -dontwarn org.jcodec.**
 -dontwarn java.awt.**
 -dontwarn javax.imageio.**
+-keep class de.sciss.jump3r.** { *; }
+-dontwarn de.sciss.jump3r.**
+-dontwarn javax.sound.**

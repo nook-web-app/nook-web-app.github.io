@@ -723,7 +723,7 @@ object MediaGrab {
     }
 
     // index: which file of a post with several (0 for the first)
-    suspend fun save(ctx: Context, url: String, q: String, index: Int, onProgress: (Float) -> Unit): Saved = withContext(Dispatchers.IO) {
+    suspend fun save(ctx: Context, url: String, q: String, index: Int, cover: String? = null, onProgress: (Float) -> Unit): Saved = withContext(Dispatchers.IO) {
         // only the file to save is worked out (no picture is made for the others)
         val all = rawItems(url, q)
         val pick = all.getOrNull(index.coerceIn(0, all.size - 1)) ?: throw Fail("Nothing to save in that post")
@@ -742,17 +742,26 @@ object MediaGrab {
                 val from = first.audio ?: first.url
                 val sz = if (first.audio != null) (if (first.asize > 0) first.asize else sizeOf(from, first.headers)) else (if (first.size > 0) first.size else sizeOf(from, first.headers))
                 fastDownload(from, first.headers, part, sz) { n -> onProgress((got0.addAndGet(n) / (sz.takeIf { it > 0 } ?: 1L).toFloat() * 0.9f).coerceIn(0f, 0.9f)) }
-                val webm = first.audio != null && first.webm
-                val out = File(tmp, if (webm) "sound.webm" else "sound.m4a")
-                extractAudio(part, out, webm)
-                val mime = if (webm) "audio/webm" else "audio/mp4"
-                val name = safeName(info.title, if (webm) "webm" else "m4a")
+                // an mp3 with the title, the artist and the picture of the video (if the phone cannot read the sound, it stays the sound as it came)
+                val coverImg = AudioMp3.cover(cover?.takeIf { it.isNotEmpty() } ?: info.thumb) { u -> http.newCall(Request.Builder().url(u).header("User-Agent", DESKTOP).build()).execute().use { r -> if (r.isSuccessful) r.body?.bytes()?.takeIf { it.size < 4_000_000 } else null } }
+                val mp3 = File(tmp, "sound.mp3")
+                val made = runCatching { AudioMp3.make(part, mp3, info.title, info.author.removePrefix("@"), coverImg) { p -> onProgress(0.9f + 0.05f * p) } }
+                var out = mp3; var ext = "mp3"; var mime = "audio/mpeg"
+                if (made.isFailure) {
+                    android.util.Log.w("nook", "mp3", made.exceptionOrNull())
+                    val webm = first.audio != null && first.webm
+                    out = File(tmp, if (webm) "sound.webm" else "sound.m4a")
+                    extractAudio(part, out, webm)
+                    ext = if (webm) "webm" else "m4a"; mime = if (webm) "audio/webm" else "audio/mp4"
+                }
+                val name = safeName(info.title, ext)
                 val resolver = ctx.contentResolver
                 val result: Uri
                 if (Build.VERSION.SDK_INT >= 29) {
                     val cv = ContentValues().apply {
                         put(MediaStore.MediaColumns.DISPLAY_NAME, name); put(MediaStore.MediaColumns.MIME_TYPE, mime)
                         put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/Nook"); put(MediaStore.MediaColumns.IS_PENDING, 1)
+                        put(MediaStore.Audio.Media.TITLE, info.title); if (info.author.isNotEmpty()) put(MediaStore.Audio.Media.ARTIST, info.author.removePrefix("@"))
                     }
                     val uri = resolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, cv) ?: throw Fail("Could not create the file")
                     try { (resolver.openOutputStream(uri) ?: throw Fail("Could not create the file")).use { o -> copyOut(out, o, onProgress) } }
@@ -765,7 +774,7 @@ object MediaGrab {
                     result = androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f)
                 }
                 onProgress(1f)
-                return@withContext Saved(result, "Audio saved in your music")
+                return@withContext Saved(result, if (made.isSuccess) "mp3 saved in your music" else "Saved as m4a, an mp3 could not be made")
             } finally { runCatching { tmp.deleteRecursively() } }
         }
         var src = first

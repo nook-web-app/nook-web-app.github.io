@@ -76,7 +76,7 @@ fun MediaCard(m: LMsg) {
                         try {
                             val got = Keep.download(ctx, key, title) {
                                 Keep.progress(ctx, key, title, 0)
-                                MediaGrab.save(ctx, card.optString("u"), card.optString("q"), index) { p ->
+                                MediaGrab.save(ctx, card.optString("u"), card.optString("q"), index, card.optString("i")) { p ->
                                     // the message was deleted while it downloads: the download stops and its notification goes
                                     val now = System.currentTimeMillis()
                                     if (now - checked > 700) { checked = now; if (!app.mdl.exists(app, key)) throw kotlinx.coroutines.CancellationException("deleted") }

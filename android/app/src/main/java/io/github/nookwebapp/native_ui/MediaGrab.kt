@@ -97,8 +97,10 @@ object MediaGrab {
 
     // the cards and the addresses of the files of a post, worked out together (the address of a file runs out, so it is asked again at
     // download); a post with several pictures or videos gives one item for each, and every item gets its card at once
-    suspend fun resolveAll(url: String, q: String = ""): List<Item> = withContext(Dispatchers.IO) {
+    // light: only the addresses of the files (a download needs no picture and no size of the card, which cost seconds)
+    suspend fun resolveAll(url: String, q: String = "", light: Boolean = false): List<Item> = withContext(Dispatchers.IO) {
         val raw = rawItems(url, q)
+        if (light) return@withContext raw.map { (i, s) -> Item(i, s) }
         kotlinx.coroutines.coroutineScope { raw.map { (i, s) -> async { finish(i, s) } }.awaitAll() }
     }
     private fun rawItems(url: String, q: String): List<Pair<Info, Src>> {
@@ -693,6 +695,13 @@ object MediaGrab {
         }
     }
 
+    // the file written to its place with big pieces (the default piece of 8 KB makes a big video take seconds), the bar moving to 100
+    private fun copyOut(from: File, o: java.io.OutputStream, onProgress: (Float) -> Unit) {
+        val total = from.length().coerceAtLeast(1L).toFloat(); var done = 0L
+        val buf = ByteArray(1 shl 20)
+        from.inputStream().use { i -> while (true) { val n = i.read(buf); if (n < 0) break; o.write(buf, 0, n); done += n; onProgress(0.95f + 0.05f * (done / total)) } }
+    }
+
     // the sound track of a video file copied on its own, without being changed
     private fun extractAudio(from: File, to: File, webm: Boolean) {
         val ex = android.media.MediaExtractor()
@@ -746,7 +755,7 @@ object MediaGrab {
                         put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/Nook"); put(MediaStore.MediaColumns.IS_PENDING, 1)
                     }
                     val uri = resolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, cv) ?: throw Fail("Could not create the file")
-                    try { (resolver.openOutputStream(uri) ?: throw Fail("Could not create the file")).use { o -> out.inputStream().use { it.copyTo(o) } } }
+                    try { (resolver.openOutputStream(uri) ?: throw Fail("Could not create the file")).use { o -> copyOut(out, o, onProgress) } }
                     catch (e: Exception) { runCatching { resolver.delete(uri, null, null) }; throw e }
                     resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
                     result = uri
@@ -819,7 +828,7 @@ object MediaGrab {
                     put(MediaStore.MediaColumns.IS_PENDING, 1)
                 }
                 val uri = resolver.insert(if (image) MediaStore.Images.Media.EXTERNAL_CONTENT_URI else MediaStore.Video.Media.EXTERNAL_CONTENT_URI, cv) ?: throw Fail("Could not create the file")
-                try { (resolver.openOutputStream(uri) ?: throw Fail("Could not create the file")).use { o -> file.inputStream().use { it.copyTo(o) } } }
+                try { (resolver.openOutputStream(uri) ?: throw Fail("Could not create the file")).use { o -> copyOut(file, o, onProgress) } }
                 catch (e: Exception) { runCatching { resolver.delete(uri, null, null) }; throw e }
                 resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
                 result = uri

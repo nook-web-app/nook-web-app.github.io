@@ -74,7 +74,7 @@ fun MediaCard(m: LMsg) {
                     val job = MediaDl.scope.launch {
                         var checked = 0L
                         try {
-                            val got = Keep.around(ctx) {
+                            val got = Keep.download(ctx, key, title) {
                                 Keep.progress(ctx, key, title, 0)
                                 MediaGrab.save(ctx, card.optString("u"), card.optString("q"), index) { p ->
                                     // the message was deleted while it downloads: the download stops and its notification goes

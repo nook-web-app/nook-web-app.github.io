@@ -64,12 +64,12 @@ fun ChatsScreen() {
         if (on.me == null) { dm.inboxN = 0; return@LaunchedEffect }
         if (dm.inbox == null) on.cachedInbox()?.let { dm.inbox = it }
         on.loadDmMutes()
-        var first = true
+        var first = true; var lastJson = ""
         while (true) {
             try {
                 val c = on.dmInbox()
                 on.refreshBadge(false)
-                Cache.write("inbox:" + on.uid, JSONArray(c.map { it.json() }))
+                JSONArray(c.map { it.json() }).let { a -> val t = a.toString(); if (t != lastJson) { lastJson = t; Cache.write("inbox:" + on.uid, a) } }
                 dm.inbox = c
                 // the newest chats are downloaded in the background, so tapping one shows its messages right away
                 if (first) c.take(3).forEach { cv -> app.scope.launch { runCatching { val k = "thread:" + on.uid + ":" + cv.other; if ((Cache.fresh(k, 60_000)) == null) Cache.write(k, JSONArray(on.dmThread(cv.other).takeLast(100))); on.sharedKey(cv.other) } } }

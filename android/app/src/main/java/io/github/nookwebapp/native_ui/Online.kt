@@ -360,11 +360,11 @@ class Online(val app: AppState) {
         if (fresh.isEmpty()) return@coroutineScope 0
         val ids = fresh.map { it.optString("id") }
         val authors = fresh.map { it.optString("user_id") }.filter { it != me }.distinct()
-        val lk = async { Sb.get(Q("likes").select("post_id").inList("post_id", ids)) }
-        val rpQ = async { Sb.get(Q("reposts").select("post_id").inList("post_id", ids)) }
+        val lk = async { Sb.pageAll { Q("likes").select("post_id, user_id").inList("post_id", ids).order("post_id").order("user_id") } }
+        val rpQ = async { Sb.pageAll { Q("reposts").select("post_id, user_id").inList("post_id", ids).order("post_id").order("user_id") } }
         val myLk = async { Sb.get(Q("likes").select("post_id").eq("user_id", me).inList("post_id", ids)) }
         val myRp = async { Sb.get(Q("reposts").select("post_id").eq("user_id", me).inList("post_id", ids)) }
-        val kidsQ = async { Sb.get(Q("posts").select("parent_id").inList("parent_id", ids)) }
+        val kidsQ = async { Sb.pageAll { Q("posts").select("parent_id, id").inList("parent_id", ids).order("id") } }
         val whoQ = async { if (authors.isNotEmpty()) cachedAccounts(authors) else Accts(HashMap()) }
         val sstQ = async { shareSaveStats(ids) }
         fun tally(r: Res, k: String) = HashMap<String, Int>().apply { r.rows.forEach { x -> val v = x.optString(k); this[v] = (this[v] ?: 0) + 1 } }
@@ -735,8 +735,8 @@ class Online(val app: AppState) {
         socialAt = System.currentTimeMillis()
         val nj = app.scope.async {
             val (a, b) = coroutineScope {
-                val x = async { Sb.get(Q("nicknames").select("target_id, nickname").eq("owner_id", me)) }
-                val y = async { Sb.get(Q("chat_clears").select("other_id, cleared_at").eq("user_id", me)) }
+                val x = async { Sb.pageAll { Q("nicknames").select("target_id, nickname").eq("owner_id", me).order("target_id") } }
+                val y = async { Sb.pageAll { Q("chat_clears").select("other_id, cleared_at").eq("user_id", me).order("other_id") } }
                 x.await() to y.await()
             }
             if (a.ok) { nickMap.clear(); a.rows.forEach { nickMap[it.optString("target_id")] = it.optString("nickname") }; Cache.write("nicks:$me", JSONObject(nickMap as Map<*, *>)); nickVersion++ }

@@ -30,6 +30,7 @@ fun mainAccountId(l: List<SavedAcct>) = (l.firstOrNull { it.main } ?: l.firstOrN
 
 // the login is saved sealed on this phone every time it changes, and handed to the live connection
 fun Online.wireSession() {
+    Sb.wired = true
     Sb.onSession = { ss ->
         sessionFile()?.let { Vault.write(it, ss?.json()?.toString()) }
         if (ss != null) {
@@ -396,6 +397,7 @@ suspend fun Online.addAccount(email: String, pw: String): String? {
 }
 
 suspend fun Online.newAccount(name: String, user: String, email: String, pw: String): String? {
+    if (user.lowercase() == "zenith") return "That username is taken"
     if (Sb.get(Q("accounts").select("id").eq("username", user)).one != null) return "That username is taken"
     if (pwned(pw)) return PWNED_MSG
     val sr = Sb.fn("signin", JSONObject().put("action", "signup").put("email", email).put("password", pw))

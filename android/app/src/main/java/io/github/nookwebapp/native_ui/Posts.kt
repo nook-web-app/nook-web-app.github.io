@@ -238,7 +238,8 @@ fun ImgGrid(imgs: List<String>, cap: String? = null, framed: Boolean = true) {
     val maxH = minOf(460f, LocalConfiguration.current.screenHeightDp * 0.6f).dp
     val open = { i: Int -> app.viewer = Viewer(imgs, i, cap) }
     // .imgs.n1 img { height: auto }: one photo takes its own shape once it is in (and at once when it is known)
-    var one by remember(imgs.firstOrNull()) { mutableStateOf(imgs.firstOrNull()?.let { Photos.size(it) }) }
+    var one by remember(imgs.firstOrNull()) { mutableStateOf<Pair<Int, Int>?>(null) }
+    LaunchedEffect(imgs.firstOrNull()) { if (one == null) one = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { imgs.firstOrNull()?.let { Photos.size(it) } } }
     val cell = @Composable { i: Int, m: Modifier -> Pic(imgs[i], m.tap { open(i) }, onLoad = if (i == 0 && imgs.size == 1) ({ w, h -> if (one == null || one!!.first * h != one!!.second * w) one = w to h }) else null) }
     BoxWithConstraints(if (framed) Modifier.padding(top = 8.dp).fillMaxWidth().clip(shape).border(1.dp, c.line, shape).padding(1.dp) else Modifier.fillMaxWidth().clip(RoundedCornerShape(Rad.bubble))) {
         val w = maxWidth
@@ -281,7 +282,7 @@ private fun Modifier.freshIn(on: Boolean): Modifier {
 fun PostCard(p: LPost, lab: String? = null, pin: Boolean = false, replyTo: Boolean = false, rep: Boolean = false, d: Int = 0, line: Boolean = false, compact: Boolean = false, nc: Boolean = false) {
     val app = LocalApp.current
     val c = LocalNook.current
-    val isFresh = app.fresh == p.id
+    val isFresh by remember(p.id) { derivedStateOf { app.fresh == p.id } }
     LaunchedEffect(isFresh) { if (isFresh) { kotlinx.coroutines.delay(700); app.fresh = null } }
     val open = { app.go(Route.Thread(p.id)) }
     // only one's own posts open their sheet with a hold
@@ -305,7 +306,7 @@ fun PostCard(p: LPost, lab: String? = null, pin: Boolean = false, replyTo: Boole
             }
             PostHead(nameOf(app, p), handleOf(app, p), ago(p.t), p.id)
             if (replyTo && p.parent != null) Row(Modifier.padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                val par = app.store.byId(p.parent)
+                val par by remember(p.parent) { derivedStateOf { app.store.byId(p.parent) } }
                 NIcon("reply", 14.dp, c.muted); T("Replying to " + if (par == null) "a post" else handleOf(app, par), Fs.sm, color = c.muted)
             }
             val txt = remember(p.text, p.imgs) { cardless(p) }

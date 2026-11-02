@@ -293,7 +293,7 @@ fun ViewerHost(app: AppState) {
         Box(Modifier.fillMaxSize().background(Color(0xF0000000)).clickable(remember { MutableInteractionSource() }, null) { app.viewer = null }) {
             androidx.compose.foundation.pager.HorizontalPager(pager, Modifier.fillMaxSize()) { i ->
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    val d = Photos.size(v.imgs[i])
+                    val d by produceState<Pair<Int, Int>?>(null, v.imgs[i]) { value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Photos.size(v.imgs[i]) } }
                     Pic(v.imgs[i], Modifier.fillMaxWidth().then(if (d != null) Modifier.aspectRatio(d.first.toFloat() / d.second) else Modifier).clickable(remember { MutableInteractionSource() }, null) {}, want = 2048, scale = androidx.compose.ui.layout.ContentScale.Fit)
                 }
             }

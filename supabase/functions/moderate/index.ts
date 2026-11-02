@@ -76,7 +76,7 @@ async function gifFrames(buf: Uint8Array): Promise<Uint8Array[]> {
   const { Buffer } = await import("node:buffer");
   const r = new GifReader(buf);
   const w = r.width, h = r.height, n = r.numFrames();
-  if (w * h > 4_000_000 || n > 600) throw new Error("gif too big");
+  if (w * h > 4_000_000 || n > 150) throw new Error("gif too big");
   // up to six frames spread over the whole animation
   const picks = new Set<number>();
   for (let k = 0; k < Math.min(n, 6); k++) picks.add(Math.floor((k * (n - 1)) / Math.max(1, Math.min(n, 6) - 1)));

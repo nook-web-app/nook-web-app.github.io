@@ -41,9 +41,16 @@ object Photos {
         when {
             src.startsWith("data:") -> java.util.Base64.getDecoder().decode(src.substring(src.indexOf(',') + 1))
             src.startsWith("http") -> Img.diskFile(src)?.takeIf { it.exists() }?.readBytes() ?: fetch(src)
-            else -> File(src).takeIf { it.exists() }?.readBytes()
+            else -> localFile(src)?.takeIf { it.exists() }?.readBytes()
         }
     } catch (e: Exception) { null }
+
+    // a local picture is only read from the cache or a media folder of this app, so a crafted post cannot name another private file
+    fun localFile(src: String): File? = runCatching {
+        val f = File(src).canonicalFile
+        val cache = cacheDir?.canonicalPath
+        f.takeIf { (cache != null && it.path.startsWith(cache + File.separator)) || it.parentFile?.name == "media" }
+    }.getOrNull()
 
     // pictures of other people are only loaded from this app's own storage or inline data, never from an address they chose
     // (a local file path is never accepted here: somebody else's profile row must not make this phone read its own files)
@@ -247,7 +254,7 @@ object Img {
     }
     fun model(src: String): Any = when {
         src.startsWith("data:") -> DataSrc(src)
-        src.startsWith("/") -> File(src)
+        src.startsWith("/") -> Photos.localFile(src) ?: ""
         else -> src
     }
     // the downloaded copy of a link, when Coil already has it on disk

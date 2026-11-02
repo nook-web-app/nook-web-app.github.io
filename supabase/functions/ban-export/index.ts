@@ -44,6 +44,7 @@ Deno.serve(async (req) => {
 
   const { data: row, error: re } = await admin.from("ban_archive").select("data, expires_at, banned_at").eq("user_id", uid).maybeSingle();
   if (re || !row) return json({ error: "There is no backup for this account." }, 404);
+  if (new Date(row.expires_at).getTime() <= Date.now()) return json({ error: "There is no backup for this account." }, 404);
 
   const files: { bucket: string; name: string; url: string }[] = [];
   try {

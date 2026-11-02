@@ -233,7 +233,7 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
         // only a change of the words marks it as edited (removing or adding a photo does not)
         p.edited = p.edited || text != was.first
         p.text = text; p.imgs = imgs; persist(); say("Saved")
-        scope.launch { if (!on.syncEdit(p, text, origin, imgs)) { p.text = was.first; p.imgs = was.second; p.edited = was.third; persist() } }
+        scope.launch { if (!on.syncEdit(p, text, origin, imgs) && p.text == text && p.imgs == imgs) { p.text = was.first; p.imgs = was.second; p.edited = was.third; persist() } }
     }
 
     fun toggleLike(p: LPost) { if (p.remote != null) on.toggleLike(p) else { p.liked = !p.liked; persist() } }

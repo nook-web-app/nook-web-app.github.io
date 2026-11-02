@@ -92,11 +92,11 @@ object Notify {
         if (Sb.session == null) {
             Sb.session = Vault.read(File(ctx.filesDir, "sb.bin"))?.let { runCatching { Session.of(JSONObject(it)) }.getOrNull() }
             // a renewed login is saved at once, so the app never uses a spent one
-            Sb.onSession = { ss -> Vault.write(File(ctx.filesDir, "sb.bin"), ss?.json()?.toString()) }
+            if (!Sb.wired) Sb.onSession = { ss -> Vault.write(File(ctx.filesDir, "sb.bin"), ss?.json()?.toString()) }
         }
         val me = Sb.user?.id ?: return
         val since = ctx.getSharedPreferences("nook", 0).getLong("since", System.currentTimeMillis() - 86_400_000)
-        val r = Sb.get(Q("notifications").select("id, actor_id, kind, post_id, created_at").eq("user_id", me).isNull("read_at").gt("created_at", isoOf(since)).order("created_at", false).limit(20))
+        val r = Sb.get(Q("notifications").select("id, actor_id, kind, post_id, created_at").eq("user_id", me).isNull("read_at").gt("created_at", isoOf(since)).order("created_at", true).limit(20))
         if (!r.ok) return
         val seen = seen(ctx)
         val fresh = r.rows.filter { it.optString("id") !in seen }
@@ -104,7 +104,7 @@ object Notify {
         val actors = fresh.map { it.optString("actor_id") }.distinct()
         val accts = Sb.get(Q("accounts").select("id, username, display_name").inList("id", actors)).rows.associateBy { it.optString("id") }
         val muted = Sb.get(Q("dm_mutes").select("target_id, until_at, hidden").eq("owner_id", me)).rows.filter { m -> m.optBoolean("hidden") || m.isNull("until_at") || parseIso(m.optString("until_at")) > System.currentTimeMillis() }.map { it.optString("target_id") }.toSet()
-        fresh.reversed().forEach { n ->
+        fresh.forEach { n ->
             val a = accts[n.optString("actor_id")]
             val who = a?.let { if (it.isNull("display_name")) it.optString("username") else it.optString("display_name") } ?: "Someone"
             val kind = n.optString("kind")
@@ -117,7 +117,7 @@ object Notify {
             }, n.optString("id").hashCode())
         }
         markSeen(ctx, fresh.map { it.optString("id") })
-        ctx.getSharedPreferences("nook", 0).edit().putLong("since", parseIso(fresh.first().optString("created_at"))).apply()
+        ctx.getSharedPreferences("nook", 0).edit().putLong("since", parseIso(r.rows.last().optString("created_at"))).apply()
     }
 }
 

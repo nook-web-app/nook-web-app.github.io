@@ -103,6 +103,8 @@ object Sb {
     // the login of the account that is open; saved (sealed) on this phone by whoever sets onSession
     @Volatile var session: Session? = null
     var onSession: (Session?) -> Unit = {}
+    // true once the app has set its own onSession, so a background worker never replaces it
+    @Volatile var wired = false
     // the server said this login is no longer valid (it was signed out somewhere, or the refresh token is spent)
     var onSignedOut: () -> Unit = {}
     private val refreshLock = Mutex()
@@ -301,10 +303,10 @@ object Sb {
             if (!r.ok) return Res(null, r.error)
             val a = r.data as? JSONArray ?: JSONArray()
             withContext(Dispatchers.IO) { for (i in 0 until a.length()) out.put(a.get(i)) }
-            if (a.length() < 1000) break
+            if (a.length() < 1000) return Res(out, null)
             from += 1000
         }
-        return Res(out, null)
+        return Res(null, Err("", "too many rows", 0))
     }
 
     // a write made with another account's login (an account being added next to the open one): status and body

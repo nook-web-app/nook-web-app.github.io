@@ -64,7 +64,7 @@ object Passkey {
                 return null
             }
             c to null
-        } catch (e: Exception) { null }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { null }
     }
 
     suspend fun askGoogle(app: AppState): Got? {

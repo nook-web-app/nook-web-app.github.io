@@ -112,7 +112,7 @@ suspend fun Online.notePicOut(key: ByteArray, src: String): JSONObject {
     val b = withContext(kotlinx.coroutines.Dispatchers.IO) { Photos.bytesOf(src) } ?: throw IllegalStateException("photo not ready")
     val iv = Crypto.random(12)
     val path = "$me/notes/" + uid() + ".bin"
-    Sb.upload("dm-media", path, Crypto.seal(key, iv, b), "application/octet-stream")?.let { throw IllegalStateException(it.message) }
+    Sb.upload("dm-media", path, withContext(kotlinx.coroutines.Dispatchers.Default) { Crypto.seal(key, iv, b) }, "application/octet-stream")?.let { throw IllegalStateException(it.message) }
     return JSONObject().put("url", Sb.publicUrl("dm-media", path)).put("iv", Crypto.b64(iv)).put("type", mimeOf(b))
 }
 

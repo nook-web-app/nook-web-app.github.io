@@ -180,11 +180,13 @@ async function proveOld(email: string, password: string, ip: string): Promise<Re
   }
 
   const miss = async (error: string, status: number) => {
-    const f = await admin.rpc("nook_login_fail", { p_key: key, p_max: MAX_TRIES });
-    if (perIp) await admin.rpc("nook_login_note_ip", { p_key: email, p_ip: ip });
-    const g = wide ? await admin.rpc("nook_login_fail", { p_key: all, p_max: MAX_TRIES_ALL, p_first: ALL_FIRST, p_cap: ALL_CAP }) : { data: null };
-    // the place count is never reset by a success, so a sprayer cannot clear it by signing in to an account of its own
-    const gi = perIp ? await admin.rpc("nook_login_fail", { p_key: perIp, p_max: MAX_TRIES_IP }) : null;
+    const [f, , g, gi] = await Promise.all([
+      admin.rpc("nook_login_fail", { p_key: key, p_max: MAX_TRIES }),
+      perIp ? admin.rpc("nook_login_note_ip", { p_key: email, p_ip: ip }) : null,
+      wide ? admin.rpc("nook_login_fail", { p_key: all, p_max: MAX_TRIES_ALL, p_first: ALL_FIRST, p_cap: ALL_CAP }) : { data: null },
+      // the place count is never reset by a success, so a sprayer cannot clear it by signing in to an account of its own
+      perIp ? admin.rpc("nook_login_fail", { p_key: perIp, p_max: MAX_TRIES_IP }) : null,
+    ]);
     const rowIp = gi ? (Array.isArray(gi.data) ? gi.data[0] : gi.data) : null;
     const row = Array.isArray(f.data) ? f.data[0] : f.data;
     const rowAll = Array.isArray(g.data) ? g.data[0] : g.data;
@@ -225,8 +227,10 @@ async function proveOld(email: string, password: string, ip: string): Promise<Re
     if (code === "over_request_rate_limit" || (r.error as { status?: number }).status === 429) return json({ error: "busy" }, 429);
     return json({ error: "server" }, 500);
   }
-  await admin.rpc("nook_login_ok", { p_key: key });
-  await admin.rpc("nook_login_ok", { p_key: all });
-  await admin.rpc("nook_login_clear_ips", { p_key: email });
+  await Promise.all([
+    admin.rpc("nook_login_ok", { p_key: key }),
+    admin.rpc("nook_login_ok", { p_key: all }),
+    admin.rpc("nook_login_clear_ips", { p_key: email }),
+  ]);
   return { access_token: r.data.session!.access_token, refresh_token: r.data.session!.refresh_token, upgraded };
 }

@@ -32,7 +32,7 @@ object Push {
     fun loadSession(ctx: Context) {
         if (Sb.session != null) return
         Sb.session = Vault.read(File(ctx.filesDir, "sb.bin"))?.let { runCatching { Session.of(JSONObject(it)) }.getOrNull() }
-        Sb.onSession = { ss -> Vault.write(File(ctx.filesDir, "sb.bin"), ss?.json()?.toString()) }
+        if (!Sb.wired) Sb.onSession = { ss -> Vault.write(File(ctx.filesDir, "sb.bin"), ss?.json()?.toString()) }
     }
 
     // this phone's token goes to the server for the account that is signed in (again when Google gives a new one)

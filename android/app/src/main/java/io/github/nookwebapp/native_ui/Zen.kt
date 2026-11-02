@@ -137,7 +137,7 @@ private fun zenKey(k: String) = k.substringBefore(":") to k.substringAfter(":")
 
 private fun Online.zenDocs(): LinkedHashMap<String, JSONObject> {
     val out = LinkedHashMap<String, JSONObject>()
-    out["state:main"] = JSONObject().put("z", s.zen)
+    out["state:main"] = JSONObject().put("z", JSONObject(s.zen.toString()))
     out["state:prompt"] = JSONObject().put("post", ZSYS_POST_PUB).put("reply", ZSYS_REPLY_PUB).put("tz", java.util.TimeZone.getDefault().id)
     s.posts.forEach { p ->
         if (p.ai) out["post:" + p.id] = Store.postJson(p).apply { remove("imgs"); remove("ai") }.put("ai", true)
@@ -322,7 +322,7 @@ private fun zenDocsChatSig(id: String, name: String, t: Long, msgs: List<LMsg>) 
 
 private fun Online.mergeZenChat(id: String, name: String, t: Long, msgs: List<LMsg>): Boolean {
     val c = s.chats.firstOrNull { it.id == id }
-    if (c == null) { s.chats.add(LChat(id, name, t, msgs.sortedBy { it.t })); return true }
+    if (c == null) { s.chats.add(LChat(id, name, t, msgs.sortedBy { it.t }).also { it.zc = true }); return true }
     val have = c.msgs.map { it.id }.toSet()
     val add = msgs.filter { it.id !in have }
     var changed = false

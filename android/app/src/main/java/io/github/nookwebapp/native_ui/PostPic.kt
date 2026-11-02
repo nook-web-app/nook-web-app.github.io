@@ -18,7 +18,7 @@ object PostPic {
         // who wrote it: Zenith, somebody else, or the owner
         val name = if (p.ai) "Zenith" else p.ra?.name ?: pr.name
         val handle = if (p.ai) "zenith" else p.ra?.handle ?: pr.handle
-        val avSrc = if (p.ai) zenPfp else p.ra?.avatar?.takeIf { Photos.ownMedia(it) } ?: pr.avatar
+        val avSrc = if (p.ai) zenPfp else if (p.ra != null) p.ra.avatar?.takeIf { Photos.ownMedia(it) } else pr.avatar
         val W = 960f; val pad = 56f; val av = 80f; val fs = 34f; val lh = 48f
         val cw = W - pad * 2
         val txt = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { textSize = fs; typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL) }

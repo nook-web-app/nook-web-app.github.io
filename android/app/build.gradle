@@ -10,7 +10,7 @@ android {
         storeFile file(ks); storePassword System.getenv('NOOK_KS_PASS'); keyAlias 'nook'; keyPassword System.getenv('NOOK_KS_PASS')
     } } }
     // a release built without the release key is only fit for testing: say so loudly, and never publish it
-    if (!ks) project.gradle.taskGraph.whenReady { g -> if (g.allTasks.any { it.name.startsWith('assembleRelease') || it.name.startsWith('bundleRelease') }) project.logger.warn('WARNING: NOOK_KS is not set, so this release build is signed with the local DEBUG key. Do not publish it.') }
+    if (!ks) project.gradle.taskGraph.whenReady { g -> if (g.allTasks.any { it.name.startsWith('assembleRelease') || it.name.startsWith('bundleRelease') }) throw new GradleException('NOOK_KS is not set: a release build must be signed with the release key, never the debug key.') }
     buildTypes { release { signingConfig ks ? signingConfigs.release : signingConfigs.debug; minifyEnabled true; shrinkResources true; proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro' } }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = '17' }

@@ -610,11 +610,12 @@ suspend fun Online.sendDm(other: String, text: String, srcs: List<String> = empt
     val media = JSONArray(); val paths = ArrayList<String>()
     val key = if (srcs.isNotEmpty()) sharedKey(other) else null
     if (srcs.isNotEmpty()) keyGate(other)
+    var lost = false
     try {
         srcs.forEachIndexed { i, src ->
             val b = withContext(kotlinx.coroutines.Dispatchers.IO) { Photos.bytesOf(src) } ?: throw IllegalStateException("photo")
             val iv = Crypto.random(12)
-            val ct = Crypto.seal(key!!, iv, b)
+            val ct = withContext(kotlinx.coroutines.Dispatchers.Default) { Crypto.seal(key!!, iv, b) }
             val path = "$me/" + uid() + ".bin"
             Sb.upload("dm-media", path, ct, "application/octet-stream")?.let { throw IllegalStateException(it.message) }
             paths.add(path)
@@ -623,10 +624,12 @@ suspend fun Online.sendDm(other: String, text: String, srcs: List<String> = empt
         }
         val body = if (text.isNotEmpty()) sealFor(other, text) else ""
         val r = Sb.insert("messages", JSONObject().put("sender_id", me).put("recipient_id", other).put("body", body).put("media", media), select = "id, sender_id, recipient_id, body, media, created_at, read_at")
+        // no answer at all: the message may still have been stored, so its photos stay
+        if (r.one == null && r.error?.status == 0) lost = true
         val row = r.one ?: throw IllegalStateException(r.error?.message ?: "send")
         return DmMsg.of(row)
     } catch (e: Exception) {
-        if (paths.isNotEmpty()) app.scope.launch { Sb.remove("dm-media", paths) }
+        if (paths.isNotEmpty() && !lost) app.scope.launch { Sb.remove("dm-media", paths) }
         throw e
     }
 }

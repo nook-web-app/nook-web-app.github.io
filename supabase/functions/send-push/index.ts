@@ -95,9 +95,11 @@ Deno.serve(async (req) => {
     const { data: mu } = await admin.from("dm_mutes").select("owner_id, until_at, hidden").eq("owner_id", n.user_id).eq("target_id", n.actor_id).maybeSingle();
     if (mu && (mu.hidden || !mu.until_at || Date.parse(mu.until_at) > Date.now())) return json({ sent: 0, muted: true });
   }
-  const { data: actor } = await admin.from("accounts").select("display_name, username, public_key").eq("id", n.actor_id).maybeSingle();
-  const { data: subs } = await admin.from("push_subs").select("id, endpoint, p256dh, auth").eq("user_id", n.user_id);
-  const { data: fcm } = await admin.from("fcm_tokens").select("token").eq("user_id", n.user_id);
+  const [{ data: actor }, { data: subs }, { data: fcm }] = await Promise.all([
+    admin.from("accounts").select("display_name, username, public_key").eq("id", n.actor_id).maybeSingle(),
+    admin.from("push_subs").select("id, endpoint, p256dh, auth").eq("user_id", n.user_id),
+    admin.from("fcm_tokens").select("token").eq("user_id", n.user_id),
+  ]);
   if ((!subs || !subs.length) && (!fcm || !fcm.length)) return json({ sent: 0 });
 
   const name = (actor && (actor.display_name || actor.username)) || "Someone";
@@ -129,12 +131,13 @@ Deno.serve(async (req) => {
 
   let sent = 0;
   const dead: string[] = [];
-  if (fcm && fcm.length) {
+  const viaFcm = async () => {
+    if (!fcm || !fcm.length) return;
     const r = await sendFcm(fcm, { title: name, body: WHAT[n.kind] || "sent you something", open, id: n.id });
     sent += r.sent;
     if (r.dead.length) await admin.from("fcm_tokens").delete().in("token", r.dead);
-  }
-  await Promise.all((subs || []).map(async (s) => {
+  };
+  await Promise.all([viaFcm(), ...(subs || []).map(async (s) => {
     try {
       await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload, { TTL: 3600, urgency: "high" });
       sent++;
@@ -142,7 +145,7 @@ Deno.serve(async (req) => {
       const code = (e as { statusCode?: number }).statusCode;
       if (code === 404 || code === 410) dead.push(s.id);
     }
-  }));
+  })]);
   if (dead.length) await admin.from("push_subs").delete().in("id", dead);
   return json({ sent, removed: dead.length });
 });

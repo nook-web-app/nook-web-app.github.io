@@ -43,7 +43,26 @@ object MediaGrab {
 
     // the default of 5 connections to one host would hold back the pieces of a download: 16 may run together
     private val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).followRedirects(true)
+        .addNetworkInterceptor { chain ->
+            // every hop (the first request and each redirect) is checked at the address it really connects to
+            val route = chain.connection()?.route()
+            val ip = route?.takeIf { it.proxy.type() == java.net.Proxy.Type.DIRECT }?.socketAddress?.address
+            if (ip != null && isPrivate(ip)) throw java.io.IOException("That address is not allowed")
+            chain.proceed(chain.request())
+        }
         .dispatcher(okhttp3.Dispatcher().apply { maxRequests = 64; maxRequestsPerHost = 16 }).build()
+    // loopback, link-local, site-local, unique-local, shared and any-local addresses are never fetched
+    private fun isPrivate(a: java.net.InetAddress): Boolean {
+        if (a.isAnyLocalAddress || a.isLoopbackAddress || a.isLinkLocalAddress || a.isSiteLocalAddress || a.isMulticastAddress) return true
+        val b = a.address
+        return when (b.size) {
+            16 -> (b[0].toInt() and 0xFE) == 0xFC
+            4 -> (b[0].toInt() and 0xFF) == 100 && (b[1].toInt() and 0xC0) == 64
+            else -> false
+        }
+    }
+    // a hard limit for any download
+    private const val MAX_FILE = 2_000_000_000L
     private val still: OkHttpClient = http.newBuilder().followRedirects(false).build()
 
     // the link of a "/media" message: null when the text is not that command, "" when the link is missing
@@ -79,7 +98,11 @@ object MediaGrab {
     // the cards and the addresses of the files of a post, worked out together (the address of a file runs out, so it is asked again at
     // download); a post with several pictures or videos gives one item for each, and every item gets its card at once
     suspend fun resolveAll(url: String, q: String = ""): List<Item> = withContext(Dispatchers.IO) {
-        val raw: List<Pair<Info, Src>> = when (site(url)) {
+        val raw = rawItems(url, q)
+        kotlinx.coroutines.coroutineScope { raw.map { (i, s) -> async { finish(i, s) } }.awaitAll() }
+    }
+    private fun rawItems(url: String, q: String): List<Pair<Info, Src>> {
+        return when (site(url)) {
             "x" -> X_POST.find(url)!!.let { xResolve(it.groupValues[1], it.groupValues[2]) }
             "youtube" -> listOf(ytResolve(YT_ID.find(url)!!.groupValues[1], q))
             "instagram" -> igResolve(IG_POST.find(url)!!.let { it.groupValues[1] to it.groupValues[2] })
@@ -87,18 +110,26 @@ object MediaGrab {
             "web" -> webResolve(url)
             else -> throw Fail("Use a link that starts with https://")
         }
-        kotlinx.coroutines.coroutineScope { raw.map { (i, s) -> async { finish(i, s) } }.awaitAll() }
     }
     suspend fun resolve(url: String, q: String = ""): Pair<Info, Src> = resolveAll(url, q).first().let { it.info to it.src }
 
     // the size of the file (or of both pieces) and the picture of the card: the first frame of a video (a picture is shrunk), so no
     // link is left without a preview, even when the site gives none or its picture cannot be loaded later
     private suspend fun finish(info: Info, src: Src): Item = kotlinx.coroutines.coroutineScope {
-        val size = async { if (info.size > 0) info.size else if (src.size > 0) src.size + src.asize else sizeOf(src.url, src.headers) + (src.audio?.let { sizeOf(it, src.headers) } ?: 0) }
+        val size = async { sizeFor(info, src) }
         val own = info.thumb?.takeIf { info.site == "youtube" }
         // the picture a mirror gives for an Instagram video has a play button drawn in it: it is not used
         val thumb = async { own ?: preview(src, info.kind) ?: info.thumb?.takeIf { !(info.site == "instagram" && info.kind == "video") } }
         Item(Info(info.site, info.title, info.author, thumb.await(), info.dur, info.kind, size.await()), src)
+    }
+
+    // the size of the file (or of both pieces): the one the site gave, else asked for (both pieces together)
+    private suspend fun sizeFor(info: Info, src: Src): Long = kotlinx.coroutines.coroutineScope {
+        if (info.size > 0) return@coroutineScope info.size
+        if (src.size > 0) return@coroutineScope src.size + src.asize
+        val v = async { sizeOf(src.url, src.headers) }
+        val a = async { src.audio?.let { sizeOf(it, src.headers) } ?: 0L }
+        v.await() + a.await()
     }
 
     // a small picture (a data address, so it goes with the note) from the file of an item, null when it cannot be read
@@ -106,7 +137,7 @@ object MediaGrab {
         var bm: android.graphics.Bitmap? = null
         if (kind == "image") {
             val b = Request.Builder().url(src.url).header("User-Agent", DESKTOP).apply { src.headers.forEach { (k, v) -> header(k, v) } }.build()
-            val data = http.newCall(b).execute().use { r -> if (!r.isSuccessful) null else r.body?.bytes()?.takeIf { it.size < 12_000_000 } }
+            val data = http.newCall(b).execute().use { r -> if (!r.isSuccessful) null else r.body?.source()?.let { s -> s.request(12_000_001); if (s.buffer.size > 12_000_000) null else s.buffer.readByteArray() } }
             bm = data?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }
         } else {
             val r = android.media.MediaMetadataRetriever()
@@ -115,18 +146,20 @@ object MediaGrab {
                 if (kind == "gif") {
                     // a gif is a few hundred kilobytes: it is read from a file, which every phone can do
                     val f = File.createTempFile("frame", ".mp4"); tmpFile = f
-                    download(src.url, emptyMap(), f) { }
+                    download(src.url, emptyMap(), f, 8_000_000L) { }
                     r.setDataSource(f.path)
                     bm = r.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: r.getFrameAtTime(0)
                 } else {
                     bm = runCatching {
+                        // the phone's own reader does not pass the client above: the address is checked first
+                        if (java.net.InetAddress.getAllByName(java.net.URI(src.url).host).any { isPrivate(it) }) throw Fail("That address is not allowed")
                         r.setDataSource(src.url, HashMap(src.headers + ("User-Agent" to DESKTOP)))
                         r.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: r.getFrameAtTime(0)
                     }.getOrNull()
                     // read from the web it failed: the file is fetched (when it is not huge) and read from the phone instead
                     if (bm == null && (src.size <= 0 || src.size < 40_000_000)) {
                         val f = File.createTempFile("frame", ".mp4"); tmpFile = f
-                        download(src.url, src.headers, f) { }
+                        download(src.url, src.headers, f, 40_000_000L) { }
                         val r2 = android.media.MediaMetadataRetriever()
                         try { r2.setDataSource(f.path); bm = r2.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: r2.getFrameAtTime(0) } finally { runCatching { r2.release() } }
                     }
@@ -151,7 +184,7 @@ object MediaGrab {
         headers.forEach { (k, v) -> b.header(k, v) }
         http.newCall(b.build()).execute().use { r ->
             if (!r.isSuccessful) throw Fail("The site answered " + r.code)
-            return r.body?.string() ?: ""
+            return r.body?.source()?.let { s -> s.request(20_000_000); s.buffer.clone().readUtf8() } ?: ""
         }
     }
 
@@ -520,6 +553,7 @@ object MediaGrab {
     // a file in pieces of 2 to 4 MB with eight connections at once: one connection to YouTube is slowed down by the site, pieces are not;
     // the pieces are written to their place in the file, and a piece that fails is tried three times
     internal fun fastDownload(src: String, headers: Map<String, String>, to: File, total: Long, onBytes: (Long) -> Unit) {
+        if (total > MAX_FILE) throw Fail("That file is too large")
         if (total <= 0 || total < 3L shl 20) { download(src, headers, to, onBytes); return }
         // smaller pieces for a smaller file, so all the connections have work
         val chunk = if (total < 32L shl 20) 2L shl 20 else 4L shl 20
@@ -550,7 +584,7 @@ object MediaGrab {
                                         onBytes(data.size.toLong())
                                     }
                                     ok = true; break
-                                } catch (e: Throwable) { last = e }
+                                } catch (e: Throwable) { last = e; if (e is kotlinx.coroutines.CancellationException) break }
                             }
                             if (!ok) { failure.compareAndSet(null, last ?: Fail("The download failed")); break }
                         }
@@ -562,14 +596,15 @@ object MediaGrab {
         failure.get()?.let { throw it }
     }
 
-    internal fun download(src: String, headers: Map<String, String>, to: File, onBytes: (Long) -> Unit) {
+    internal fun download(src: String, headers: Map<String, String>, to: File, limit: Long = MAX_FILE, onBytes: (Long) -> Unit) {
         val req = Request.Builder().url(src).header("User-Agent", DESKTOP).apply { headers.forEach { (k, v) -> header(k, v) } }.build()
         http.newCall(req).execute().use { r ->
             if (!r.isSuccessful) throw Fail("The download was refused (" + r.code + ")")
             val body = r.body ?: throw Fail("Nothing came back")
+            if (body.contentLength() > limit) throw Fail("That file is too large")
             to.outputStream().use { o ->
-                val buf = ByteArray(64 * 1024)
-                body.byteStream().use { i -> while (true) { val n = i.read(buf); if (n < 0) break; o.write(buf, 0, n); onBytes(n.toLong()) } }
+                val buf = ByteArray(64 * 1024); var got = 0L
+                body.byteStream().use { i -> while (true) { val n = i.read(buf); if (n < 0) break; got += n; if (got > limit) throw Fail("That file is too large"); o.write(buf, 0, n); onBytes(n.toLong()) } }
             }
         }
     }
@@ -624,6 +659,7 @@ object MediaGrab {
             vx.selectTrack(vi); ax.selectTrack(ai)
             val m = MediaMuxer(out.path, if (webm) MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM else MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             val vt = m.addTrack(vx.getTrackFormat(vi)); val at = m.addTrack(ax.getTrackFormat(ai))
+            try {
             m.start()
             val buf = ByteBuffer.allocate(8 shl 20); val info = MediaCodec.BufferInfo()
             fun copy(x: MediaExtractor, t: Int) {
@@ -634,7 +670,8 @@ object MediaGrab {
                 }
             }
             copy(vx, vt); copy(ax, at)
-            m.stop(); m.release()
+            m.stop()
+            } finally { runCatching { m.release() } }
         } finally { vx.release(); ax.release() }
     }
 
@@ -664,20 +701,24 @@ object MediaGrab {
             val ti = (0 until ex.trackCount).firstOrNull { ex.getTrackFormat(it).getString(android.media.MediaFormat.KEY_MIME).orEmpty().startsWith("audio/") } ?: throw Fail("That video has no sound")
             ex.selectTrack(ti)
             val mx = android.media.MediaMuxer(to.absolutePath, if (webm) android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM else android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-            val out = mx.addTrack(ex.getTrackFormat(ti)); mx.start()
-            val buf = java.nio.ByteBuffer.allocate(1 shl 20); val bi = android.media.MediaCodec.BufferInfo()
-            while (true) {
-                buf.clear(); val n = ex.readSampleData(buf, 0); if (n < 0) break
-                bi.set(0, n, ex.sampleTime, ex.sampleFlags); mx.writeSampleData(out, buf, bi); ex.advance()
-            }
-            mx.stop(); mx.release()
+            try {
+                val out = mx.addTrack(ex.getTrackFormat(ti)); mx.start()
+                val buf = java.nio.ByteBuffer.allocate(1 shl 20); val bi = android.media.MediaCodec.BufferInfo()
+                while (true) {
+                    buf.clear(); val n = ex.readSampleData(buf, 0); if (n < 0) break
+                    bi.set(0, n, ex.sampleTime, ex.sampleFlags); mx.writeSampleData(out, buf, bi); ex.advance()
+                }
+                mx.stop()
+            } finally { runCatching { mx.release() } }
         } finally { ex.release() }
     }
 
     // index: which file of a post with several (0 for the first)
     suspend fun save(ctx: Context, url: String, q: String, index: Int, onProgress: (Float) -> Unit): Saved = withContext(Dispatchers.IO) {
-        val all = resolveAll(url, q)
-        val item = all.getOrNull(index.coerceIn(0, all.size - 1)) ?: throw Fail("Nothing to save in that post")
+        // only the file to save is worked out (no picture is made for the others)
+        val all = rawItems(url, q)
+        val pick = all.getOrNull(index.coerceIn(0, all.size - 1)) ?: throw Fail("Nothing to save in that post")
+        val item = Item(Info(pick.first.site, pick.first.title, pick.first.author, pick.first.thumb, pick.first.dur, pick.first.kind, sizeFor(pick.first, pick.second)), pick.second)
         val info = item.info; val first = item.src
         val root = File(ctx.cacheDir, "media").apply { mkdirs() }
         // every download has its own folder, so two at once (or an old one) never touch each other's files

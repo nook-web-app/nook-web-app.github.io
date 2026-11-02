@@ -55,14 +55,15 @@ object Cache {
     fun flush() { writer.execute { flushNow() } }
 
     private fun flushNow() {
-        val f: File; val txt: String
+        val f: File; val copy: List<Pair<String, Hit>>
         synchronized(lock) {
             if (!dirty) return
             f = file ?: return
-            val j = JSONObject()
-            disk.forEach { (k, h) -> j.put(k, JSONObject().put("v", h.v ?: JSONObject.NULL).put("t", h.t)) }
-            txt = j.toString(); dirty = false
+            copy = disk.map { it.key to it.value }; dirty = false
         }
+        val j = JSONObject()
+        copy.forEach { (k, h) -> j.put(k, JSONObject().put("v", h.v ?: JSONObject.NULL).put("t", h.t)) }
+        val txt = j.toString()
         runCatching { val tmp = File(f.parentFile, f.name + ".tmp"); tmp.writeText(txt); tmp.renameTo(f) }
     }
 }

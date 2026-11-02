@@ -35,7 +35,7 @@ private fun Form(p: Panel, title: String, action: String, top: Boolean = false, 
     val app = LocalApp.current
     var busy by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf("") }
-    val fire = { if (!busy) { busy = true; msg = ""; app.scope.launch { val r = run(); if (r == null) app.closePanel(p) else msg = r; busy = false } }; Unit }
+    val fire = { if (!busy) { busy = true; msg = ""; app.scope.launch { try { val r = run(); if (r == null) app.closePanel(p) else msg = r } finally { busy = false } } }; Unit }
     // inline: the button is placed by the form itself (FormAction), not under the last field
     Modal(title, action, enabled = !busy, top = top, onCancel = { onCancel?.invoke(); app.closePanel(p) }, onAction = fire, showAction = !inline) {
         CompositionLocalProvider(LocalFormRun provides FormRun(busy, fire)) { body(msg); Msg(msg) }

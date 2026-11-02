@@ -122,7 +122,10 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     var activity: java.lang.ref.WeakReference<android.app.Activity>? = null
     // starts a window of Google Play services (the fingerprint) and hands back its answer; set by the activity
     var startForResult: (suspend (android.app.PendingIntent) -> androidx.activity.result.ActivityResult?)? = null
-    var foreground by mutableStateOf(true)
+    var foreground: Boolean
+        get() = fg
+        set(v) { fg = v; if (v) ctx?.let { Notify.clearAll(it) } }
+    private var fg by mutableStateOf(true)
     // bumped when notes or Zenith's chats changed from another phone, so the open pages draw again
     var notesVersion by mutableIntStateOf(0)
     var zenVersion by mutableIntStateOf(0)

@@ -735,6 +735,7 @@ fun Online.openLive(other: String): LiveDm {
     dm.live?.let { if (it.id == other) return it }
     val l = LiveDm(other)
     dm.live = l
+    app.ctx?.let { Notify.clear(it, "dm:$other") }
     if (dm.locked) promptUnlock()
     app.scope.launch { runCatching { sharedKeyFast(other) } }
     app.scope.launch { acctsFor(listOf(other)); loadSocial() }
@@ -765,22 +766,37 @@ suspend fun Online.doSendDm(l: LiveDm, text: String, srcs: List<String>): Boolea
     sendTyping(l.id, false)
     return try {
         firstUrl(text)?.let { u -> if (s.previews[u]?.has("v") != true) kotlinx.coroutines.withTimeoutOrNull(4500) { getPreview(u) } }
-        val saved = sendDm(l.id, text, srcs)
+        // a failed try is looked up on the server first (the answer may only have been lost), then tried again twice
+        var saved: DmMsg? = null; var last: Exception? = null
+        for (attempt in 0..2) {
+            if (attempt > 0) {
+                delay(1500L * attempt)
+                if (srcs.isEmpty()) saved = findSent(l.id, me, text)
+                if (saved != null) break
+            }
+            try { saved = sendDm(l.id, text, srcs); break } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { last = e; if (!retryable(e) || srcs.isNotEmpty()) break }
+        }
+        if (saved == null) throw last ?: IllegalStateException("send")
         if (isOwner() && text.contains("@zenith", true)) app.scope.launch { zenInDm(l, text, srcs) }
         landed(l, tmp, saved, text)
         true
     } catch (e: Exception) {
-        if (srcs.isEmpty()) runCatching {
-            val rows = dmThread(l.id)
-            rows.filter { it.optString("sender_id") == me && System.currentTimeMillis() - parseIso(it.optString("created_at")) < 120_000 && l.rows.none { r -> r.id == it.optLong("id") } }.reversed().forEach { m ->
-                if (openText(l.id, m.optString("body")) == text) { landed(l, tmp, DmMsg.of(m), text); return true }
-            }
-        }
+        if (srcs.isEmpty()) findSent(l.id, me, text)?.let { landed(l, tmp, it, text); return true }
         l.rows.remove(tmp)
         app.say("Could not send. " + plainErr(e.message, "Try again"))
         l.locked = dmLockText(l.id) ?: l.locked
         false
     }
+}
+// findSent(): a message of mine with this text from the last two minutes that the server already holds
+private suspend fun Online.findSent(other: String, me: String, text: String): DmMsg? = runCatching {
+    dmThread(other).filter { it.optString("sender_id") == me && System.currentTimeMillis() - parseIso(it.optString("created_at")) < 120_000 && dm.live?.rows?.none { r -> r.id == it.optLong("id") } != false }
+        .reversed().firstOrNull { openText(other, it.optString("body")) == text }?.let { DmMsg.of(it) }
+}.getOrNull()
+// only a lost connection or a busy server is worth another try
+private fun retryable(e: Exception): Boolean {
+    val m = (e.message ?: "").lowercase()
+    return e is java.io.IOException || m.contains("timeout") || m.contains("network") || m.contains("unable to resolve") || m.contains("connection") || m.contains("502") || m.contains("503") || m.contains("504") || m.contains("429") || m.contains("fetch")
 }
 private fun Online.landed(l: LiveDm, tmp: DmMsg, saved: DmMsg, text: String) {
     threadPush(l.id, saved.json())
@@ -1037,6 +1053,7 @@ fun Online.refreshBadge(force: Boolean) {
     badgeJob = app.scope.launch {
         delay(400)
         val me = uid ?: return@launch
+        if (app.foreground) app.ctx?.let { Notify.clearAll(it) }
         val f = badgeForce; badgeForce = false
         if (f || System.currentTimeMillis() - badgeNotifAt > 30_000) {
             badgeNotifAt = System.currentTimeMillis()

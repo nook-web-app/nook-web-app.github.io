@@ -31,6 +31,7 @@ private fun pSig(p: LPost) = h("p|" + p.text + "|" + p.t + "|" + (p.parent ?: ""
 private var notesOn = false
 private var notesBusy = false
 private var notesAgain = false
+private var notesFailed = 0
 private var notesTimer: kotlinx.coroutines.Job? = null
 private val noteFails = HashMap<String, Int>()
 private val noteBad = HashMap<String, Int>()
@@ -278,7 +279,10 @@ private suspend fun Online.notesPush(ns: JSONObject, key: ByteArray): Boolean {
         if (pushed.optString("c:" + c.id) != cSig(c)) todo.add(Todo("c:" + c.id, cSig(c), c, null))
         c.msgs.forEach { m -> if (pushed.optString("m:" + m.id) != mSig(m)) todo.add(Todo("m:" + m.id, mSig(m), c, m)) }
     }
-    val gone = pushed.keys().asSequence().filter { pushed.optString(it) != "gone" && it !in exist }.toList()
+    var gone = pushed.keys().asSequence().filter { pushed.optString(it) != "gone" && it !in exist }.toList()
+    // a phone that suddenly holds none of what it pushed has lost its copy, it has not deleted everything: nothing goes
+    // to the server as removed then, the next pull brings the notes back
+    if (gone.size >= 3 && s.chats.isEmpty()) gone = emptyList()
     val stale = ArrayList<String>()
     for (part in todo.chunked(20)) {
         val rows = JSONArray(); val done = ArrayList<Pair<Todo, JSONObject?>>()
@@ -357,7 +361,11 @@ fun Online.notesSync() {
             notesPush(ns, key)
             app.persist()
             if (changed) app.notesVersion++
-        } catch (e: Exception) { } finally { notesBusy = false; if (notesAgain) { notesAgain = false; app.scope.launch { delay(1500); notesSync() } } }
+            notesFailed = 0
+        } catch (e: Exception) {
+            // a round that failed (no connection, a busy server) is tried again, a little later each time
+            if (notesFailed < 6) { notesFailed++; val wait = 5000L * (1L shl (notesFailed - 1)).coerceAtMost(12); app.scope.launch { delay(wait); notesSync() } }
+        } finally { notesBusy = false; if (notesAgain) { notesAgain = false; app.scope.launch { delay(1500); notesSync() } } }
     }
 }
 

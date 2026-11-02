@@ -86,8 +86,10 @@ class LChat(val id: String, name: String, t: Long, msgs: List<LMsg> = emptyList(
     var t by mutableLongStateOf(t)
     val msgs = mutableStateListOf<LMsg>().apply { addAll(msgs) }
     var draft by mutableStateOf(draft)
-    // a chat with a message of Zenith in it is his chat; every other one is notes to self
-    val isNotes get() = msgs.none { it.ai }
+    // a chat with a message of Zenith in it is his chat; every other one is notes to self. Once a chat has been his it stays
+    // his, so deleting his last message never turns it into a note (which the sync would then treat as removed)
+    var zc = false
+    val isNotes: Boolean get() { if (!zc && msgs.any { it.ai }) zc = true; return !zc }
 }
 class LList(val id: String, name: String, desc: String, ids: List<String>) {
     var name by mutableStateOf(name)
@@ -162,7 +164,14 @@ class Store(private val dir: File?) {
     fun load() {
         val f = dir?.let { File(it, "state.json") } ?: return
         if (!f.exists()) return
-        val j = try { JSONObject(f.readText()) } catch (e: Exception) { return }
+        val j = try { JSONObject(f.readText()) } catch (e: Exception) {
+            // a file that cannot be read is kept aside, never written over by the next save
+            runCatching { f.copyTo(File(f.parentFile, "state.json.bad"), true) }
+            val bak = File(f.parentFile, "state.json.bak")
+            val b = runCatching { JSONObject(bak.readText()) }.getOrNull() ?: return
+            fromJson(b); return
+        }
+        runCatching { f.copyTo(File(f.parentFile, "state.json.bak"), true) }
         fromJson(j)
     }
 
@@ -177,12 +186,13 @@ class Store(private val dir: File?) {
             profile.avSrv = p.optStr("avSrv"); profile.bnSrv = p.optStr("bnSrv")
         }
         posts.clear()
-        j.optJSONArray("posts")?.forEachObj { p -> postOf(p)?.let { posts.add(it) } }
+        j.optJSONArray("posts")?.forEachObj { p -> runCatching { postOf(p) }.getOrNull()?.let { posts.add(it) } }
         chats.clear()
         j.optJSONArray("chats")?.forEachObj { c ->
             val msgs = mutableListOf<LMsg>()
-            c.optJSONArray("msgs")?.forEachObj { m -> msgs.add(msgOf(m)) }
-            chats.add(LChat(c.getString("id"), c.optString("name", "Chat"), c.optLong("t"), msgs, c.optString("draft", "")))
+            c.optJSONArray("msgs")?.forEachObj { m -> runCatching { msgs.add(msgOf(m)) } }
+            if (c.optString("id").isEmpty()) return@forEachObj
+            chats.add(LChat(c.optString("id"), c.optString("name", "Chat"), c.optLong("t"), msgs, c.optString("draft", "")).also { it.zc = c.optBoolean("zc") })
         }
         lists.clear()
         j.optJSONArray("lists")?.forEachObj { l -> lists.add(LList(l.getString("id"), l.optString("name"), l.optString("desc", ""), l.optJSONArray("ids").strings())) }
@@ -229,7 +239,7 @@ class Store(private val dir: File?) {
         j.put("posts", JSONArray().apply { posts.toList().forEach { p -> if (!p.prov) put(postJson(p)) } })
         j.put("chats", JSONArray().apply {
             chats.toList().forEach { c ->
-                put(JSONObject().put("id", c.id).put("name", c.name).put("t", c.t).put("draft", c.draft).put("msgs", JSONArray().apply { c.msgs.toList().forEach { m -> put(msgJson(m)) } }))
+                put(JSONObject().put("id", c.id).put("name", c.name).put("t", c.t).put("draft", c.draft).put("zc", !c.isNotes).put("msgs", JSONArray().apply { c.msgs.toList().forEach { m -> put(msgJson(m)) } }))
             }
         })
         j.put("lists", JSONArray().apply { lists.toList().forEach { l -> put(JSONObject().put("id", l.id).put("name", l.name).put("desc", l.desc).put("ids", JSONArray(l.ids.toList()))) } })

@@ -141,7 +141,7 @@ fun EditProfilePanel(app: AppState, me: Panel) {
     val crop: (Boolean, Int, Int, String, (String) -> Unit) -> (List<String>) -> Unit = { round, w, h, title, set ->
         { got -> got.firstOrNull()?.let { src -> app.panels.add(Panel.Crop(src, round, w, h, title) { out -> if (out != null) set(out) }) }; Unit }
     }
-    val bannerPick = rememberPicker(1, crop(false, 1000, 330, "Crop banner") { banner = it })
+    val bannerPick = rememberPicker(1, crop(false, 1000, 330, "Crop banner") { banner = it; theme = "default" })
     val avatarPick = rememberPicker(1, crop(true, 320, 320, "Crop profile photo") { avatar = it })
     Modal("Edit profile", "Save", top = true, onCancel = {
         val dirty = name.trim() != pr.name || handle.trim().lowercase() != pr.handle || bio != pr.bio || avatar != pr.avatar || banner != pr.banner || theme != (if (pr.bannerTheme == "avatar") "avatar" else "default")
@@ -158,15 +158,18 @@ fun EditProfilePanel(app: AppState, me: Panel) {
             BannerPic(banner, avatar, theme)
             PickBtn(Modifier.align(Alignment.BottomEnd).padding(8.dp)) {
                 if (banner == null) bannerPick.gallery()
-                else app.open(listOf(SheetItem("Choose a photo", "image") { bannerPick.gallery() }, SheetItem("Remove banner", "trash", danger = true) { banner = null }, SheetItem("Cancel", cancel = true)), "Banner")
+                else app.open(listOf(SheetItem("Choose a photo", "image") { bannerPick.gallery() }, SheetItem("Remove banner", "trash", danger = true) { banner = null; if (avatar == null) theme = "default" }, SheetItem("Cancel", cancel = true)), "Banner")
             }
         }
         // .eav: the picture over the banner's edge, with its own photo button
         Box(Modifier.padding(start = 12.dp).layoutOffsetUp(44.dp).width(88.dp)) {
             EditAvatar(avatar, name.ifBlank { handle })
-            PickBtn(Modifier.align(Alignment.BottomEnd).offset(x = 6.dp, y = (-2).dp), icon = 16.dp) { avatarPick.gallery() }
+            PickBtn(Modifier.align(Alignment.BottomEnd).offset(x = 6.dp, y = (-2).dp), icon = 16.dp) {
+                if (avatar == null) avatarPick.gallery()
+                else app.open(listOf(SheetItem("Choose a photo", "image") { avatarPick.gallery() }, SheetItem("Remove photo", "trash", danger = true) { avatar = null; if (banner == null) theme = "default" }, SheetItem("Cancel", cancel = true)), "Profile photo")
+            }
         }
-        Fld("Banner style") { Seg(listOf("Default", "Blurred photo"), if (theme == "avatar") 1 else 0, Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 14.dp)) { theme = if (it == 1) "avatar" else "default" } }
+        Fld("Banner style") { Seg(listOf("Default", "Blurred photo"), if (theme == "avatar") 1 else 0, Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 14.dp)) { if (it == 1 && banner == null && avatar == null) app.say("Pick a picture first") else theme = if (it == 1) "avatar" else "default" } }
         Fld("Display name") { Field(name, { if (it.length <= 15) name = it }, "") }
         Fld("Handle") {
             Column {
@@ -186,13 +189,14 @@ fun BannerPic(banner: String?, avatar: String?, theme: String, modifier: Modifie
     var ok by remember(banner, avatar, theme) { mutableStateOf(false) }
     Box(modifier.then(if (ok) Modifier else Modifier.background(Brush.linearGradient(listOf(c.b1, c.b2), Offset.Zero, Offset.Infinite)))) {
         when {
-            theme == "avatar" && avatar != null -> {
+            theme == "avatar" && (banner ?: avatar) != null -> {
+                val src = (banner ?: avatar)!!
                 val px = with(androidx.compose.ui.platform.LocalDensity.current) { androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp.toPx() }
                 // like the web app's soft look: a tenth of the size scaled up (the smoothing is the blur), a little larger than the
                 // box so no edge shows, and a real blur on top where the phone can do it (Android 12 and later)
                 val soft = if (android.os.Build.VERSION.SDK_INT >= 31) Modifier.blur(10.dp, androidx.compose.ui.draw.BlurredEdgeTreatment.Unbounded) else Modifier
                 Box(Modifier.fillMaxSize().clipToBounds()) {
-                    Pic(avatar, Modifier.fillMaxSize().graphicsLayer { scaleX = 1.3f; scaleY = 1.3f }.then(soft), want = (px / 10).toInt().coerceIn(24, 96), smooth = true, small = true, bare = true) { _, _ -> ok = true }
+                    Pic(src, Modifier.fillMaxSize().graphicsLayer { scaleX = 1.3f; scaleY = 1.3f }.then(soft), want = (px / 10).toInt().coerceIn(24, 96), smooth = true, small = true, bare = true) { _, _ -> ok = true }
                 }
             }
             banner != null -> Pic(banner, Modifier.fillMaxSize(), want = 1000, bare = true) { _, _ -> ok = true }

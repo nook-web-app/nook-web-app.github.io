@@ -82,23 +82,31 @@ Deno.serve(async (req) => {
   if (body.action === "profile") {
     const base = Deno.env.get("SUPABASE_URL")! + "/storage/v1/object/public/media/";
     const src = typeof body.avatar === "string" && body.avatar.startsWith(base) && body.avatar.length < 400 ? body.avatar : null;
-    const { data: za } = await admin.from("accounts").select("id, avatar").eq("username", "zenith").maybeSingle();
+    const bsrc = typeof body.banner === "string" && body.banner.startsWith(base) && body.banner.length < 400 ? body.banner : null;
+    const { data: za } = await admin.from("accounts").select("id, avatar, banner").eq("username", "zenith").maybeSingle();
     if (!za) return json({ ok: false, why: "no account yet" });
-    let avatar: string | null = null;
-    if (src) {
-      // an account may only show pictures from its own folder, so the owner's file is copied into his
+    // an account may only show pictures from its own folder, so the owner's file is copied into his (a copy inside storage,
+    // so the picture never travels through this function)
+    const take = async (from: string | null, tag: string): Promise<string | null | undefined> => {
+      if (!from) return null;
       let spath = "";
-      try { spath = decodeURIComponent(src.slice(base.length).split("?")[0]); } catch { return json({ ok: false, why: "could not read the picture" }); }
-      const dest = za.id + "/zenith-" + Date.now() + ".jpg";
-      // a copy inside storage, so the picture never travels through this function
+      try { spath = decodeURIComponent(from.slice(base.length).split("?")[0]); } catch { return undefined; }
+      const dest = za.id + "/zenith-" + tag + "-" + Date.now() + ".jpg";
       const up = await admin.storage.from("media").copy(spath, dest);
-      if (up.error) return json({ ok: false, why: "could not save the picture" });
-      avatar = base + dest;
-    }
-    const upd = await admin.from("accounts").update({ avatar, banner_theme: body.theme === "avatar" && avatar ? "avatar" : null }).eq("id", za.id);
-    // the previous copy of the picture is removed once the new one is saved, so the bucket does not grow with every save
-    if (!upd.error && za.avatar && za.avatar !== avatar && typeof za.avatar === "string" && za.avatar.startsWith(base + za.id + "/zenith-")) {
-      try { await admin.storage.from("media").remove([decodeURIComponent(za.avatar.slice(base.length).split("?")[0])]); } catch { /* an old file left behind is harmless */ }
+      return up.error ? undefined : base + dest;
+    };
+    const avatar = await take(src, "a");
+    if (avatar === undefined) return json({ ok: false, why: "could not save the picture" });
+    const banner = await take(bsrc, "b");
+    if (banner === undefined) return json({ ok: false, why: "could not save the banner" });
+    const upd = await admin.from("accounts").update({ avatar, banner, banner_theme: body.theme === "avatar" && (banner || avatar) ? "avatar" : null }).eq("id", za.id);
+    // the previous copies are removed once the new ones are saved, so the bucket does not grow with every save
+    if (!upd.error) {
+      for (const [old, now] of [[za.avatar, avatar], [za.banner, banner]] as [unknown, string | null][]) {
+        if (typeof old === "string" && old !== now && old.startsWith(base + za.id + "/zenith-")) {
+          try { await admin.storage.from("media").remove([decodeURIComponent(old.slice(base.length).split("?")[0])]); } catch { /* an old file left behind is harmless */ }
+        }
+      }
     }
     return json({ ok: !upd.error, why: upd.error ? upd.error.message : "" });
   }

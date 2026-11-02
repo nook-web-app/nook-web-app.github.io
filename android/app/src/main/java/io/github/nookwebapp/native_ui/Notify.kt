@@ -69,6 +69,16 @@ object Notify {
         runCatching { NotificationManagerCompat.from(ctx).notify(id, n) }
     }
 
+    // dismissed once the app is open: every alert of Nook leaves the shade (the download progress one stays while it runs)
+    fun clearAll(ctx: Context) {
+        runCatching {
+            val nm = ctx.getSystemService(NotificationManager::class.java)
+            if (Build.VERSION.SDK_INT >= 23) nm.activeNotifications.filter { it.notification.channelId == CH || Build.VERSION.SDK_INT < 26 }.forEach { nm.cancel(it.tag, it.id) }
+        }
+    }
+    // the alert of one thing (a chat, a post) goes when that thing is opened
+    fun clear(ctx: Context, open: String) { runCatching { NotificationManagerCompat.from(ctx).cancel(open.hashCode()) } }
+
     // the notifications that were already shown on this phone (so the 15 minute check never shows one twice)
     fun seen(ctx: Context): MutableSet<String> = ctx.getSharedPreferences("nook", 0).getStringSet("seen", emptySet())!!.toMutableSet()
     fun markSeen(ctx: Context, ids: Collection<String>) {

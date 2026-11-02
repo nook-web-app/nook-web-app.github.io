@@ -1863,7 +1863,7 @@ function profileV() {
   topEl.append(bar(menuBtn(), ttl("Profile")));
   const pr = S.profile;
   const bn = h("div", { class: "banner" });
-  if (pr.bannerTheme === "avatar" && pr.avatar) bn.append(mkImg(pr.avatar, "pic blur")); else if (pr.banner) bn.append(picImg(pr.banner));
+  if (pr.bannerTheme === "avatar" && (pr.banner || pr.avatar)) bn.append(mkImg(pr.banner || pr.avatar, "pic blur")); else if (pr.banner) bn.append(picImg(pr.banner));
   const av = avatar(88);
   av.className = "av xl";
   av.style.width = "";
@@ -2775,7 +2775,7 @@ async function zenPull() {
       z.since = Math.min(z.since || Date.now(), sz.since || Date.now());
       z.log = Array.from(new Set((z.log || []).concat(sz.log || [])));
       if (typeof sz.pics === "boolean") z.pics = sz.pics;
-      if ((sz.pfpAt || 0) > (z.pfpAt || 0)) { if (sz.pfp) z.pfp = sz.pfp; else delete z.pfp; if (sz.bn) z.bn = sz.bn; else delete z.bn; z.pfpAt = sz.pfpAt; }
+      if ((sz.pfpAt || 0) > (z.pfpAt || 0)) { if (sz.pfp) z.pfp = sz.pfp; else delete z.pfp; if (sz.bn) z.bn = sz.bn; else delete z.bn; if (sz.bnr) z.bnr = sz.bnr; else delete z.bnr; z.pfpAt = sz.pfpAt; }
       changed = true;
     }
   });
@@ -2832,44 +2832,57 @@ async function zenPushProfile() {
   try {
     const url = S.zen.pfp ? await zenPfpUrl() : null;
     if (S.zen.pfp && !url) return;
-    const r = await zFetch({ action: "profile", avatar: url, theme: S.zen.bn === "avatar" ? "avatar" : "" });
+    const burl = S.zen.bnr ? await zenBnrUrl() : null;
+    if (S.zen.bnr && !burl) return;
+    const r = await zFetch({ action: "profile", avatar: url, banner: burl, theme: S.zen.bn === "avatar" ? "avatar" : "" });
     const j = await r.json().catch(() => null);
     if (j && j.ok) { S.zen.pfpPushed = S.zen.pfpAt || 0; persist(); }
   } catch (e) {}
 }
 function zenEdit() {
-  let pfp = S.zen.pfp || null, bnVal = S.zen.bn === "avatar" ? "avatar" : "default";
+  let pfp = S.zen.pfp || null, bnr = S.zen.bnr || null, bnVal = S.zen.bn === "avatar" ? "avatar" : "default";
   const bn = h("div", { class: "ebanner" });
   const av = h("div", { class: "av zenav" });
   const paint = () => {
     bn.querySelectorAll(":scope > img.pic").forEach(i => i.remove());
-    if (bnVal === "avatar" && pfp) bn.prepend(mkImg(pfp, "pic blur"));
+    if (bnVal === "avatar" && (bnr || pfp)) bn.prepend(mkImg(bnr || pfp, "pic blur")); else if (bnr) bn.prepend(picImg(bnr));
     av.textContent = "";
     if (pfp) { const im = h("img", { alt: "", decoding: "async" }); im.src = pfp; av.append(im); } else av.innerHTML = ZEN_SVG;
   };
-  const inp = h("input", { type: "file", accept: "image/*", class: "vh", "aria-label": "Change picture" });
-  inp.addEventListener("change", async () => {
-    const f = inp.files && inp.files[0];
-    inp.value = "";
-    if (!f) return;
-    if (isVideo(f)) { toast("Videos are not supported"); return; }
-    try {
-      const out = isGif(f) ? await cropGif(f, { w: 320, h: 320, gw: 240, gh: 240, round: true, title: "Crop picture" }) : await openCropper(f, { w: 320, h: 320, gw: 240, gh: 240, round: true, title: "Crop picture" });
-      if (out) { pfp = out; paint(); drawSeg(); }
-    } catch (e) { toast("Could not use that picture"); }
-  });
-  const eav = h("div", { class: "eav" }, av, h("label", { class: "pick", title: "Change picture" }, ic("camera", 16), inp));
+  const picker = (label, size, opts, set, has, remove, removeLabel) => {
+    const inp = h("input", { type: "file", accept: "image/*", class: "vh", "aria-label": label });
+    inp.addEventListener("change", async () => {
+      const f = inp.files && inp.files[0];
+      inp.value = "";
+      if (!f) return;
+      if (isVideo(f)) { toast("Videos are not supported"); return; }
+      try {
+        const out = isGif(f) ? await cropGif(f, opts) : await openCropper(f, opts);
+        if (out) { set(out); paint(); drawSeg(); }
+      } catch (e) { toast("Could not use that picture"); }
+    });
+    const lab = h("label", { class: "pick", title: label }, ic("camera", size), inp);
+    lab.addEventListener("click", e => {
+      if (!has()) return;
+      e.preventDefault();
+      sheet([{ label: "Choose a photo", icon: "image", fn: () => inp.click() }, { label: removeLabel, icon: "trash", danger: true, fn: () => { remove(); paint(); drawSeg(); } }, { label: "Cancel", cancel: true }], removeLabel === "Remove banner" ? "Banner" : "Picture");
+    });
+    return lab;
+  };
+  bn.append(picker("Change banner", 18, { w: 1000, h: 330, gw: 600, gh: 198, title: "Crop banner" }, d => { bnr = d; bnVal = "default"; }, () => bnr, () => { bnr = null; if (!pfp) bnVal = "default"; }, "Remove banner"));
+  const eav = h("div", { class: "eav" }, av, picker("Change picture", 16, { w: 320, h: 320, gw: 240, gh: 240, round: true, title: "Crop picture" }, d => { pfp = d; }, () => pfp, () => { pfp = null; if (!bnr) bnVal = "default"; }, "Remove picture"));
   const seg = h("div", { class: "seg" });
-  const drawSeg = () => { seg.textContent = ""; [["default", "Default"], ["avatar", "Blurred photo"]].forEach(([v, t]) => seg.append(h("button", { class: v === bnVal ? "on" : "", onclick: () => { if (v === "avatar" && !pfp) { toast("Pick a picture first"); return; } bnVal = v; paint(); drawSeg(); } }, t))); };
+  const drawSeg = () => { seg.textContent = ""; [["default", "Default"], ["avatar", "Blurred photo"]].forEach(([v, t]) => seg.append(h("button", { class: v === bnVal ? "on" : "", onclick: () => { if (v === "avatar" && !bnr && !pfp) { toast("Pick a picture first"); return; } bnVal = v; paint(); drawSeg(); } }, t))); };
   drawSeg();
   paint();
   modal({
     top: true,
     title: "Edit Zenith",
-    body: [bn, eav, h("div", { class: "fld" }, h("label", {}, "Banner style"), seg), pfp ? h("button", { class: "tbtn", style: "color:var(--danger)", onclick: () => { pfp = null; bnVal = "default"; paint(); drawSeg(); } }, "Use default picture") : null],
+    body: [bn, eav, h("div", { class: "fld" }, h("label", {}, "Banner style"), seg)],
     onAction: close => {
       if (pfp) S.zen.pfp = pfp; else delete S.zen.pfp;
-      if (bnVal === "avatar" && pfp) S.zen.bn = "avatar"; else delete S.zen.bn;
+      if (bnr) S.zen.bnr = bnr; else delete S.zen.bnr;
+      if (bnVal === "avatar" && (bnr || pfp)) S.zen.bn = "avatar"; else delete S.zen.bn;
       S.zen.pfpAt = Date.now();
       persist(); close(); render();
       zenPushProfile();
@@ -3953,7 +3966,7 @@ function userV(cur) {
     if (ownMedia(acc.avatar)) av.prepend(picImg(acc.avatar));
     else if ((acc.username || "").toLowerCase() === "zenith") { av.classList.add("zenav"); av.style.background = ""; av.innerHTML = ZEN_SVG; }
     bn.textContent = "";
-    if (acc.banner_theme === "avatar" && ownMedia(acc.avatar)) bn.append(mkImg(acc.avatar, "pic blur")); else if (ownMedia(acc.banner)) bn.append(picImg(acc.banner));
+    if (acc.banner_theme === "avatar" && (ownMedia(acc.banner) || ownMedia(acc.avatar))) bn.append(mkImg(ownMedia(acc.banner) ? acc.banner : acc.avatar, "pic blur")); else if (ownMedia(acc.banner)) bn.append(picImg(acc.banner));
     pnEl.textContent = acc.display_name != null ? acc.display_name : (acc.username || who.name);
     if (pnEl.textContent) titleEl.textContent = pnEl.textContent;
     pnEl.hidden = !pnEl.textContent;
@@ -4391,13 +4404,13 @@ function editProfile() {
   const avl = h("span", {}, (pr.name || pr.handle || "?").charAt(0).toUpperCase());
   const av = h("div", { class: "av" }, avl);
   const setPic = (el, src) => { el.querySelectorAll(":scope > img.pic").forEach(i => i.remove()); if (src) el.prepend(picImg(src)); };
-  const paintBanner = (el, banner, theme, avatar) => { el.querySelectorAll(":scope > img.pic").forEach(i => i.remove()); if (theme === "avatar" && avatar) el.prepend(mkImg(avatar, "pic blur")); else if (banner) el.prepend(picImg(banner)); };
+  const paintBanner = (el, banner, theme, avatar) => { el.querySelectorAll(":scope > img.pic").forEach(i => i.remove()); if (theme === "avatar" && (banner || avatar)) el.prepend(mkImg(banner || avatar, "pic blur")); else if (banner) el.prepend(picImg(banner)); };
   const paint = () => {
     paintBanner(bn, bannerData, themeVal, avatarData);
     setPic(av, avatarData);
     avl.textContent = (name.value || handle.value || "?").trim().charAt(0).toUpperCase();
   };
-  const pickImg = (label, size, opts, set) => {
+  const pickImg = (label, size, opts, set, has, remove, removeLabel) => {
     const inp = h("input", { type: "file", accept: "image/*", class: "vh", "aria-label": label });
     inp.addEventListener("change", async () => {
       const f = inp.files && inp.files[0];
@@ -4410,13 +4423,20 @@ function editProfile() {
       }
       inp.value = "";
     });
-    return h("label", { class: "pick", title: label }, ic("camera", size), inp);
+    const lab = h("label", { class: "pick", title: label }, ic("camera", size), inp);
+    // with a photo already in place the button asks first: choose another one or remove it
+    if (has) lab.addEventListener("click", e => {
+      if (!has()) return;
+      e.preventDefault();
+      sheet([{ label: "Choose a photo", icon: "image", fn: () => inp.click() }, { label: removeLabel, icon: "trash", danger: true, fn: () => { remove(); paint(); } }, { label: "Cancel", cancel: true }], removeLabel === "Remove banner" ? "Banner" : "Profile photo");
+    });
+    return lab;
   };
   name.addEventListener("input", () => { avl.textContent = (name.value || handle.value || "?").trim().charAt(0).toUpperCase(); });
-  bn.append(pickImg("Change banner", 18, { w: 1000, h: 330, gw: 600, gh: 198, title: "Crop banner" }, d => { bannerData = d; }));
-  const eav = h("div", { class: "eav" }, av, pickImg("Change avatar", 16, { w: 320, h: 320, gw: 240, gh: 240, round: true, title: "Crop profile photo" }, d => { avatarData = d; }));
+  bn.append(pickImg("Change banner", 18, { w: 1000, h: 330, gw: 600, gh: 198, title: "Crop banner" }, d => { bannerData = d; themeVal = "default"; drawSeg(); }, () => bannerData, () => { bannerData = null; }, "Remove banner"));
+  const eav = h("div", { class: "eav" }, av, pickImg("Change avatar", 16, { w: 320, h: 320, gw: 240, gh: 240, round: true, title: "Crop profile photo" }, d => { avatarData = d; }, () => avatarData, () => { avatarData = null; if (themeVal === "avatar" && !bannerData) themeVal = "default"; drawSeg(); }, "Remove photo"));
   const seg = h("div", { class: "seg" });
-  const drawSeg = () => { seg.textContent = ""; [["default", "Default"], ["avatar", "Blurred photo"]].forEach(([v, t]) => seg.append(h("button", { class: v === themeVal ? "on" : "", onclick: () => { themeVal = v; paint(); drawSeg(); } }, t))); };
+  const drawSeg = () => { seg.textContent = ""; [["default", "Default"], ["avatar", "Blurred photo"]].forEach(([v, t]) => seg.append(h("button", { class: v === themeVal ? "on" : "", onclick: () => { if (v === "avatar" && !bannerData && !avatarData) { toast("Pick a picture first"); return; } themeVal = v; paint(); drawSeg(); } }, t))); };
   drawSeg();
   paint();
   const lockLeft = () => {
@@ -6875,6 +6895,21 @@ async function zenPfpOnce() {
     return urls[0];
   } catch (e) { return null; }
 }
+// his banner goes up the same way as his picture (kept as a link, checked once per session)
+let zBnrChecked = "";
+async function zenBnrUrl() {
+  if (!S.zen.bnr) return null;
+  if (S.zen.bnrUrl && S.zen.bnrUrlAt === S.zen.pfpAt) {
+    if (zBnrChecked === S.zen.bnrUrl) return S.zen.bnrUrl;
+    try { const r = await fetch(S.zen.bnrUrl, { method: "HEAD" }); if (r.ok) { zBnrChecked = S.zen.bnrUrl; return S.zen.bnrUrl; } } catch (e) { return S.zen.bnrUrl; }
+  }
+  try {
+    const urls = await uploadMedia([S.zen.bnr]);
+    if (!urls) return null;
+    S.zen.bnrUrl = urls[0]; S.zen.bnrUrlAt = S.zen.pfpAt; persist();
+    return urls[0];
+  } catch (e) { return null; }
+}
 function zCard(zp, big) {
   const av = zp.a ? (() => { const d = h("div", { class: "av zenav" }); const im = h("img", { alt: "", decoding: "async" }); im.src = zp.a; im.onerror = () => { im.onerror = null; if (S.zen && S.zen.pfp && im.src !== S.zen.pfp) im.src = S.zen.pfp; else { d.textContent = ""; d.innerHTML = ZEN_SVG; } }; d.append(im); d.style.width = d.style.height = (big ? 44 : 34) + "px"; return d; })() : zenAv(big ? 44 : 34);
   return h("div", { class: "zcard" + (big ? " big" : "") }, h("div", { class: "zch" }, av, h("div", { class: "nm" }, h("b", {}, "Zenith"), h("span", {}, "@zenith"))),
@@ -8156,7 +8191,7 @@ function renderRail() {
   const chats = S.chats.slice(0, 6);
   const lists = S.lists.slice(0, 6);
   const bn = h("div", { class: "banner" });
-  if (pr.bannerTheme === "avatar" && pr.avatar) bn.append(mkImg(pr.avatar, "pic blur")); else if (pr.banner) bn.append(picImg(pr.banner));
+  if (pr.bannerTheme === "avatar" && (pr.banner || pr.avatar)) bn.append(mkImg(pr.banner || pr.avatar, "pic blur")); else if (pr.banner) bn.append(picImg(pr.banner));
   const av = avatar();
   av.className = "av xl";
   add(railEl, [

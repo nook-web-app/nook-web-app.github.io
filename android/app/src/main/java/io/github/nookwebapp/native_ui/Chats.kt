@@ -425,6 +425,15 @@ fun KeepAtBottom(list: androidx.compose.foundation.lazy.LazyListState) {
             last = ime
         }
     }
+    // the chat stays on its newest message while content grows under it (a preview or photo that loads late, a bubble that
+    // opens); once the person scrolls up it stays where they left it, and sticks again when they come back down
+    LaunchedEffect(list) {
+        var stuck = true
+        launch { snapshotFlow { list.isScrollInProgress }.collect { moving -> if (!moving) stuck = !list.canScrollForward } }
+        snapshotFlow { val li = list.layoutInfo; li.totalItemsCount to (li.visibleItemsInfo.lastOrNull()?.let { it.offset + it.size } ?: 0) }.collect {
+            if (stuck && list.canScrollForward) list.scrollBy(100_000f)
+        }
+    }
 }
 
 // How a message comes in (.mrow.new): one of mine pops in from its corner while it is sent (sendPop) and gives a small

@@ -323,19 +323,27 @@ fun BanDownloadPanel(app: AppState, p: Panel) {
 fun ZenEditPanel(app: AppState, p: Panel) {
     val c = LocalNook.current
     var pfp by remember { mutableStateOf(app.store.zen.optStr("pfp")) }
+    var banner by remember { mutableStateOf(app.store.zen.optStr("bnr")) }
     var blurred by remember { mutableStateOf(app.store.zen.optString("bn") == "avatar") }
     val pick = rememberPicker(1) { got -> got.firstOrNull()?.let { src -> app.panels.add(Panel.Crop(src, true, 320, 320, "Crop picture") { out -> if (out != null) pfp = out }) } }
-    Modal("Edit Zenith", "Save", top = true, onCancel = { app.closePanel(p) }, onAction = { app.on.saveZen(pfp, blurred); app.closePanel(p) }) {
+    val bannerPick = rememberPicker(1) { got -> got.firstOrNull()?.let { src -> app.panels.add(Panel.Crop(src, false, 1000, 330, "Crop banner") { out -> if (out != null) { banner = out; blurred = false } }) } }
+    Modal("Edit Zenith", "Save", top = true, onCancel = { app.closePanel(p) }, onAction = { app.on.saveZen(pfp, banner, blurred); app.closePanel(p) }) {
         Box(Modifier.fillMaxWidth().aspectRatio(1000f / 330f).clip(RoundedCornerShape(Rad.m))) {
-            BannerPic(null, pfp?.takeIf { blurred }, "avatar")
+            BannerPic(banner, pfp, if (blurred) "avatar" else "default")
+            PickBtn(Modifier.align(Alignment.BottomEnd).padding(8.dp)) {
+                if (banner == null) bannerPick.gallery()
+                else app.open(listOf(SheetItem("Choose a photo", "image") { bannerPick.gallery() }, SheetItem("Remove banner", "trash", danger = true) { banner = null; if (pfp == null) blurred = false }, SheetItem("Cancel", cancel = true)), "Banner")
+            }
         }
         Box(Modifier.padding(start = 12.dp).layoutOffsetUp(44.dp).width(88.dp)) {
             Box(Modifier.size(88.dp).clip(androidx.compose.foundation.shape.CircleShape).background(c.bg).padding(4.dp)) {
                 if (pfp != null) RoundPic(pfp, 80.dp, androidx.compose.ui.graphics.SolidColor(LocalNook.current.bg2)) {} else ZenAv(80.dp)
             }
-            PickBtn(Modifier.align(Alignment.BottomEnd).offset(x = 6.dp, y = (-2).dp), icon = 16.dp) { pick.gallery() }
+            PickBtn(Modifier.align(Alignment.BottomEnd).offset(x = 6.dp, y = (-2).dp), icon = 16.dp) {
+                if (pfp == null) pick.gallery()
+                else app.open(listOf(SheetItem("Choose a photo", "image") { pick.gallery() }, SheetItem("Remove picture", "trash", danger = true) { pfp = null; if (banner == null) blurred = false }, SheetItem("Cancel", cancel = true)), "Picture")
+            }
         }
-        Fld("Banner style") { Seg(listOf("Default", "Blurred photo"), if (blurred) 1 else 0, Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 14.dp)) { if (it == 1 && pfp == null) app.say("Pick a picture first") else blurred = it == 1 } }
-        if (pfp != null) Box(Modifier.tap { pfp = null; blurred = false }.vpad(8.dp)) { T("Use default picture", color = c.danger) }
+        Fld("Banner style") { Seg(listOf("Default", "Blurred photo"), if (blurred) 1 else 0, Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 14.dp)) { if (it == 1 && pfp == null && banner == null) app.say("Pick a picture first") else blurred = it == 1 } }
     }
 }

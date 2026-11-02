@@ -289,6 +289,7 @@ suspend fun Online.zenPull(): Boolean {
                 if (sz.optLong("pfpAt") > z.optLong("pfpAt")) {
                     if (sz.has("pfp")) z.put("pfp", sz.optString("pfp")) else z.remove("pfp")
                     if (sz.has("bn")) z.put("bn", sz.optString("bn")) else z.remove("bn")
+                    if (sz.has("bnr")) z.put("bnr", sz.optString("bnr")) else z.remove("bnr")
                     z.put("pfpAt", sz.optLong("pfpAt"))
                 }
                 changed = true
@@ -394,18 +395,36 @@ suspend fun Online.zenPfpUrl(): String? {
     return urls[0]
 }
 
+// zenBnrUrl(): his banner as a link, made once per save and checked once per session like his picture
+private var zBnrChecked = ""
+suspend fun Online.zenBnrUrl(): String? {
+    val bnr = s.zen.optStr("bnr") ?: return null
+    val have = s.zen.optStr("bnrUrl")
+    if (have != null && s.zen.optLong("bnrUrlAt") == s.zen.optLong("pfpAt")) {
+        if (zBnrChecked == have) return have
+        val ok = withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { Sb.http.newCall(okhttp3.Request.Builder().url(have).head().build()).execute().use { it.isSuccessful } }.getOrNull() }
+        if (ok != false) { zBnrChecked = have; return have }
+    }
+    val urls = uploadMedia(listOf(bnr)) ?: return null
+    s.zen.put("bnrUrl", urls[0]); s.zen.put("bnrUrlAt", s.zen.optLong("pfpAt")); app.persist()
+    return urls[0]
+}
+
 // zenPushProfile(): his public account gets the same picture and banner style the owner chose
 suspend fun Online.zenPushProfile() {
     if (uid == null || !isOwner()) return
     val url = if (s.zen.has("pfp")) zenPfpUrl() ?: return else null
-    val (_, txt) = Sb.fnRaw("zenith", JSONObject().put("action", "profile").put("avatar", url ?: JSONObject.NULL).put("theme", if (s.zen.optString("bn") == "avatar") "avatar" else ""), 25)
+    val burl = if (s.zen.has("bnr")) zenBnrUrl() ?: return else null
+    val (_, txt) = Sb.fnRaw("zenith", JSONObject().put("action", "profile").put("avatar", url ?: JSONObject.NULL).put("banner", burl ?: JSONObject.NULL).put("theme", if (s.zen.optString("bn") == "avatar") "avatar" else ""), 25)
     if (runCatching { JSONObject(txt).optBoolean("ok") }.getOrDefault(false)) { s.zen.put("pfpPushed", s.zen.optLong("pfpAt")); app.persist() }
 }
 
 // zenEdit(): the owner changes how Zenith looks: his picture (a data address, like the web app keeps it) and banner style
-fun Online.saveZen(pfp: String?, blurred: Boolean) {
-    if (pfp != null) s.zen.put("pfp", if (pfp.startsWith("data:")) pfp else Photos.bytesOf(pfp)?.let { "data:" + mimeOf(it) + ";base64," + Crypto.b64(it) } ?: return) else s.zen.remove("pfp")
-    if (blurred && pfp != null) s.zen.put("bn", "avatar") else s.zen.remove("bn")
+fun Online.saveZen(pfp: String?, banner: String?, blurred: Boolean) {
+    fun data(src: String): String? = if (src.startsWith("data:")) src else Photos.bytesOf(src)?.let { "data:" + mimeOf(it) + ";base64," + Crypto.b64(it) }
+    if (pfp != null) s.zen.put("pfp", data(pfp) ?: return) else s.zen.remove("pfp")
+    if (banner != null) s.zen.put("bnr", data(banner) ?: return) else s.zen.remove("bnr")
+    if (blurred && (pfp != null || banner != null)) s.zen.put("bn", "avatar") else s.zen.remove("bn")
     s.zen.put("pfpAt", System.currentTimeMillis())
     app.persist(); app.zenVersion++
     app.scope.launch { zenPushProfile(); zenSync() }

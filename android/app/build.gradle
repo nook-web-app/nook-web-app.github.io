@@ -2,7 +2,7 @@ plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android'; id 'a
 android {
     namespace 'io.github.nookwebapp.native_ui'
     compileSdk 34
-    defaultConfig { applicationId 'io.github.nookwebapp.nativeui'; minSdk 26; targetSdk 34; versionCode 33400; versionName '3.34.0' }
+    defaultConfig { applicationId 'io.github.nookwebapp.nativeui'; minSdk 26; targetSdk 34; versionCode 33500; versionName '3.35.0' }
     // the release key never lives in the repository: NOOK_KS points at it and NOOK_KS_PASS opens it;
     // without them a release build is signed with the local debug key so it still installs for testing
     def ks = System.getenv('NOOK_KS')

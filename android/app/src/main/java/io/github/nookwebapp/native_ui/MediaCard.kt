@@ -49,18 +49,22 @@ fun MediaCard(m: LMsg) {
             Box(Modifier.fillMaxWidth().aspectRatio(1f).background(c.bg2)) { LinkPicBox(img) }
         }
         Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            T(card.optString("t").ifEmpty { card.optString("u") }, weight = FontWeight.SemiBold, maxLines = 2)
-            T(meta, Fs.xs, color = c.muted)
+            // the caption first, the name of the app after it (never twice: a caption that is only the name of the app is left out)
+            val cap = card.optString("t").trim()
+            val sn = MediaGrab.siteName(card.optString("s"), card.optString("u"))
+            if (cap.isNotEmpty() && !cap.equals(sn, true)) T(cap, weight = FontWeight.SemiBold, maxLines = 2)
+            T(meta, if (cap.isEmpty() || cap.equals(sn, true)) Fs.base else Fs.xs, color = if (cap.isEmpty() || cap.equals(sn, true)) c.fg else c.muted)
             val label = when {
                 busy -> if (st!!.progress > 0f) "Downloading " + (st.progress * 100).toInt() + "%" else "Downloading..."
                 saved != null -> "Open"
                 st?.error != null -> "Try again"
+                card.optString("q") == "audio" -> "Download audio"
                 else -> "Download"
             }
             Pill(label, Btn.Pri, small = true, enabled = !busy, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
                 ctx ?: return@Pill
                 if (saved != null && st?.error == null) {
-                    runCatching { openFile(ctx, Uri.parse(saved), card.optString("k")) }.onFailure { app.say("Could not open it. Look in your gallery") }
+                    runCatching { openFile(ctx, Uri.parse(saved), if (card.optString("q") == "audio") "audio" else card.optString("k")) }.onFailure { app.say("Could not open it. Look in your gallery") }
                 } else {
                     app.mdl.state[m.id] = MediaDl.St(0f, null, null)
                     // the download belongs to the process, not to the screen: it goes on when the app is left or the screen is closed
@@ -100,7 +104,7 @@ fun MediaCard(m: LMsg) {
 // the picture of the card comes from the site itself, so it is loaded on its own, like the picture of a link
 // the file opens in the phone's own gallery or player at once, without the list "open with" (the only one asked when there is none)
 private fun openFile(ctx: android.content.Context, uri: Uri, kind: String) {
-    val type = ctx.contentResolver.getType(uri) ?: if (kind == "image" || kind == "gif") "image/*" else "video/*"
+    val type = ctx.contentResolver.getType(uri) ?: if (kind == "image" || kind == "gif") "image/*" else if (kind == "audio") "audio/*" else "video/*"
     val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, type).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
     val pm = ctx.packageManager
     val def = pm.resolveActivity(view, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
@@ -129,7 +133,7 @@ fun MediaCmd(url: String, site: String, quality: String, tap: () -> Unit, onLong
     val shape = RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.xs, Rad.bubble)
     val ann = remember(url, site, quality, more) {
         androidx.compose.ui.text.buildAnnotatedString {
-            append("/media " + (if (quality.isNotEmpty()) "/$quality " else ""))
+            append(if (quality == "audio") "/audio " else "/media " + (if (quality.isNotEmpty()) "/$quality " else ""))
             // one name for each link pasted, each one opens its own page
             (if (more.size > 1) more else listOf(url)).forEachIndexed { i, link ->
                 if (i > 0) append(" ")

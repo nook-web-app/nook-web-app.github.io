@@ -49,7 +49,13 @@ object MediaGrab {
     // the link of a "/media" message: null when the text is not that command, "" when the link is missing
     fun command(text: String): String? = CMD.find(text.trim())?.let { it.groupValues[2].trim().split(Regex("\\s+"))[0] }
     // every link of a "/media" message (several links may be pasted at once); empty when none; null when the text is not that command
-    fun commandLinks(text: String): List<String>? = CMD.find(text.trim())?.let { m -> m.groupValues[2].trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.distinct().take(10) }
+    fun commandLinks(text: String): List<String>? {
+        val rest = CMD.find(text.trim())?.groupValues?.get(2) ?: AUD.find(text.trim())?.groupValues?.get(1) ?: return null
+        return rest.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.distinct().take(10)
+    }
+    // "/audio link": only the sound of the video is saved
+    private val AUD = Regex("^/audio((?:\\s+\\S+)*)\\s*$", RegexOption.IGNORE_CASE)
+    fun isAudio(text: String) = AUD.containsMatchIn(text.trim())
     // the size asked for in "/media /2k link": "4k", "2k", "1080p" or "720p"; "" when none was typed
     fun quality(text: String): String = CMD.find(text.trim())?.groupValues?.get(1)?.lowercase().orEmpty()
     // the tallest picture each size allows (only YouTube has sizes; without one it is 2K at 60 pictures a second, the top is 4K at 30)
@@ -462,7 +468,7 @@ object MediaGrab {
         .apply { i.thumb?.let { put("i", it) } }
     // the size is kept only for YouTube (the other sites have one size); n is the place of the file in a post with several (0 = the first
     // one, which also shows the command), c how many files the post has
-    fun card(url: String, i: Info, q: String, n: Int = 0, c: Int = 1) = card(url, i).apply { if (q.isNotEmpty() && i.site == "youtube") put("q", q); if (n > 0) put("n", n); if (c > 1) put("c", c) }
+    fun card(url: String, i: Info, q: String, n: Int = 0, c: Int = 1) = card(url, i).apply { if (q.isNotEmpty() && (i.site == "youtube" || q == "audio")) put("q", q); if (n > 0) put("n", n); if (c > 1) put("c", c) }
 
     // a card that came from another phone or the server is checked before it is shown: a known site, an https picture, short texts
     fun cleanCard(o: JSONObject?): JSONObject? {
@@ -476,7 +482,7 @@ object MediaGrab {
         o.optJSONArray("l")?.let { a -> val l = org.json.JSONArray(); for (i in 0 until minOf(a.length(), 10)) a.optString(i).takeIf { it.startsWith("https://") && it.length < 600 }?.let { l.put(it) }; if (l.length() > 1) out.put("l", l) }
         // the picture is a link, or a small picture kept inside the note (the first frame of a video)
         o.optString("i").takeIf { (it.startsWith("https://") && it.length < 600) || (it.startsWith("data:image/jpeg;base64,") && it.length < 90_000) }?.let { out.put("i", it) }
-        o.optString("q").takeIf { it in setOf("4k", "2k", "1080p", "720p") }?.let { out.put("q", it) }
+        o.optString("q").takeIf { it in setOf("4k", "2k", "1080p", "720p", "audio") }?.let { out.put("q", it) }
         o.optInt("n").takeIf { it in 1..20 }?.let { out.put("n", it) }
         o.optInt("c").takeIf { it in 2..20 }?.let { out.put("c", it) }
         // a card of a later link of the same command: the command bubble is not drawn again
@@ -608,6 +614,24 @@ object MediaGrab {
         }
     }
 
+    // the sound track of a video file copied on its own, without being changed
+    private fun extractAudio(from: File, to: File, webm: Boolean) {
+        val ex = android.media.MediaExtractor()
+        try {
+            ex.setDataSource(from.absolutePath)
+            val ti = (0 until ex.trackCount).firstOrNull { ex.getTrackFormat(it).getString(android.media.MediaFormat.KEY_MIME).orEmpty().startsWith("audio/") } ?: throw Fail("That video has no sound")
+            ex.selectTrack(ti)
+            val mx = android.media.MediaMuxer(to.absolutePath, if (webm) android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM else android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            val out = mx.addTrack(ex.getTrackFormat(ti)); mx.start()
+            val buf = java.nio.ByteBuffer.allocate(1 shl 20); val bi = android.media.MediaCodec.BufferInfo()
+            while (true) {
+                buf.clear(); val n = ex.readSampleData(buf, 0); if (n < 0) break
+                bi.set(0, n, ex.sampleTime, ex.sampleFlags); mx.writeSampleData(out, buf, bi); ex.advance()
+            }
+            mx.stop(); mx.release()
+        } finally { ex.release() }
+    }
+
     // index: which file of a post with several (0 for the first)
     suspend fun save(ctx: Context, url: String, q: String, index: Int, onProgress: (Float) -> Unit): Saved = withContext(Dispatchers.IO) {
         val all = resolveAll(url, q)
@@ -618,6 +642,40 @@ object MediaGrab {
         root.listFiles()?.forEach { if (System.currentTimeMillis() - it.lastModified() > 6 * 3600_000L) runCatching { it.deleteRecursively() } }
         val tmp = File(root, "d" + System.nanoTime()).apply { mkdirs() }
         val made = File(tmp, "out." + (if (first.audio != null && first.webm) "webm" else "mp4"))
+        if (q == "audio") {
+            val got0 = java.util.concurrent.atomic.AtomicLong(0)
+            try {
+                if (info.kind == "image") throw Fail("A picture has no sound")
+                val part = File(tmp, "a.part")
+                val from = first.audio ?: first.url
+                val sz = if (first.audio != null) (if (first.asize > 0) first.asize else sizeOf(from, first.headers)) else (if (first.size > 0) first.size else sizeOf(from, first.headers))
+                fastDownload(from, first.headers, part, sz) { n -> onProgress((got0.addAndGet(n) / (sz.takeIf { it > 0 } ?: 1L).toFloat() * 0.9f).coerceIn(0f, 0.9f)) }
+                val webm = first.audio != null && first.webm
+                val out = File(tmp, if (webm) "sound.webm" else "sound.m4a")
+                extractAudio(part, out, webm)
+                val mime = if (webm) "audio/webm" else "audio/mp4"
+                val name = safeName(info.title, if (webm) "webm" else "m4a")
+                val resolver = ctx.contentResolver
+                val result: Uri
+                if (Build.VERSION.SDK_INT >= 29) {
+                    val cv = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, name); put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/Nook"); put(MediaStore.MediaColumns.IS_PENDING, 1)
+                    }
+                    val uri = resolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, cv) ?: throw Fail("Could not create the file")
+                    try { (resolver.openOutputStream(uri) ?: throw Fail("Could not create the file")).use { o -> out.inputStream().use { it.copyTo(o) } } }
+                    catch (e: Exception) { runCatching { resolver.delete(uri, null, null) }; throw e }
+                    resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+                    result = uri
+                } else {
+                    val dir = ctx.getExternalFilesDir(Environment.DIRECTORY_MUSIC) ?: throw Fail("No place to save")
+                    val f = File(dir, name); out.copyTo(f, true)
+                    result = androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f)
+                }
+                onProgress(1f)
+                return@withContext Saved(result, "Audio saved in your music")
+            } finally { runCatching { tmp.deleteRecursively() } }
+        }
         var src = first
         val total = (info.size.takeIf { it > 0 } ?: 1L).toFloat()
         val got = java.util.concurrent.atomic.AtomicLong(0)

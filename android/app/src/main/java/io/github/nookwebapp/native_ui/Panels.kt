@@ -169,7 +169,7 @@ fun EditProfilePanel(app: AppState, me: Panel) {
                 else app.open(listOf(SheetItem("Choose a photo", "image") { avatarPick.gallery() }, SheetItem("Remove photo", "trash", danger = true) { avatar = null; if (banner == null) theme = "default" }, SheetItem("Cancel", cancel = true)), "Profile photo")
             }
         }
-        Fld("Banner style") { Seg(listOf("Default", "Blurred photo"), if (theme == "avatar") 1 else 0, Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 14.dp)) { if (it == 1 && banner == null && avatar == null) app.say("Pick a picture first") else theme = if (it == 1) "avatar" else "default" } }
+        Fld("Banner style") { Seg(listOf(if (banner != null) "Custom" else "Default", "Blurred photo"), if (theme == "avatar") 1 else 0, Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 14.dp)) { if (it == 1 && banner == null && avatar == null) app.say("Pick a picture first") else theme = if (it == 1) "avatar" else "default" } }
         Fld("Display name") { Field(name, { if (it.length <= 15) name = it }, "") }
         Fld("Handle") {
             Column {
@@ -196,7 +196,7 @@ fun BannerPic(banner: String?, avatar: String?, theme: String, modifier: Modifie
                 // box so no edge shows, and a real blur on top where the phone can do it (Android 12 and later)
                 val soft = if (android.os.Build.VERSION.SDK_INT >= 31) Modifier.blur(10.dp, androidx.compose.ui.draw.BlurredEdgeTreatment.Unbounded) else Modifier
                 Box(Modifier.fillMaxSize().clipToBounds()) {
-                    Pic(src, Modifier.fillMaxSize().graphicsLayer { scaleX = 1.3f; scaleY = 1.3f }.then(soft), want = (px / 10).toInt().coerceIn(24, 96), smooth = true, small = true, bare = true) { _, _ -> ok = true }
+                    Pic(src, Modifier.fillMaxSize().graphicsLayer { val z = if (banner != null) 1.06f else 1.3f; scaleX = z; scaleY = z }.then(soft), want = (px / 10).toInt().coerceIn(24, 96), smooth = true, small = true, bare = true) { _, _ -> ok = true }
                 }
             }
             banner != null -> Pic(banner, Modifier.fillMaxSize(), want = 1000, bare = true) { _, _ -> ok = true }

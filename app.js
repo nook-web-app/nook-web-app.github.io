@@ -292,7 +292,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.34.0";
+const APP_VERSION = "3.35.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2872,7 +2872,7 @@ function zenEdit() {
   bn.append(picker("Change banner", 18, { w: 1000, h: 330, gw: 600, gh: 198, title: "Crop banner" }, d => { bnr = d; bnVal = "default"; }, () => bnr, () => { bnr = null; if (!pfp) bnVal = "default"; }, "Remove banner"));
   const eav = h("div", { class: "eav" }, av, picker("Change picture", 16, { w: 320, h: 320, gw: 240, gh: 240, round: true, title: "Crop picture" }, d => { pfp = d; }, () => pfp, () => { pfp = null; if (!bnr) bnVal = "default"; }, "Remove picture"));
   const seg = h("div", { class: "seg" });
-  const drawSeg = () => { seg.textContent = ""; [["default", "Default"], ["avatar", "Blurred photo"]].forEach(([v, t]) => seg.append(h("button", { class: v === bnVal ? "on" : "", onclick: () => { if (v === "avatar" && !bnr && !pfp) { toast("Pick a picture first"); return; } bnVal = v; paint(); drawSeg(); } }, t))); };
+  const drawSeg = () => { seg.textContent = ""; [["default", bnr ? "Custom" : "Default"], ["avatar", "Blurred photo"]].forEach(([v, t]) => seg.append(h("button", { class: v === bnVal ? "on" : "", onclick: () => { if (v === "avatar" && !bnr && !pfp) { toast("Pick a picture first"); return; } bnVal = v; paint(); drawSeg(); } }, t))); };
   drawSeg();
   paint();
   modal({
@@ -4436,7 +4436,7 @@ function editProfile() {
   bn.append(pickImg("Change banner", 18, { w: 1000, h: 330, gw: 600, gh: 198, title: "Crop banner" }, d => { bannerData = d; themeVal = "default"; drawSeg(); }, () => bannerData, () => { bannerData = null; }, "Remove banner"));
   const eav = h("div", { class: "eav" }, av, pickImg("Change avatar", 16, { w: 320, h: 320, gw: 240, gh: 240, round: true, title: "Crop profile photo" }, d => { avatarData = d; }, () => avatarData, () => { avatarData = null; if (themeVal === "avatar" && !bannerData) themeVal = "default"; drawSeg(); }, "Remove photo"));
   const seg = h("div", { class: "seg" });
-  const drawSeg = () => { seg.textContent = ""; [["default", "Default"], ["avatar", "Blurred photo"]].forEach(([v, t]) => seg.append(h("button", { class: v === themeVal ? "on" : "", onclick: () => { if (v === "avatar" && !bannerData && !avatarData) { toast("Pick a picture first"); return; } themeVal = v; paint(); drawSeg(); } }, t))); };
+  const drawSeg = () => { seg.textContent = ""; [["default", bannerData ? "Custom" : "Default"], ["avatar", "Blurred photo"]].forEach(([v, t]) => seg.append(h("button", { class: v === themeVal ? "on" : "", onclick: () => { if (v === "avatar" && !bannerData && !avatarData) { toast("Pick a picture first"); return; } themeVal = v; paint(); drawSeg(); } }, t))); };
   drawSeg();
   paint();
   const lockLeft = () => {

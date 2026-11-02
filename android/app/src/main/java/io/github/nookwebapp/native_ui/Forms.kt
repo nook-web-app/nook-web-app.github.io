@@ -344,6 +344,6 @@ fun ZenEditPanel(app: AppState, p: Panel) {
                 else app.open(listOf(SheetItem("Choose a photo", "image") { pick.gallery() }, SheetItem("Remove picture", "trash", danger = true) { pfp = null; if (banner == null) blurred = false }, SheetItem("Cancel", cancel = true)), "Picture")
             }
         }
-        Fld("Banner style") { Seg(listOf("Default", "Blurred photo"), if (blurred) 1 else 0, Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 14.dp)) { if (it == 1 && pfp == null && banner == null) app.say("Pick a picture first") else blurred = it == 1 } }
+        Fld("Banner style") { Seg(listOf(if (banner != null) "Custom" else "Default", "Blurred photo"), if (blurred) 1 else 0, Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 14.dp)) { if (it == 1 && pfp == null && banner == null) app.say("Pick a picture first") else blurred = it == 1 } }
     }
 }

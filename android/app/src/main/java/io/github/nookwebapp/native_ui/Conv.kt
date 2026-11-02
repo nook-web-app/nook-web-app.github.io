@@ -144,23 +144,24 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
                 // (any chat of the notes list, also one that holds an answer of Zenith: earlier messages never stop the command)
                 val links = if (pend.isEmpty()) MediaGrab.commandLinks(text) else null
                 if (links != null) {
-                    val qtext = MediaGrab.quality(text)
+                    val audio = MediaGrab.isAudio(text)
+                    val qtext = if (audio) "audio" else MediaGrab.quality(text)
                     when {
-                        links.isEmpty() -> app.say("Type /media and a link")
+                        links.isEmpty() -> app.say(if (audio) "Type /audio and a link" else "Type /media and a link")
                         links.any { MediaGrab.site(it) == null } -> app.say("Use links that start with https://")
                         else -> {
                             setText("")
                             app.say("Getting media...")
                             app.scope.launch {
                                 // every link is read at the same time; the cards come in the order the links were pasted (the command shows on the first card only)
-                                val done = links.map { link -> async { runCatching { MediaGrab.resolveAll(link, if (MediaGrab.site(link) == "youtube") qtext else "") } } }.awaitAll()
+                                val done = links.map { link -> async { runCatching { MediaGrab.resolveAll(link, if (audio || MediaGrab.site(link) == "youtube") qtext else "") } } }.awaitAll()
                                 val t0 = Clock.now(); var k = 0; var failed: Throwable? = null
-                                val cmdText = "/media " + (if (links.any { MediaGrab.site(it) == "youtube" } && qtext.isNotEmpty()) "/$qtext " else "") + links.joinToString(" ")
+                                val cmdText = (if (audio) "/audio " else "/media " + (if (links.any { MediaGrab.site(it) == "youtube" } && qtext.isNotEmpty()) "/$qtext " else "")) + links.joinToString(" ")
                                 done.forEachIndexed { li, r ->
                                     val items = r.getOrNull()
                                     if (items == null) { failed = r.exceptionOrNull(); return@forEachIndexed }
                                     val link = links[li]
-                                    val qual = if (MediaGrab.site(link) == "youtube") qtext else ""
+                                    val qual = if (audio || MediaGrab.site(link) == "youtube") qtext else ""
                                     items.forEachIndexed { n, it ->
                                         val card = MediaGrab.card(link, it.info, qual, n, items.size)
                                         if (k > 0 && n == 0) card.put("x", 1)

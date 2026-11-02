@@ -9,7 +9,7 @@ import java.io.OutputStream
 
 // Raw sound (16 bit, little endian, interleaved) written as an MP3 file with a tag: title, artist and a cover picture. The encoder is the
 // plain Java port of LAME (nothing from the phone's own codecs), so the file is the same on every phone.
-class Mp3(private val out: OutputStream, private val rate: Int, private val channels: Int, kbps: Int = 192) {
+class Mp3(private val out: OutputStream, private val rate: Int, private val channels: Int, kbps: Int = 192, Q: Int = 7) {
     private val lame = Lame()
     private val gf: LameGlobalFlags
     private val id3 = ID3Tag()
@@ -39,7 +39,7 @@ class Mp3(private val out: OutputStream, private val rate: Int, private val chan
         gf.in_samplerate = rate
         gf.num_channels = channels
         gf.brate = kbps
-        gf.quality = 3
+        gf.quality = Q
         gf.mode = if (channels == 1) MPEGMode.MONO else MPEGMode.JOINT_STEREO
         gf.write_id3tag_automatic = false
         gf.findReplayGain = false

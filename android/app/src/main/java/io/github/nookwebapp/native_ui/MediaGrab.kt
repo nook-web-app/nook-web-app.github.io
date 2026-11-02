@@ -570,9 +570,10 @@ object MediaGrab {
     // the pieces are written to their place in the file, and a piece that fails is tried three times
     internal fun fastDownload(src: String, headers: Map<String, String>, to: File, total: Long, onBytes: (Long) -> Unit) {
         if (total > MAX_FILE) throw Fail("That file is too large")
-        if (total <= 0 || total < 3L shl 20) { download(src, headers, to, onBytes = onBytes); return }
-        // smaller pieces for a smaller file, so all the connections have work
-        val chunk = if (total < 32L shl 20) 2L shl 20 else 4L shl 20
+        if (total <= 0 || total < 512L shl 10) { download(src, headers, to, onBytes = onBytes); return }
+        // the pieces are smaller for a smaller file, so all the connections have work (one connection alone to YouTube is slowed down,
+        // also for a short sound: a song of 4 MB took a minute that way)
+        val chunk = if (total < 32L shl 20) maxOf(256L shl 10, (total + 11) / 12) else 4L shl 20
         val count = ((total + chunk - 1) / chunk).toInt()
         val next = java.util.concurrent.atomic.AtomicInteger(0)
         val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
@@ -581,7 +582,7 @@ object MediaGrab {
             raf.setLength(total)
             val pool = java.util.concurrent.Executors.newFixedThreadPool(12)
             try {
-                val jobs = (0 until 8).map {
+                val jobs = (0 until minOf(12, count)).map {
                     pool.submit {
                         while (failure.get() == null) {
                             val i = next.getAndIncrement(); if (i >= count) break
@@ -666,7 +667,7 @@ object MediaGrab {
     }
 
     // joins a picture file and a sound file into one, without changing either (no re-encoding)
-    internal fun mux(video: File, audio: File, out: File, webm: Boolean) {
+    internal fun mux(video: File, audio: File, out: File, webm: Boolean, onFraction: (Float) -> Unit = {}) {
         val vx = MediaExtractor().apply { setDataSource(video.path) }
         val ax = MediaExtractor().apply { setDataSource(audio.path) }
         try {
@@ -678,9 +679,11 @@ object MediaGrab {
             try {
             m.start()
             val buf = ByteBuffer.allocate(8 shl 20); val info = MediaCodec.BufferInfo()
+            val allBytes = (video.length() + audio.length()).coerceAtLeast(1L).toFloat(); var moved = 0L; var lastTick = 0L
             fun copy(x: MediaExtractor, t: Int) {
                 while (true) {
                     val n = x.readSampleData(buf, 0); if (n < 0) break
+                    moved += n; if (moved - lastTick > (4 shl 20)) { lastTick = moved; onFraction((moved / allBytes).coerceIn(0f, 1f)) }
                     info.set(0, n, x.sampleTime, if (x.sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC != 0) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0)
                     m.writeSampleData(t, buf, info); x.advance()
                 }
@@ -713,7 +716,7 @@ object MediaGrab {
     private fun copyOut(from: File, o: java.io.OutputStream, onProgress: (Float) -> Unit) {
         val total = from.length().coerceAtLeast(1L).toFloat(); var done = 0L
         val buf = ByteArray(1 shl 20)
-        from.inputStream().use { i -> while (true) { val n = i.read(buf); if (n < 0) break; o.write(buf, 0, n); done += n; onProgress(0.95f + 0.05f * (done / total)) } }
+        from.inputStream().use { i -> while (true) { val n = i.read(buf); if (n < 0) break; o.write(buf, 0, n); done += n; onProgress(0.9f + 0.1f * (done / total)) } }
     }
 
     // the sound track of a video file copied on its own, without being changed
@@ -755,11 +758,11 @@ object MediaGrab {
                 val part = File(tmp, "a.part")
                 val from = first.audio ?: first.url
                 val sz = if (first.audio != null) (if (first.asize > 0) first.asize else sizeOf(from, first.headers)) else (if (first.size > 0) first.size else sizeOf(from, first.headers))
-                fastDownload(from, first.headers, part, sz) { n -> onProgress((got0.addAndGet(n) / (sz.takeIf { it > 0 } ?: 1L).toFloat() * 0.9f).coerceIn(0f, 0.9f)) }
+                fastDownload(from, first.headers, part, sz) { n -> onProgress((got0.addAndGet(n) / (sz.takeIf { it > 0 } ?: 1L).toFloat() * 0.5f).coerceIn(0f, 0.5f)) }
                 // an mp3 with the title, the artist and the picture of the video (if the phone cannot read the sound, it stays the sound as it came)
                 val coverImg = AudioMp3.cover(cover?.takeIf { it.isNotEmpty() } ?: info.thumb) { u -> http.newCall(Request.Builder().url(u).header("User-Agent", DESKTOP).build()).execute().use { r -> if (r.isSuccessful) r.body?.bytes()?.takeIf { it.size < 4_000_000 } else null } }
                 val mp3 = File(tmp, "sound.mp3")
-                val made = runCatching { AudioMp3.make(part, mp3, info.title, info.author.removePrefix("@"), coverImg) { p -> onProgress(0.9f + 0.05f * p) } }
+                val made = runCatching { AudioMp3.make(part, mp3, info.title, info.author.removePrefix("@"), coverImg) { p -> onProgress(0.5f + 0.4f * p) } }
                 var out = mp3; var ext = "mp3"; var mime = "audio/mpeg"
                 if (made.isFailure) {
                     android.util.Log.w("nook", "mp3", made.exceptionOrNull())
@@ -802,7 +805,7 @@ object MediaGrab {
             if (audio != null) {
                 try {
                     val v = File(tmp, "v.part"); val a = File(tmp, "a.part")
-                    val tick = { n: Long -> onProgress((got.addAndGet(n) / total * 0.92f).coerceIn(0f, 0.92f)) }
+                    val tick = { n: Long -> onProgress((got.addAndGet(n) / total * 0.8f).coerceIn(0f, 0.8f)) }
                     // both pieces at once
                     val av = if (first.size > 0) first.size else sizeOf(first.url, first.headers); val aa = if (first.asize > 0) first.asize else sizeOf(audio, first.headers)
                     kotlinx.coroutines.coroutineScope {
@@ -810,7 +813,7 @@ object MediaGrab {
                         val y = async { fastDownload(audio, first.headers, a, aa, tick) }
                         x.await(); y.await()
                     }
-                    mux(v, a, made, first.webm)
+                    onProgress(0.8f); mux(v, a, made, first.webm) { f -> onProgress(0.8f + 0.1f * f) }
                     final = made
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
@@ -822,7 +825,7 @@ object MediaGrab {
                 val one = File(tmp, "one." + src.ext)
                 val share = if (src === first) total else 1f
                 val size = if (src.size > 0) src.size else sizeOf(src.url, src.headers)
-                fastDownload(src.url, src.headers, one, size) { n -> val g = got.addAndGet(n); if (src === first) onProgress((g / share * 0.92f).coerceIn(0f, 0.92f)) }
+                fastDownload(src.url, src.headers, one, size) { n -> val g = got.addAndGet(n); if (src === first) onProgress((g / share * 0.8f).coerceIn(0f, 0.8f)) }
                 final = one
             }
             var cur: File = final!!

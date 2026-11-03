@@ -358,8 +358,8 @@ fun Online.notesSync() {
             if (s.sv == null) { s.sv = s.posts.filter { it.saved && it.remote != null }.mapNotNull { it.remote }.toMutableSet() }
             val changed = notesPull(ns, key)
             if (ns.optBoolean("extra")) { ns.remove("extra"); runCatching { fillWanted() } }
-            notesPush(ns, key)
-            app.persist()
+            val pushedAny = notesPush(ns, key)
+            if (changed || pushedAny) app.persist()
             if (changed) app.notesVersion++
             notesFailed = 0
         } catch (e: Exception) {

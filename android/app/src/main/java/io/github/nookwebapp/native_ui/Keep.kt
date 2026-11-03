@@ -27,10 +27,18 @@ object Keep {
             runCatching { androidx.core.content.ContextCompat.startForegroundService(ctx, Intent(ctx, KeepService::class.java)) }
         }
     }
-    fun end(ctx: Context?) {
+    fun end(ctx: Context?, key: String? = null) {
         ctx ?: return
         synchronized(this) {
-            n = maxOf(0, n - 1); if (n > 0) return
+            n = maxOf(0, n - 1)
+            if (n > 0) {
+                // the finished download no longer owns the service notification: the quiet one of the remaining work replaces it
+                if (key != null && key == holder) {
+                    holder = null
+                    runCatching { androidx.core.content.ContextCompat.startForegroundService(ctx, Intent(ctx, KeepService::class.java)) }
+                }
+                return
+            }
             holder = null
             runCatching { ctx.stopService(Intent(ctx, KeepService::class.java)) }
         }
@@ -65,7 +73,7 @@ object Keep {
     }
     suspend fun <T> around(ctx: Context?, f: suspend () -> T): T { begin(ctx); try { return f() } finally { end(ctx) } }
     // a download: the service shows the progress bar of this download as its one notification
-    suspend fun <T> download(ctx: Context?, key: String, title: String, f: suspend () -> T): T { begin(ctx, key, title); try { return f() } finally { end(ctx) } }
+    suspend fun <T> download(ctx: Context?, key: String, title: String, f: suspend () -> T): T { begin(ctx, key, title); try { return f() } finally { end(ctx, key) } }
 }
 
 class KeepService : Service() {

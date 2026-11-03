@@ -37,6 +37,7 @@ object MediaGrab {
     private val IG_POST = Regex("^https?://(?:www\\.)?instagram\\.com/(?:[\\w.]+/)?(p|reel|reels|tv)/([\\w-]+)", RegexOption.IGNORE_CASE)
     private val TT = Regex("^https?://(?:www\\.|m\\.|vm\\.|vt\\.)?tiktok\\.com/\\S+", RegexOption.IGNORE_CASE)
     private val YT_ID = Regex("(?:youtube\\.com/(?:watch\\?(?:.*&)?v=|shorts/|embed/|live/)|youtu\\.be/)([\\w-]{6,})", RegexOption.IGNORE_CASE)
+    private val WEB = Regex("^https://[^/\\s]+\\.[^/\\s]+", RegexOption.IGNORE_CASE)
     private val CMD = Regex("^/media(?:\\s+/(4k|2k|1080p|720p))?((?:\\s+\\S+)*)\\s*$", RegexOption.IGNORE_CASE)
     private const val DESKTOP = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
     private const val BOT = "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)"
@@ -110,7 +111,7 @@ object MediaGrab {
         IG_POST.containsMatchIn(url) -> "instagram"
         TT.containsMatchIn(url) -> "tiktok"
         // any other web link: the page (or the file itself) is read for what it holds
-        url.length < 600 && Regex("^https://[^/\\s]+\\.[^/\\s]+", RegexOption.IGNORE_CASE).containsMatchIn(url) -> "web"
+        url.length < 600 && WEB.containsMatchIn(url) -> "web"
         else -> null
     }
     fun host(url: String) = runCatching { java.net.URI(url).host.orEmpty().removePrefix("www.") }.getOrDefault("")
@@ -139,7 +140,7 @@ object MediaGrab {
             "instagram" -> igResolve(IG_POST.find(url)!!.let { it.groupValues[1] to it.groupValues[2] })
             "tiktok" -> ttResolve(url)
             "web" -> webResolve(url)
-            else -> throw Fail("Use a link that starts with https://")
+            else -> throw Fail(if (url.startsWith("https://")) "That link is too long" else "Use a link that starts with https://")
         }
     }
     suspend fun resolve(url: String, q: String = ""): Pair<Info, Src> = resolveAll(url, q).first().let { it.info to it.src }
@@ -182,7 +183,7 @@ object MediaGrab {
                 if (kind == "gif") {
                     // a gif is a few hundred kilobytes: it is read from a file, which every phone can do
                     val f = File.createTempFile("frame", ".mp4"); tmpFile = f
-                    download(src.url, emptyMap(), f, 8_000_000L) { }
+                    download(src.url, src.headers, f, 8_000_000L) { }
                     r.setDataSource(f.path)
                     bm = r.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: r.getFrameAtTime(0)
                 } else {
@@ -221,7 +222,7 @@ object MediaGrab {
         headers.forEach { (k, v) -> b.header(k, v) }
         http.newCall(b.build()).execute().use { r ->
             if (!r.isSuccessful) throw Fail("The site answered " + r.code)
-            return r.body?.source()?.let { s -> s.request(20_000_000); s.buffer.clone().readUtf8() } ?: ""
+            return r.body?.source()?.let { s -> s.request(20_000_000); s.buffer.readUtf8() } ?: ""
         }
     }
 
@@ -396,7 +397,7 @@ object MediaGrab {
         Regex("<meta[^>]+(?:property|name)=\"$key\"[^>]+content=\"([^\"]*)\"", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)
             ?: Regex("<meta[^>]+content=\"([^\"]*)\"[^>]+(?:property|name)=\"$key\"", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)
 
-    private fun unent(s: String) = s.replace("&amp;", "&").replace("&quot;", "\"").replace("&#x27;", "'").replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">")
+    private fun unent(s: String) = s.replace("&quot;", "\"").replace("&#x27;", "'").replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
     // what a mirror says about a post in its page (the og tags)
     internal fun igFromHtml(html: String, base: String = ""): Pair<Info, Src> {
@@ -419,7 +420,7 @@ object MediaGrab {
         val tail = if (index > 0) "$index" else ""
         val req = Request.Builder().url("https://$m/$kind/$code/$tail").header("User-Agent", BOT).header("Accept-Language", "en-US,en;q=0.9").build()
         val (info, src) = still.newCall(req).execute().use { r ->
-            val loc = r.header("Location")
+            val loc = r.header("Location")?.let { r.request.url.resolve(it)?.toString() }
             when {
                 r.code in 300..399 && loc != null && loc.startsWith("https://") -> {
                     // a reel is a video unless the file says it is a picture; a post is told by its address or the type of the file
@@ -507,7 +508,7 @@ object MediaGrab {
             page = r.request.url.toString()
             val t = r.header("Content-Type").orEmpty().lowercase()
             if (t.startsWith("video/") || t.startsWith("image/") || t.startsWith("audio/")) direct = t
-            else html = r.body?.source()?.let { src -> src.request(2_000_000); src.buffer.clone().readUtf8() }.orEmpty()
+            else html = r.body?.source()?.let { src -> src.request(2_000_000); src.buffer.readUtf8() }.orEmpty()
         }
         val host = host(page)
         val ref = mapOf("Referer" to page)
@@ -728,6 +729,8 @@ object MediaGrab {
             head.size > 3 && head[0] == 0xFF.toByte() && head[1] == 0xD8.toByte() -> "jpg" to "image/jpeg"
             head.size > 4 && head[0] == 0x89.toByte() && at(1, "PNG") -> "png" to "image/png"
             at(0, "RIFF") && at(8, "WEBP") -> "webp" to "image/webp"
+            at(4, "ftyp") && (at(8, "avif") || at(8, "avis")) -> "avif" to "image/avif"
+            at(4, "ftyp") && (at(8, "heic") || at(8, "heix") || at(8, "mif1") || at(8, "msf1")) -> "heic" to "image/heic"
             at(4, "ftyp") -> "mp4" to "video/mp4"
             head.size > 4 && head[0] == 0x1A.toByte() && head[1] == 0x45.toByte() && head[2] == 0xDF.toByte() && head[3] == 0xA3.toByte() -> "webm" to "video/webm"
             else -> null
@@ -754,7 +757,7 @@ object MediaGrab {
                 val buf = java.nio.ByteBuffer.allocate(1 shl 20); val bi = android.media.MediaCodec.BufferInfo()
                 while (true) {
                     buf.clear(); val n = ex.readSampleData(buf, 0); if (n < 0) break
-                    bi.set(0, n, ex.sampleTime, ex.sampleFlags); mx.writeSampleData(out, buf, bi); ex.advance()
+                    bi.set(0, n, ex.sampleTime, if (ex.sampleFlags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC != 0) android.media.MediaCodec.BUFFER_FLAG_KEY_FRAME else 0); mx.writeSampleData(out, buf, bi); ex.advance()
                 }
                 mx.stop()
             } finally { runCatching { mx.release() } }
@@ -781,11 +784,12 @@ object MediaGrab {
                 val part = File(tmp, "a.part")
                 val from = first.audio ?: first.url
                 val sz = if (first.audio != null) (if (first.asize > 0) first.asize else sizeOf(from, first.headers)) else (if (first.size > 0) first.size else sizeOf(from, first.headers))
-                fastDownload(from, first.headers, part, sz) { n -> onProgress((got0.addAndGet(n) / (sz.takeIf { it > 0 } ?: 1L).toFloat() * 0.5f).coerceIn(0f, 0.5f)) }
+                fastDownload(from, first.headers, part, sz) { n -> val g = got0.addAndGet(n); if (sz > 0) onProgress((g / sz.toFloat() * 0.5f).coerceIn(0f, 0.5f)) }
                 // an mp3 with the title, the artist and the picture of the video (if the phone cannot read the sound, it stays the sound as it came)
                 val coverImg = AudioMp3.cover(cover?.takeIf { it.isNotEmpty() } ?: info.thumb) { u -> http.newCall(Request.Builder().url(u).header("User-Agent", DESKTOP).build()).execute().use { r -> if (r.isSuccessful) r.body?.bytes()?.takeIf { it.size < 4_000_000 } else null } }
                 val mp3 = File(tmp, "sound.mp3")
                 val made = runCatching { AudioMp3.make(part, mp3, info.title, info.author.removePrefix("@"), coverImg) { p -> onProgress(0.5f + 0.4f * p) } }
+                made.exceptionOrNull()?.let { if (it is kotlinx.coroutines.CancellationException) throw it }
                 var out = mp3; var ext = "mp3"; var mime = "audio/mpeg"
                 if (made.isFailure) {
                     android.util.Log.w("nook", "mp3", made.exceptionOrNull())
@@ -829,7 +833,7 @@ object MediaGrab {
             if (audio != null) {
                 try {
                     val v = File(tmp, "v.part"); val a = File(tmp, "a.part")
-                    val tick = { n: Long -> onProgress((got.addAndGet(n) / total * 0.8f).coerceIn(0f, 0.8f)) }
+                    val tick = { n: Long -> val g = got.addAndGet(n); if (info.size > 0) onProgress((g / total * 0.8f).coerceIn(0f, 0.8f)) }
                     // both pieces at once
                     val av = if (first.size > 0) first.size else sizeOf(first.url, first.headers); val aa = if (first.asize > 0) first.asize else sizeOf(audio, first.headers)
                     kotlinx.coroutines.coroutineScope {
@@ -849,7 +853,7 @@ object MediaGrab {
                 val one = File(tmp, "one." + src.ext)
                 val share = if (src === first) total else 1f
                 val size = if (src.size > 0) src.size else sizeOf(src.url, src.headers)
-                fastDownload(src.url, src.headers, one, size) { n -> val g = got.addAndGet(n); if (src === first) onProgress((g / share * 0.8f).coerceIn(0f, 0.8f)) }
+                fastDownload(src.url, src.headers, one, size) { n -> val g = got.addAndGet(n); if (src === first && info.size > 0) onProgress((g / share * 0.8f).coerceIn(0f, 0.8f)) }
                 final = one
             }
             var cur: File = final!!

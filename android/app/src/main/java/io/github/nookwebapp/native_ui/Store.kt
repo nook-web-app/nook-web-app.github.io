@@ -171,8 +171,13 @@ class Store(private val dir: File?) {
             val b = runCatching { JSONObject(bak.readText()) }.getOrNull() ?: return
             fromJson(b); return
         }
+        // a copy that parses but cannot be read falls back to the last good one
+        if (runCatching { fromJson(j) }.isFailure) {
+            val b = runCatching { JSONObject(File(f.parentFile, "state.json.bak").readText()) }.getOrNull() ?: return
+            runCatching { fromJson(b) }
+            return
+        }
         runCatching { f.copyTo(File(f.parentFile, "state.json.bak"), true) }
-        fromJson(j)
     }
 
     fun fromJson(j: JSONObject) {
@@ -195,7 +200,7 @@ class Store(private val dir: File?) {
             chats.add(LChat(c.optString("id"), c.optString("name", "Chat"), c.optLong("t"), msgs, c.optString("draft", "")).also { it.zc = c.optBoolean("zc") })
         }
         lists.clear()
-        j.optJSONArray("lists")?.forEachObj { l -> lists.add(LList(l.getString("id"), l.optString("name"), l.optString("desc", ""), l.optJSONArray("ids").strings())) }
+        j.optJSONArray("lists")?.forEachObj { l -> val lid = l.optString("id"); if (lid.isNotEmpty()) lists.add(LList(lid, l.optString("name"), l.optString("desc", ""), l.optJSONArray("ids").strings())) }
         j.optJSONObject("ui")?.let { u ->
             theme = when (u.optString("theme")) { "dark" -> ThemeMode.Dark; "light" -> ThemeMode.Light; else -> ThemeMode.System }
             homeTab = u.optString("homeTab", "latest"); profTab = u.optString("profTab", "posts")
@@ -279,7 +284,7 @@ class Store(private val dir: File?) {
         chats.toList().forEach { c -> c.msgs.toList().forEach { used.addAll(it.imgs) } }
         profile.avatar?.let { used.add(it) }; profile.banner?.let { used.add(it) }
         zen.optString("pfp").takeIf { it.isNotEmpty() }?.let { used.add(it) }
-        mediaDir?.listFiles()?.forEach { f -> if (f.absolutePath !in used && System.currentTimeMillis() - f.lastModified() > 60_000) f.delete() }
+        mediaDir?.listFiles()?.forEach { f -> if (f.absolutePath !in used && System.currentTimeMillis() - f.lastModified() > 86_400_000) f.delete() }
     }
 
     companion object {

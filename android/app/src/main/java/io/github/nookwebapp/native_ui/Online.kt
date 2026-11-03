@@ -207,7 +207,6 @@ class Online(val app: AppState) {
         } catch (e: Exception) { rpRows = emptyList(); rpFailed = true }
         inlP.await()
         val inlLater = inlAll.filter { it.optBoolean("media_inline") }.map { it.optString("id") }
-        val pend = s.pendDel.toSet()
         if (s.pendDel.isNotEmpty()) runCatching { deleteRemote(s.pendDel.toList().map { r -> LPost("x", "", 0, emptyList(), null, remote = r) }) }
         val ids = posts.map { it.optString("id") }
         val extra = ids.drop(ids0.size)
@@ -272,7 +271,7 @@ class Online(val app: AppState) {
         }
         // my posts that only the server has (made on another device, or lost from this one) come back
         val known = s.posts.filter { it.remote != null && it.ra == null && !it.prov }.map { it.remote }.toSet()
-        val mineBack = shown.filter { it.optString("user_id") == me && it.optString("id") !in known && it.optString("id") !in pend }
+        val mineBack = shown.filter { it.optString("user_id") == me && it.optString("id") !in known && it.optString("id") !in s.pendDel.toSet() }
         val backIds = mineBack.map { it.optString("id") }.toSet()
         val pinnedId = meRow.one?.optStr("pinned_post_id")
         val back = mineBack.map { p ->
@@ -289,8 +288,8 @@ class Online(val app: AppState) {
             val still = Sb.get(Q("posts").select("id").inList("id", kept.map { it.remote!! }))
             kept = if (!still.ok) emptyList() else { val ok = still.rows.map { it.optString("id") }.toSet(); kept.filter { it.remote in ok } }
         }
-        for (x in back + remote) { val tp = x.remote?.let { tapAt[it] } ?: continue; if (tp.t >= feedT0) { tp.l?.let { x.liked = it.first; x.lc = it.second }; tp.r?.let { x.reposted = it.first; x.rpc = it.second } } }
         val ownLocal = s.posts.filter { it.ra == null }
+        for (x in ownLocal + back + remote) { val tp = x.remote?.let { tapAt[it] } ?: continue; if (tp.t >= feedT0) { tp.l?.let { x.liked = it.first; x.lc = it.second }; tp.r?.let { x.reposted = it.first; x.rpc = it.second } } }
         s.posts.clear(); s.posts.addAll(ownLocal + back + remote + kept)
         // where the real Zenith has answered a post, his older private answer under the same post goes, so there is one answer
         zenId()?.let { zid ->
@@ -605,6 +604,8 @@ class Online(val app: AppState) {
                         if (!quiet) app.postLocked = true
                         return@launch
                     }
+                    // a definitive refusal from the server is not tried again, so it cannot hold back the posts after it
+                    if (e != null && e.code.isNotEmpty()) np.noRetry = true
                     if (!quiet) app.say("Could not send that post yet. It will be sent again when the connection is back")
                 }
             } finally { np.sending = false; Keep.end(app.ctx) }

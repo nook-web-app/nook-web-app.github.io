@@ -158,6 +158,7 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
                         links.isEmpty() -> app.say(if (audio) "Type /audio and a link" else "Type /media and a link")
                         links.any { MediaGrab.site(it) == null } -> app.say("Use links that start with https://")
                         else -> {
+                            val typed = text
                             setText("")
                             app.say("Getting media...")
                             app.scope.launch {
@@ -167,7 +168,7 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
                                 val cmdText = (if (audio) "/audio " else "/media " + (if (links.any { MediaGrab.site(it) == "youtube" } && qtext.isNotEmpty()) "/$qtext " else "")) + (if (folder.isNotEmpty()) "/folder/$folder " else "") + links.joinToString(" ")
                                 done.forEachIndexed { li, r ->
                                     val items = r.getOrNull()
-                                    if (items == null) { failed = r.exceptionOrNull(); return@forEachIndexed }
+                                    if (items == null) { failed = failed ?: r.exceptionOrNull(); return@forEachIndexed }
                                     val link = links[li]
                                     val qual = if (audio || MediaGrab.site(link) == "youtube") qtext else ""
                                     items.forEachIndexed { n, it ->
@@ -179,7 +180,7 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
                                         chat.msgs.add(m); k++
                                     }
                                 }
-                                if (k > 0) app.persist()
+                                if (k > 0) app.persist() else setText(typed)
                                 failed?.let { e -> app.say(if (e is MediaGrab.Fail) e.message ?: "Could not get it" else "Could not get it (" + (e.message ?: e.javaClass.simpleName).lineSequence().first().take(80) + ")") }
                             }
                         }

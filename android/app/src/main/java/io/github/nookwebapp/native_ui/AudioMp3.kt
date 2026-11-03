@@ -16,7 +16,7 @@ object AudioMp3 {
             val ti = (0 until ex.trackCount).firstOrNull { ex.getTrackFormat(it).getString(MediaFormat.KEY_MIME).orEmpty().startsWith("audio/") } ?: throw MediaGrab.Fail("That video has no sound")
             ex.selectTrack(ti)
             val fmt = ex.getTrackFormat(ti)
-            val durUs = if (fmt.containsKey(MediaFormat.KEY_DURATION)) fmt.getLong(MediaFormat.KEY_DURATION).coerceAtLeast(1L) else 1L
+            val durUs = if (fmt.containsKey(MediaFormat.KEY_DURATION)) fmt.getLong(MediaFormat.KEY_DURATION).coerceAtLeast(0L) else 0L
             codec = MediaCodec.createDecoderByType(fmt.getString(MediaFormat.KEY_MIME)!!)
             codec.configure(fmt, null, null, 0)
             codec.start()
@@ -35,17 +35,21 @@ object AudioMp3 {
                             val buf = codec.getInputBuffer(i)!!
                             val n = ex.readSampleData(buf, 0)
                             if (n < 0) { codec.queueInputBuffer(i, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM); inputDone = true }
-                            else { codec.queueInputBuffer(i, 0, n, ex.sampleTime, 0); onProgress((ex.sampleTime.toFloat() / durUs).coerceIn(0f, 1f)); ex.advance() }
+                            else { codec.queueInputBuffer(i, 0, n, ex.sampleTime, 0); if (durUs > 0) onProgress((ex.sampleTime.toFloat() / durUs).coerceIn(0f, 1f)); ex.advance() }
                         }
                     }
                     val o = codec.dequeueOutputBuffer(info, 10_000)
                     when {
                         o == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            idle = 0
+                            // a second format would mix two sample rates in one file: the caller falls back to the plain sound
+                            if (enc != null) throw MediaGrab.Fail("The sound changed its format")
                             val of = codec.outputFormat
                             val rate = of.getInteger(MediaFormat.KEY_SAMPLE_RATE); channels = of.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
                             enc = Mp3(out, rate, if (channels == 1) 1 else 2)
                         }
                         o >= 0 -> {
+                            idle = 0
                             val buf = codec.getOutputBuffer(o)!!
                             if (info.size > 0) {
                                 if (enc == null) {
@@ -65,7 +69,7 @@ object AudioMp3 {
                             codec.releaseOutputBuffer(o, false)
                             if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
                         }
-                        o == MediaCodec.INFO_TRY_AGAIN_LATER -> { if (inputDone && ++idle > 300) throw MediaGrab.Fail("The sound could not be read") }
+                        o == MediaCodec.INFO_TRY_AGAIN_LATER -> { if (++idle > 300) throw MediaGrab.Fail("The sound could not be read") }
                     }
                 }
                 enc?.finish() ?: throw MediaGrab.Fail("The sound could not be read")

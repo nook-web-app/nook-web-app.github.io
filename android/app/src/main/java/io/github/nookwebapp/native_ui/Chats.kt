@@ -59,6 +59,7 @@ fun ChatsScreen() {
     val s = app.store
     val on = app.on
     val dm = app.dm
+    var inboxFailed by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { if (dm.locked) on.promptUnlock() }
     LaunchedEffect(on.me) {
         if (on.me == null) { dm.inboxN = 0; return@LaunchedEffect }
@@ -70,11 +71,11 @@ fun ChatsScreen() {
                 val c = on.dmInbox()
                 on.refreshBadge(false)
                 JSONArray(c.map { it.json() }).let { a -> val t = a.toString(); if (t != lastJson) { lastJson = t; Cache.write("inbox:" + on.uid, a) } }
-                dm.inbox = c
+                dm.inbox = c; inboxFailed = false
                 // the newest chats are downloaded in the background, so tapping one shows its messages right away
                 if (first) c.take(3).forEach { cv -> app.scope.launch { runCatching { val k = "thread:" + on.uid + ":" + cv.other; if ((Cache.fresh(k, 60_000)) == null) Cache.write(k, JSONArray(on.dmThread(cv.other).takeLast(100))); on.sharedKey(cv.other) } } }
                 first = false
-            } catch (e: Exception) { if (dm.inbox == null) dm.inbox = emptyList() }
+            } catch (e: Exception) { if (dm.inbox == null) { dm.inbox = emptyList(); inboxFailed = true } }
             delay(if (dm.rtOk) 15_000 else 5000)
             while (!app.foreground) delay(1000)
         }
@@ -86,7 +87,8 @@ fun ChatsScreen() {
             // rows of the same shape as the chats shimmer until the real ones are drawn, so the page never looks empty
             if (dm.inbox == null && on.me != null) items((Cache.read("inbox-n")?.v as? Int ?: 1).coerceIn(1, 6)) { SkelRow() }
             items(convos, key = { "d" + it.other }) { cv -> ConvoRow(cv) }
-            if ((dm.inbox != null || on.me == null) && convos.isEmpty() && s.chats.isEmpty()) item { Empty("smile", "Say hi to yourself.") { Pill("New chat") { app.newChat() } } }
+            if ((dm.inbox != null || on.me == null) && convos.isEmpty() && s.chats.isEmpty() && inboxFailed) item { Empty("smile", "Could not load your chats. Pull to try again, or check the connection.") }
+            else if ((dm.inbox != null || on.me == null) && convos.isEmpty() && s.chats.isEmpty()) item { Empty("smile", "Say hi to yourself.") { Pill("New chat") { app.newChat() } } }
             items(local, key = { it.id }) { ch ->
                 val last = ch.msgs.lastOrNull()
                 LRow({ MyAvatar(48.dp) }, ch.name, if (last == null) "No messages yet" else last.text.ifEmpty { if (last.rpost != null || last.zpost != null) "Shared a post" else "Sent a photo" }, last?.let { ago(it.t) }) { app.go(Route.Conv(ch.id)) }

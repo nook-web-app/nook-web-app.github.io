@@ -79,7 +79,7 @@ fun Fab(icon: String, onClick: () -> Unit) {
 fun LazyListScope.postList(a: List<LPost>, empty: @Composable () -> Unit, lab: ((LPost) -> String?)? = null, pin: Boolean = false, replyTo: Boolean = false) {
     if (a.isEmpty()) item { empty() }
     // a post that arrives or moves slides into place instead of popping in
-    items(a, key = { it.id }) { Box(Modifier.animateItemPlacement()) { PostCard(it, lab = lab?.invoke(it), pin = pin, replyTo = replyTo) } }
+    items(a, key = { it.id }, contentType = { "post" }) { Box(Modifier.animateItemPlacement()) { PostCard(it, lab = lab?.invoke(it), pin = pin, replyTo = replyTo) } }
 }
 
 // .empty with "Loading..."
@@ -146,9 +146,9 @@ fun ThreadScreen(id: String) {
         }
         val reps by remember(p) { derivedStateOf { if (p.parent != null) s.flat(p.id) else s.kids(p.id).sortedBy { it.t }.map { it to 0 } } }
         LazyColumn(Modifier.fillMaxSize(), state = app.listStateFor(LocalPage.current)) {
-            items(anc, key = { "a" + it.id }) { PostCard(it, line = true, compact = true) }
+            items(anc, key = { "a" + it.id }, contentType = { "post" }) { PostCard(it, line = true, compact = true) }
             item(key = "main") { MainPost(p) }
-            items(reps, key = { it.first.id }) { (r, d) -> PostCard(r, rep = true, d = d, nc = p.parent != null, replyTo = d > 0) }
+            items(reps, key = { it.first.id }, contentType = { "post" }) { (r, d) -> PostCard(r, rep = true, d = d, nc = p.parent != null, replyTo = d > 0) }
         }
     }
 }

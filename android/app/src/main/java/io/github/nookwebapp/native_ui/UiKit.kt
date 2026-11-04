@@ -69,10 +69,11 @@ fun T(
 }
 
 // a tap target with no highlight of its own, like the web app (which turns off the tap highlight everywhere)
-fun Modifier.tap(shape: androidx.compose.ui.graphics.Shape? = null, enabled: Boolean = true, onClick: () -> Unit): Modifier = composed {
-    val m = if (shape != null) this.clip(shape) else this
-    m.clickable(remember { MutableInteractionSource() }, null, enabled = enabled, onClick = onClick)
-}
+// (no composed{} here and one shared source: nothing listens to a tap target, and a post has a dozen of them, so each
+// one saves a composition scope and a remembered source every time a post scrolls into view)
+private val TapSource = MutableInteractionSource()
+fun Modifier.tap(shape: androidx.compose.ui.graphics.Shape? = null, enabled: Boolean = true, onClick: () -> Unit): Modifier =
+    (if (shape != null) this.clip(shape) else this).clickable(TapSource, null, enabled = enabled, onClick = onClick)
 
 // .ib, .pri, .ghost, .fab and the bottom bar buttons shrink to 92% while held (transform .12s)
 fun Modifier.pressTap(shape: androidx.compose.ui.graphics.Shape? = null, enabled: Boolean = true, onClick: () -> Unit): Modifier = composed {

@@ -2,6 +2,7 @@ package io.github.nookwebapp.native_ui
 
 import android.content.Context
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -160,6 +161,32 @@ class Store(private val dir: File?) {
         return out
     }
     fun replyTotal(id: String) = flat(id).size
+
+    // For the screens only (they are read while drawing): who answers whom and where each post is, worked out once for
+    // every card on screen instead of one scan of all the posts per card. They are rebuilt only when a post is added,
+    // removed or put under another post, and must not be read from other code: a change made a moment ago may not show yet.
+    private val kidIdx by derivedStateOf {
+        HashMap<String, ArrayList<String>>().also { m -> posts.forEach { p -> p.parent?.let { m.getOrPut(it) { ArrayList(2) }.add(p.id) } } }
+    }
+    private val postIdx by derivedStateOf {
+        HashMap<String, LPost>(posts.size * 2).also { m -> posts.forEach { p -> m.putIfAbsent(p.id, p) } }
+    }
+    fun byIdDrawn(id: String?): LPost? = if (id == null) null else postIdx[id]
+    // the same number as replyTotal (every reply under a post, the replies to replies too)
+    fun replyTotalDrawn(id: String): Int {
+        val idx = kidIdx
+        val first = idx[id] ?: return 0
+        val seen = HashSet<String>().apply { add(id) }
+        val todo = ArrayList<String>(first)
+        var n = 0
+        while (todo.isNotEmpty()) {
+            val k = todo.removeAt(todo.size - 1)
+            if (!seen.add(k)) continue
+            n++
+            idx[k]?.let { todo.addAll(it) }
+        }
+        return n
+    }
 
     fun load() {
         val f = dir?.let { File(it, "state.json") } ?: return

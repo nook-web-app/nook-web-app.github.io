@@ -1,0 +1,4 @@
+# Baseline profile: everything of the app is compiled ahead of time on the phone, so the first scroll, the first opened
+# page and the first sheet do not run slowly through the interpreter (the main cause of dropped frames after an update).
+HSPLio/github/nookwebapp/native_ui/**;->**(**)**
+Lio/github/nookwebapp/native_ui/**;

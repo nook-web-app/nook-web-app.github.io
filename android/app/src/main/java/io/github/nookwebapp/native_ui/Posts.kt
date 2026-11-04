@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.FirstBaseline
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
@@ -173,7 +174,7 @@ private fun Ab(icon: String, n: Int, on: Boolean, onColor: Color, big: Boolean, 
 fun Acts(p: LPost, big: Boolean = false, nc: Boolean = false) {
     val app = LocalApp.current
     val c = LocalNook.current
-    val n = remember(p.id, p.rp, nc, app.store.posts.size) { if (nc) 0 else maxOf(if (p.ra != null) p.rp else 0, app.store.replyTotal(p.id)) }
+    val n = if (nc) 0 else maxOf(if (p.ra != null) p.rp else 0, app.store.replyTotalDrawn(p.id))
     val reply = { if (app.canPost()) app.panels.add(Panel.Compose(parent = p.id)) }
     val save = { app.toggleSave(p) }
     val items: List<@Composable (Modifier) -> Unit> = if (p.ra != null) listOf(
@@ -241,13 +242,18 @@ fun ImgGrid(imgs: List<String>, cap: String? = null, framed: Boolean = true) {
     var one by remember(imgs.firstOrNull()) { mutableStateOf<Pair<Int, Int>?>(null) }
     LaunchedEffect(imgs.firstOrNull()) { if (one == null) one = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { imgs.firstOrNull()?.let { Photos.size(it) } } }
     val cell = @Composable { i: Int, m: Modifier -> Pic(imgs[i], m.tap { open(i) }, onLoad = if (i == 0 && imgs.size == 1) ({ w, h -> if (one == null || one!!.first * h != one!!.second * w) one = w to h }) else null) }
-    BoxWithConstraints(if (framed) Modifier.padding(top = 8.dp).fillMaxWidth().clip(shape).border(1.dp, c.line, shape).padding(1.dp) else Modifier.fillMaxWidth().clip(RoundedCornerShape(Rad.bubble))) {
-        val w = maxWidth
+    Box(if (framed) Modifier.padding(top = 8.dp).fillMaxWidth().clip(shape).border(1.dp, c.line, shape).padding(1.dp) else Modifier.fillMaxWidth().clip(RoundedCornerShape(Rad.bubble))) {
         when {
             imgs.size == 1 -> {
+                // the height follows the width and the shape of the photo; measured here, so the post needs no sub-composition
                 val d = one
-                val h = minOf(if (d != null) w * (d.second.toFloat() / d.first) else w * 0.75f, maxH)
-                cell(0, Modifier.fillMaxWidth().height(h))
+                val ratio = if (d != null) d.second.toFloat() / d.first else 0.75f
+                cell(0, Modifier.fillMaxWidth().layout { m, c ->
+                    val w = c.maxWidth
+                    val h = minOf(w.toDp() * ratio, maxH).roundToPx()
+                    val pl = m.measure(androidx.compose.ui.unit.Constraints.fixed(w, h))
+                    layout(w, h) { pl.place(0, 0) }
+                })
             }
             imgs.size == 2 -> Row(Modifier.fillMaxWidth().aspectRatio(2f), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                 cell(0, Modifier.weight(1f).fillMaxHeight()); cell(1, Modifier.weight(1f).fillMaxHeight())
@@ -306,7 +312,7 @@ fun PostCard(p: LPost, lab: String? = null, pin: Boolean = false, replyTo: Boole
             }
             PostHead(nameOf(app, p), handleOf(app, p), ago(p.t), p.id)
             if (replyTo && p.parent != null) Row(Modifier.padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                val par by remember(p.parent) { derivedStateOf { app.store.byId(p.parent) } }
+                val par by remember(p.parent) { derivedStateOf { app.store.byIdDrawn(p.parent) } }
                 NIcon("reply", 14.dp, c.muted); T("Replying to " + par.let { pp -> if (pp == null) "a post" else handleOf(app, pp) }, Fs.sm, color = c.muted)
             }
             val txt = remember(p.text, p.imgs) { cardless(p) }

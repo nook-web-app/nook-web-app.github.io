@@ -9,4 +9,4 @@ cd "$(dirname "$0")"
 [ -n "$ANDROID_HOME" ] || { echo "set ANDROID_HOME to the Android SDK"; exit 1; }
 export ANDROID_HOME
 echo "sdk.dir=$ANDROID_HOME" > local.properties
-gradle --no-daemon -q "$@" 2>&1 | grep -v "Picked up"
+gradle -q "$@" 2>&1 | grep -v "Picked up"

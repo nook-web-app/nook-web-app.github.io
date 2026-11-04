@@ -14,11 +14,10 @@
     } catch (e) { return { ver: null, lines: [] }; }
   };
   // a version written like "3.0.8 !" in the notes file is required: it is applied at once and cannot be skipped
-  // a patch (same first two numbers) is applied quietly while the app is in the background, no question asked
+  // every update is applied quietly while the app is in the background, no question asked
   const kindOf = ver => {
     const forced = /!\s*$/.test(ver || "");
-    const a = String(ver || "").replace(/\s*!\s*$/, "").split("."), b = String(APP_VERSION).split(".");
-    return forced ? "required" : (a[0] === b[0] && a[1] === b[1] ? "patch" : "ask");
+    return forced ? "required" : "patch";
   };
   const applyWhenHidden = w => {
     const go = () => { accepted = true; (reg && reg.waiting || w).postMessage("skip"); };

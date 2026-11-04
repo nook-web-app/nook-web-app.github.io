@@ -70,9 +70,9 @@ object Updater {
         return a.size >= 2 && b.size >= 2 && a[0] == b[0] && a[1] == b[1]
     }
 
-    // opt in from Settings: every update, not only patches, installs by itself
-    fun allQuiet(ctx: Context): Boolean = ctx.getSharedPreferences("updates", Context.MODE_PRIVATE).getBoolean("all_quiet", false)
-    fun setAllQuiet(ctx: Context, on: Boolean) { ctx.getSharedPreferences("updates", Context.MODE_PRIVATE).edit().putBoolean("all_quiet", on).apply() }
+    // every update, not only patches, installs by itself in the background: nothing is asked
+    @Suppress("UNUSED_PARAMETER")
+    fun allQuiet(ctx: Context): Boolean = true
 
     fun mayInstall(ctx: Context): Boolean = Build.VERSION.SDK_INT < 26 || ctx.packageManager.canRequestPackageInstalls()
 

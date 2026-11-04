@@ -12,8 +12,11 @@ how to write updates here
 - skip the "new:" line when nothing was added and the "fixed:" line when nothing was fixed
 - do not add summary lines or anything else under a version
 - the only extra allowed is a ! after the version, like "## 3.0.8 !", for an update that people must install right away (privacy or security fixes). It installs at once and cannot be skipped.
-- an update with the same first two numbers as the one people have (a patch like 3.0.7 to 3.0.8) installs quietly in the background without asking. A new minor or major version asks first.
+- every update installs quietly in the background without asking, whether it is a patch like 3.0.7 to 3.0.8, a new minor or a new major version.
 -->
+## 3.37.5
+fixed: Fixed some bugs
+
 ## 3.37.4
 fixed: Fixed some bugs
 

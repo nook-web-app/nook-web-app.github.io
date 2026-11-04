@@ -35,7 +35,7 @@ object YtExtract {
 
     class Part(val url: String, val size: Long, val webm: Boolean)
     // plain: one file with picture and sound together (up to 720p); video and audio: the best picture and sound as two files
-    class Got(val title: String, val author: String, val dur: Int, val thumb: String?, val plain: Part, val video: Part?, val audio: Part?)
+    class Got(val title: String, val author: String, val dur: Int, val thumb: String?, val plain: Part, val video: Part?, val audio: Part?, val audioAlts: List<Part> = emptyList())
 
     private fun sizeOf(item: org.schabi.newpipe.extractor.services.youtube.ItagItem?): Long = item?.contentLength?.takeIf { it > 0 } ?: 0L
 
@@ -59,6 +59,11 @@ object YtExtract {
             if (a != null) { video = Part(dash.content, sizeOf(dash.itagItem), webm); audio = Part(a.content, sizeOf(a.itagItem), webm) }
         }
         val thumb = info.thumbnails.maxByOrNull { it.height }?.url?.takeIf { it.startsWith("https://") }
-        return Got(info.name, info.uploaderName.orEmpty(), info.duration.toInt().coerceAtLeast(0), thumb, plain, video, audio)
+        // every other sound file of the video (other formats, other clients of the site), best first: a sound that one address refuses
+        // is asked for at the next one
+        val alts = info.audioStreams.filter { it.isUrl && (it.format?.mimeType == "audio/mp4" || it.format?.mimeType == "audio/webm") && it.content != audio?.url }
+            .sortedWith(compareByDescending<org.schabi.newpipe.extractor.stream.AudioStream> { it.format?.mimeType == "audio/mp4" }.thenByDescending { it.averageBitrate })
+            .map { Part(it.content, sizeOf(it.itagItem), it.format?.mimeType == "audio/webm") }.distinctBy { it.url }.take(5)
+        return Got(info.name, info.uploaderName.orEmpty(), info.duration.toInt().coerceAtLeast(0), thumb, plain, video, audio, alts)
     }
 }

@@ -29,7 +29,7 @@ object MediaGrab {
     class Info(val site: String, val title: String, val author: String, val thumb: String?, val dur: Int, val kind: String, val size: Long = 0)
     // one file (picture and sound together), or a picture file with a sound file that are joined on the phone ("audio");
     // "plain" is the one-piece file of a lower quality to fall back to when the pieces cannot be joined
-    class Src(val url: String, val mime: String, val ext: String, val headers: Map<String, String> = emptyMap(), val audio: String? = null, val webm: Boolean = false, val plain: Src? = null, val size: Long = 0, val asize: Long = 0)
+    class Src(val url: String, val mime: String, val ext: String, val headers: Map<String, String> = emptyMap(), val audio: String? = null, val webm: Boolean = false, val plain: Src? = null, val size: Long = 0, val asize: Long = 0, val altAudio: List<YtExtract.Part> = emptyList())
     // one file of a post (a post can hold several: every one gets its own card)
     class Item(val info: Info, val src: Src)
 
@@ -380,7 +380,7 @@ object MediaGrab {
         first.getOrNull()?.let { g ->
             val plain = Src(g.plain.url, "video/mp4", "mp4")
             val v = g.video; val a = g.audio
-            val src = if (v != null && a != null) Src(v.url, if (v.webm) "video/webm" else "video/mp4", if (v.webm) "webm" else "mp4", audio = a.url, webm = v.webm, plain = plain, size = v.size, asize = a.size) else plain
+            val src = if (v != null && a != null) Src(v.url, if (v.webm) "video/webm" else "video/mp4", if (v.webm) "webm" else "mp4", audio = a.url, webm = v.webm, plain = plain, size = v.size, asize = a.size, altAudio = g.audioAlts) else Src(plain.url, plain.mime, plain.ext, altAudio = g.audioAlts)
             val size = if (v != null && a != null) (if (v.size > 0 && a.size > 0) v.size + a.size else 0L) else g.plain.size
             return Info("youtube", g.title.ifEmpty { "YouTube video" }, g.author, g.thumb ?: "https://i.ytimg.com/vi/$id/hqdefault.jpg", g.dur, "video", size) to src
         }
@@ -782,9 +782,22 @@ object MediaGrab {
             try {
                 if (info.kind == "image") throw Fail("A picture has no sound")
                 val part = File(tmp, "a.part")
-                val from = first.audio ?: first.url
-                val sz = if (first.audio != null) (if (first.asize > 0) first.asize else sizeOf(from, first.headers)) else (if (first.size > 0) first.size else sizeOf(from, first.headers))
-                fastDownload(from, first.headers, part, sz) { n -> val g = got0.addAndGet(n); if (sz > 0) onProgress((g / sz.toFloat() * 0.5f).coerceIn(0f, 0.5f)) }
+                // the sound file first, then every other sound file the site offers for it: an address that is refused (403) is not the end
+                val alts = first.altAudio.map { Triple(it.url, it.size, it.webm) }
+                val cands = if (first.audio != null) listOf(Triple(first.audio, first.asize, first.webm)) + alts else alts + listOf(Triple(first.url, first.size, false))
+                var webmUsed = false; var lastErr: Exception? = null; var got = false
+                for ((u, sz0, wb) in cands) {
+                    try {
+                        got0.set(0)
+                        val sz = if (sz0 > 0) sz0 else sizeOf(u, first.headers)
+                        val tick = { n: Long -> val g = got0.addAndGet(n); if (sz > 0) onProgress((g / sz.toFloat() * 0.5f).coerceIn(0f, 0.5f)) }
+                        // in pieces over several connections; when the site refuses that way, the one plain connection is tried
+                        try { fastDownload(u, first.headers, part, sz, tick) }
+                        catch (e: Fail) { got0.set(0); download(u, first.headers, part, onBytes = tick) }
+                        webmUsed = wb; got = true; break
+                    } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; lastErr = e }
+                }
+                if (!got) throw lastErr ?: Fail("The download failed")
                 // an mp3 with the title, the artist and the picture of the video (if the phone cannot read the sound, it stays the sound as it came)
                 val coverImg = AudioMp3.cover(cover?.takeIf { it.isNotEmpty() } ?: info.thumb) { u -> http.newCall(Request.Builder().url(u).header("User-Agent", DESKTOP).build()).execute().use { r -> if (r.isSuccessful) r.body?.bytes()?.takeIf { it.size < 4_000_000 } else null } }
                 val mp3 = File(tmp, "sound.mp3")
@@ -793,7 +806,7 @@ object MediaGrab {
                 var out = mp3; var ext = "mp3"; var mime = "audio/mpeg"
                 if (made.isFailure) {
                     android.util.Log.w("nook", "mp3", made.exceptionOrNull())
-                    val webm = first.audio != null && first.webm
+                    val webm = webmUsed
                     out = File(tmp, if (webm) "sound.webm" else "sound.m4a")
                     extractAudio(part, out, webm)
                     ext = if (webm) "webm" else "m4a"; mime = if (webm) "audio/webm" else "audio/mp4"

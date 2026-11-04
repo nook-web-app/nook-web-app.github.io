@@ -33,10 +33,11 @@ private fun clock(sec: Int) = if (sec <= 0) "" else if (sec >= 3600) "%d:%02d:%0
 // the card of a link (like the one of a link in a chat) with the picture, the title and, where the caption sits, a blue button that
 // saves the video, gif or picture on this phone
 @Composable
-fun MediaCard(m: LMsg) {
+fun MediaCard(m: LMsg, onTap: () -> Unit = {}, onLong: () -> Unit = {}) {
     val app = LocalApp.current
     val c = LocalNook.current
     val ctx = app.ctx
+    val uri = androidx.compose.ui.platform.LocalUriHandler.current
     val card = m.mcard ?: return
     val shape = RoundedCornerShape(Rad.bubble)
     val st = app.mdl.state[m.id]
@@ -44,7 +45,10 @@ fun MediaCard(m: LMsg) {
     val busy = st != null && st.saved == null && st.error == null
     val of = if (card.optInt("c") > 1) (card.optInt("n") + 1).toString() + "/" + card.optInt("c") else ""
     val meta = listOf(MediaGrab.siteName(card.optString("s"), card.optString("u")), of, clock(card.optInt("d")), MediaGrab.sizeText(card.optLong("z"))).filter { it.isNotEmpty() }.joinToString(" · ")
-    Column(Modifier.fillMaxWidth(0.82f).widthIn(max = 320.dp).clip(shape).background(c.bg2)) {
+    // a double tap on the preview opens the page of the link; a single tap and a hold still reach the message
+    Column(Modifier.fillMaxWidth(0.82f).widthIn(max = 320.dp).clip(shape).background(c.bg2).pointerInput(card) {
+        detectTapGestures(onTap = { onTap() }, onLongPress = { onLong() }, onDoubleTap = { runCatching { uri.openUri(card.optString("u")) } })
+    }) {
         card.optString("i").takeIf { it.isNotEmpty() }?.let { img ->
             Box(Modifier.fillMaxWidth().aspectRatio(1f).background(c.bg2)) { LinkPicBox(img) }
         }
@@ -133,38 +137,22 @@ private fun LinkPicBox(src: String) {
     coil.compose.AsyncImage(req, null, modifier = Modifier.fillMaxSize(), imageLoader = Img.loader(ctx), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
 }
 
-// the message of the command: "/media", the size if one was typed, and the name of the site in the colour of links in my own messages; a tap on the name opens the page
+// the message of the command: "/media", the size if one was typed and the name of each app once (three X links and a TikTok one
+// read "/media x.com tiktok.com"); the links are opened by a double tap on a preview, not from here
 @Composable
 fun MediaCmd(url: String, site: String, quality: String, tap: () -> Unit, onLong: () -> Unit, more: List<String> = emptyList(), folder: String = "") {
     val c = LocalNook.current
-    val uri = androidx.compose.ui.platform.LocalUriHandler.current
     val shape = RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.xs, Rad.bubble)
-    val ann = remember(url, site, quality, more, folder) {
+    val text = remember(url, site, quality, more, folder) {
+        val names = (if (more.size > 1) more else listOf(url)).map { link -> MediaGrab.domain(MediaGrab.site(link) ?: site, link) }.distinct()
         androidx.compose.ui.text.buildAnnotatedString {
-            append(if (quality == "audio") "/audio " else "/media " + (if (quality.isNotEmpty()) "/$quality " else ""))
-            if (folder.isNotEmpty()) append("/folder/$folder ")
-            // one name for each link pasted, each one opens its own page
-            (if (more.size > 1) more else listOf(url)).forEachIndexed { i, link ->
-                if (i > 0) append(" ")
-                pushStringAnnotation("url", link)
-                withStyle(androidx.compose.ui.text.SpanStyle(color = androidx.compose.ui.graphics.Color.White)) { append(MediaGrab.domain(MediaGrab.site(link) ?: site, link)) }
-                pop()
-            }
+            append((if (quality == "audio") "/audio " else "/media " + (if (quality.isNotEmpty()) "/$quality " else "")) + (if (folder.isNotEmpty()) "/folder/$folder " else ""))
+            names.forEachIndexed { i, n -> if (i > 0) append(" "); withStyle(androidx.compose.ui.text.SpanStyle(color = androidx.compose.ui.graphics.Color.White)) { append(n) } }
         }
     }
-    var layout by remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
-    Box(Modifier.clip(shape).background(c.accent).padding(horizontal = 14.dp, vertical = 9.dp)) {
+    Box(Modifier.clip(shape).background(c.accent).padding(horizontal = 14.dp, vertical = 9.dp).pointerInput(Unit) { detectTapGestures(onLongPress = { onLong() }, onTap = { tap() }) }) {
         androidx.compose.material3.Text(
-            ann,
-            Modifier.pointerInput(ann) {
-                detectTapGestures(onLongPress = { onLong() }) { pos ->
-                    val l = layout ?: return@detectTapGestures
-                    val o = l.getOffsetForPosition(pos)
-                    ann.getStringAnnotations("url", o, o).firstOrNull()?.let { runCatching { uri.openUri(it.item) }; return@detectTapGestures }
-                    tap()
-                }
-            },
-            style = androidx.compose.material3.LocalTextStyle.current.copy(fontSize = Fs.base, lineHeight = (15 * 1.38).sp, color = c.on), onTextLayout = { layout = it },
+            text, style = androidx.compose.material3.LocalTextStyle.current.copy(fontSize = Fs.base, lineHeight = (15 * 1.38).sp, color = c.on),
         )
     }
 }

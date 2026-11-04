@@ -212,7 +212,7 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onLong: () -> Unit
         m.mcard?.let { card ->
             val shown = card.optInt("n") == 0 && card.optInt("x") != 1
             if (shown) MediaCmd(card.optString("u"), card.optString("s"), card.optString("q"), tap, onLong, card.optJSONArray("l")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty(), card.optString("f"))
-            Box(Modifier.align(Alignment.Start).padding(top = if (shown) 4.dp else 0.dp)) { MediaCard(m) }
+            Box(Modifier.align(Alignment.Start).padding(top = if (shown) 4.dp else 0.dp)) { MediaCard(m, tap, onLong) }
         }
         m.rpost?.let { Box(Modifier.padding(top = if (m.imgs.isNotEmpty()) 4.dp else 0.dp)) { RCard(it.id, it.u) } }
         m.zpost?.let { Box(Modifier.padding(top = 4.dp)) { ZCard(it) } }

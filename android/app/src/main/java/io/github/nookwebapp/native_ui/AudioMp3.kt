@@ -11,6 +11,7 @@ object AudioMp3 {
     fun make(from: File, to: File, title: String, artist: String, cover: ByteArray?, onProgress: (Float) -> Unit) {
         val ex = MediaExtractor()
         var codec: MediaCodec? = null
+        var enc: PcmSink? = null
         try {
             ex.setDataSource(from.absolutePath)
             val ti = (0 until ex.trackCount).firstOrNull { ex.getTrackFormat(it).getString(MediaFormat.KEY_MIME).orEmpty().startsWith("audio/") } ?: throw MediaGrab.Fail("That video has no sound")
@@ -22,7 +23,6 @@ object AudioMp3 {
             codec.start()
             to.outputStream().buffered(1 shl 16).use { out ->
                 out.write(Mp3.tag(title, artist, cover))
-                var enc: Mp3? = null
                 var channels = 2
                 val info = MediaCodec.BufferInfo()
                 var inputDone = false; var outputDone = false
@@ -46,7 +46,7 @@ object AudioMp3 {
                             if (enc != null) throw MediaGrab.Fail("The sound changed its format")
                             val of = codec.outputFormat
                             val rate = of.getInteger(MediaFormat.KEY_SAMPLE_RATE); channels = of.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-                            enc = Mp3(out, rate, if (channels == 1) 1 else 2)
+                            enc = sink(out, rate, if (channels == 1) 1 else 2)
                         }
                         o >= 0 -> {
                             idle = 0
@@ -55,7 +55,7 @@ object AudioMp3 {
                                 if (enc == null) {
                                     val of = codec.outputFormat
                                     channels = of.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-                                    enc = Mp3(out, of.getInteger(MediaFormat.KEY_SAMPLE_RATE), if (channels == 1) 1 else 2)
+                                    enc = sink(out, of.getInteger(MediaFormat.KEY_SAMPLE_RATE), if (channels == 1) 1 else 2)
                                 }
                                 if (pcm.size < info.size) pcm = ByteArray(info.size)
                                 buf.position(info.offset); buf.limit(info.offset + info.size); buf.get(pcm, 0, info.size)
@@ -63,8 +63,8 @@ object AudioMp3 {
                                     // more than two channels: the first two are used
                                     val frames = info.size / (2 * channels); val two = ByteArray(frames * 4)
                                     for (f in 0 until frames) { System.arraycopy(pcm, f * 2 * channels, two, f * 4, 4) }
-                                    enc.write(two, two.size)
-                                } else enc.write(pcm, info.size)
+                                    enc!!.write(two, two.size)
+                                } else enc!!.write(pcm, info.size)
                             }
                             codec.releaseOutputBuffer(o, false)
                             if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
@@ -75,8 +75,15 @@ object AudioMp3 {
                 enc?.finish() ?: throw MediaGrab.Fail("The sound could not be read")
             }
         } finally {
-            runCatching { codec?.stop() }; runCatching { codec?.release() }; runCatching { ex.release() }
+            runCatching { enc?.close() }; runCatching { codec?.stop() }; runCatching { codec?.release() }; runCatching { ex.release() }
         }
+    }
+
+    // the sound is encoded by several threads at once (pieces joined without a seam, see Mp3Par) where the rate allows it: one thread alone
+    // took longer than the song itself on some phones
+    private fun sink(out: java.io.OutputStream, rate: Int, channels: Int): PcmSink {
+        val workers = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 4)
+        return if (workers > 1 && Mp3Par.ok(rate, channels)) Mp3Par(out, rate, channels, workers) else Mp3(out, rate, channels)
     }
 
     // the cover: the picture of the card (a data address or a link) as a jpeg of at most 600 pixels, null when there is none

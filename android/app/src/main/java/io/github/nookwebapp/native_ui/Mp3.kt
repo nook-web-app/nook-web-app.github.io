@@ -7,9 +7,12 @@ import de.sciss.jump3r.mpg.MPGLib
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 
+/** Where the sound goes: 16 bit samples, interleaved when stereo. */
+interface PcmSink { fun write(pcm: ByteArray, len: Int); fun finish(); fun close() {} }
+
 // Raw sound (16 bit, little endian, interleaved) written as an MP3 file with a tag: title, artist and a cover picture. The encoder is the
 // plain Java port of LAME (nothing from the phone's own codecs), so the file is the same on every phone.
-class Mp3(private val out: OutputStream, private val rate: Int, private val channels: Int, kbps: Int = 192, Q: Int = 7) {
+class Mp3(private val out: OutputStream, private val rate: Int, private val channels: Int, kbps: Int = 192, Q: Int = 7, noReservoir: Boolean = false) : PcmSink {
     private val lame = Lame()
     private val gf: LameGlobalFlags
     private val id3 = ID3Tag()
@@ -40,6 +43,8 @@ class Mp3(private val out: OutputStream, private val rate: Int, private val chan
         gf.num_channels = channels
         gf.brate = kbps
         gf.quality = Q
+        // every frame carries all its own data (needed when pieces encoded apart are joined, see Mp3Par)
+        gf.disable_reservoir = noReservoir
         gf.mode = if (channels == 1) MPEGMode.MONO else MPEGMode.JOINT_STEREO
         gf.write_id3tag_automatic = false
         gf.findReplayGain = false
@@ -48,7 +53,7 @@ class Mp3(private val out: OutputStream, private val rate: Int, private val chan
     }
 
     // pcm: 16 bit samples, interleaved when stereo
-    fun write(pcm: ByteArray, len: Int) {
+    override fun write(pcm: ByteArray, len: Int) {
         val frames = len / (2 * channels)
         if (frames == 0) return
         val l = IntArray(frames); val r = IntArray(frames)
@@ -72,7 +77,7 @@ class Mp3(private val out: OutputStream, private val rate: Int, private val chan
         }
     }
 
-    fun finish() {
+    override fun finish() {
         val got = lame.lame_encode_flush(gf, buf, 0, buf.size)
         if (got > 0) out.write(buf, 0, got)
     }

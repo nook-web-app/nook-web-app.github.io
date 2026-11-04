@@ -765,7 +765,7 @@ object MediaGrab {
     }
 
     // "Save audio as" in Settings: m4a (the sound as it came, instant) or mp3 (made on the phone, takes a while)
-    fun mp3On(ctx: Context) = ctx.getSharedPreferences("media", Context.MODE_PRIVATE).getBoolean("mp3", false)
+    fun mp3On(ctx: Context) = ctx.getSharedPreferences("media", Context.MODE_PRIVATE).getBoolean("mp3", true)
     fun setMp3(ctx: Context, on: Boolean) { ctx.getSharedPreferences("media", Context.MODE_PRIVATE).edit().putBoolean("mp3", on).apply() }
 
     // index: which file of a post with several (0 for the first)

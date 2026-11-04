@@ -764,6 +764,10 @@ object MediaGrab {
         } finally { ex.release() }
     }
 
+    // "Save audio as" in Settings: m4a (the sound as it came, instant) or mp3 (made on the phone, takes a while)
+    fun mp3On(ctx: Context) = ctx.getSharedPreferences("media", Context.MODE_PRIVATE).getBoolean("mp3", false)
+    fun setMp3(ctx: Context, on: Boolean) { ctx.getSharedPreferences("media", Context.MODE_PRIVATE).edit().putBoolean("mp3", on).apply() }
+
     // index: which file of a post with several (0 for the first)
     suspend fun save(ctx: Context, url: String, q: String, index: Int, cover: String? = null, folder: String = "", onProgress: (Float) -> Unit): Saved = withContext(Dispatchers.IO) {
         // only the file to save is worked out (no picture is made for the others)
@@ -799,13 +803,14 @@ object MediaGrab {
                 }
                 if (!got) throw lastErr ?: Fail("The download failed")
                 // an mp3 with the title, the artist and the picture of the video (if the phone cannot read the sound, it stays the sound as it came)
-                val coverImg = AudioMp3.cover(cover?.takeIf { it.isNotEmpty() } ?: info.thumb) { u -> http.newCall(Request.Builder().url(u).header("User-Agent", DESKTOP).build()).execute().use { r -> if (r.isSuccessful) r.body?.bytes()?.takeIf { it.size < 4_000_000 } else null } }
+                val wantMp3 = mp3On(ctx)
+                val coverImg = if (!wantMp3) null else AudioMp3.cover(cover?.takeIf { it.isNotEmpty() } ?: info.thumb) { u -> http.newCall(Request.Builder().url(u).header("User-Agent", DESKTOP).build()).execute().use { r -> if (r.isSuccessful) r.body?.bytes()?.takeIf { it.size < 4_000_000 } else null } }
                 val mp3 = File(tmp, "sound.mp3")
-                val made = runCatching { AudioMp3.make(part, mp3, info.title, info.author.removePrefix("@"), coverImg) { p -> onProgress(0.5f + 0.4f * p) } }
+                val made = if (!wantMp3) Result.failure<Unit>(IllegalStateException("m4a chosen")) else runCatching { AudioMp3.make(part, mp3, info.title, info.author.removePrefix("@"), coverImg) { p -> onProgress(0.5f + 0.4f * p) } }
                 made.exceptionOrNull()?.let { if (it is kotlinx.coroutines.CancellationException) throw it }
                 var out = mp3; var ext = "mp3"; var mime = "audio/mpeg"
                 if (made.isFailure) {
-                    android.util.Log.w("nook", "mp3", made.exceptionOrNull())
+                    if (wantMp3) android.util.Log.w("nook", "mp3", made.exceptionOrNull())
                     val webm = webmUsed
                     out = File(tmp, if (webm) "sound.webm" else "sound.m4a")
                     extractAudio(part, out, webm)
@@ -832,7 +837,7 @@ object MediaGrab {
                     result = androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f)
                 }
                 onProgress(1f)
-                return@withContext Saved(result, if (made.isSuccess) "mp3 saved in " + place.third else "Saved as m4a in " + place.third + ", an mp3 could not be made")
+                return@withContext Saved(result, if (made.isSuccess) "mp3 saved in " + place.third else if (!wantMp3) "Saved in " + place.third else "Saved as m4a in " + place.third + ", an mp3 could not be made")
             } finally { runCatching { tmp.deleteRecursively() } }
         }
         var src = first

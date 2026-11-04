@@ -250,6 +250,15 @@ fun SettingsScreen() {
             Group {
                 SRow(ic("refresh", 22.dp), "Check for updates", "Version $APP_VERSION", last = true) { app.checkUpdate(true) }
             }
+            Sec("Media")
+            Group {
+                val mp3 = ctx?.let { MediaGrab.mp3On(it) } == true
+                SRow(ic("download", 22.dp), "Save audio as", if (mp3) "MP3 (takes a while to make)" else "M4A (saved at once)", last = true) {
+                    val c = ctx ?: return@SRow
+                    MediaGrab.setMp3(c, !mp3); tick++
+                    app.say(if (mp3) "Audio is saved as M4A, at once" else "Audio is made into MP3, it takes a while")
+                }
+            }
             Sec("Legal")
             Group {
                 SRow(ic("eyeoff", 22.dp), "Privacy Policy", "What we collect") { app.go(Route.Legal(false)) }

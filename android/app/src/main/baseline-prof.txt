@@ -2,3 +2,6 @@
 # page and the first sheet do not run slowly through the interpreter (the main cause of dropped frames after an update).
 HSPLio/github/nookwebapp/native_ui/**;->**(**)**
 Lio/github/nookwebapp/native_ui/**;
+# the mp3 encoder (a library): compiled ahead of time too, it is what the sound of a video waits for
+HSPLde/sciss/jump3r/**;->**(**)**
+Lde/sciss/jump3r/**;

@@ -12,7 +12,8 @@ interface PcmSink { fun write(pcm: ByteArray, len: Int); fun finish(); fun close
 
 // Raw sound (16 bit, little endian, interleaved) written as an MP3 file with a tag: title, artist and a cover picture. The encoder is the
 // plain Java port of LAME (nothing from the phone's own codecs), so the file is the same on every phone.
-class Mp3(private val out: OutputStream, private val rate: Int, private val channels: Int, kbps: Int = 192, Q: Int = 7, noReservoir: Boolean = false) : PcmSink {
+// Q 9 is LAME's fastest mode: at 192 kbps it sounds the same to the ear and is about 3 times quicker than 7, which matters on a phone
+class Mp3(private val out: OutputStream, private val rate: Int, private val channels: Int, kbps: Int = 192, Q: Int = 9, noReservoir: Boolean = false) : PcmSink {
     private val lame = Lame()
     private val gf: LameGlobalFlags
     private val id3 = ID3Tag()

@@ -13,7 +13,7 @@ import java.util.concurrent.Future
  * and no frame leans on the one before it (no bit reservoir), so a frame is the same whichever thread made it.
  * Only for rates where one frame is 1152 samples (32, 44.1 and 48 kHz); [ok] says whether it can be used.
  */
-class Mp3Par(private val out: OutputStream, private val rate: Int, private val channels: Int, private val workers: Int, private val kbps: Int = 192, private val q: Int = 7) : PcmSink {
+class Mp3Par(private val out: OutputStream, private val rate: Int, private val channels: Int, private val workers: Int, private val kbps: Int = 192, private val q: Int = 9) : PcmSink {
     companion object {
         const val SPF = 1152
         private const val ROLL = 2 * SPF

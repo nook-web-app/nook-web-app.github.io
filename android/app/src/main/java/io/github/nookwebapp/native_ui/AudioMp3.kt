@@ -82,7 +82,7 @@ object AudioMp3 {
     // the sound is encoded by several threads at once (pieces joined without a seam, see Mp3Par) where the rate allows it: one thread alone
     // took longer than the song itself on some phones
     private fun sink(out: java.io.OutputStream, rate: Int, channels: Int): PcmSink {
-        val workers = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 4)
+        val workers = (Runtime.getRuntime().availableProcessors() - 1).coerceIn(1, 6)
         return if (workers > 1 && Mp3Par.ok(rate, channels)) Mp3Par(out, rate, channels, workers) else Mp3(out, rate, channels)
     }
 

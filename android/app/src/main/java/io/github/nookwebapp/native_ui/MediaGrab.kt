@@ -764,9 +764,8 @@ object MediaGrab {
         } finally { ex.release() }
     }
 
-    // "Save audio as" in Settings: m4a (the sound as it came, instant) or mp3 (made on the phone, takes a while)
-    fun mp3On(ctx: Context) = ctx.getSharedPreferences("media", Context.MODE_PRIVATE).getBoolean("mp3", true)
-    fun setMp3(ctx: Context, on: Boolean) { ctx.getSharedPreferences("media", Context.MODE_PRIVATE).edit().putBoolean("mp3", on).apply() }
+    // audio is always made into an mp3 (the sound as it came is kept only when the phone cannot make one)
+    fun mp3On(@Suppress("UNUSED_PARAMETER") ctx: Context) = true
 
     // index: which file of a post with several (0 for the first)
     suspend fun save(ctx: Context, url: String, q: String, index: Int, cover: String? = null, folder: String = "", onProgress: (Float) -> Unit): Saved = withContext(Dispatchers.IO) {

@@ -137,4 +137,14 @@ class MediaGrabTest {
         assertEquals("2k", MediaGrab.cleanCard(JSONObject(ok.toString()).put("q", "2k"))!!.optString("q"))
         assertEquals("", MediaGrab.cleanCard(JSONObject(ok.toString()).put("q", "8k"))!!.optString("q"))
     }
+
+    @Test fun gluedLinksAreSeparated() {
+        val l = MediaGrab.commandLinks(MediaGrab.normalize("/media https://x.com/a/status/1https://www.tiktok.com/@b/video/2https://youtu.be/jNQXAC9IVRw"))!!
+        assertEquals(3, l.size)
+        assertEquals(listOf("x", "tiktok", "youtube"), l.map { MediaGrab.site(it) })
+        assertEquals(1, MediaGrab.commandLinks(MediaGrab.normalize("/audiohttps://youtu.be/jNQXAC9IVRw"))!!.size)
+        assertEquals(1, MediaGrab.commandLinks(MediaGrab.normalize("/media/2khttps://youtu.be/jNQXAC9IVRw"))!!.size)
+        // an ordinary message is left alone
+        assertEquals("look at this https://a.com/xhttps://b.com", MediaGrab.normalize("look at this https://a.com/xhttps://b.com"))
+    }
 }

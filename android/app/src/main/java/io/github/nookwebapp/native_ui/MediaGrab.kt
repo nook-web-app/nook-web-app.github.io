@@ -78,7 +78,14 @@ object MediaGrab {
     fun folder(text: String): String = text.trim().split(Regex("\\s+")).firstNotNullOfOrNull { FOLDER.find(it)?.groupValues?.get(1)?.lowercase() }?.let { ALIAS[it] ?: it }?.takeIf { it in FOLDERS || it == "default" } ?: ""
     private val ALIAS = mapOf("downloads" to "download", "video" to "movies", "videos" to "movies", "picture" to "pictures", "photos" to "pictures", "audio" to "music")
     // "/media/folder/download" (no space) is the same as "/media /folder/download"
-    fun normalize(text: String): String = text.trim().replace(Regex("^/(media|audio)(/folder/)", RegexOption.IGNORE_CASE)) { "/" + it.groupValues[1] + " " + it.groupValues[2] }
+    // links pasted with no space between them (or right after the command) are told apart too: a space goes in front of every "http://" or
+    // "https://" that follows something other than a space or a link's own "=", "?", "&", ":" or "%" (as in "?u=https://...")
+    private val GLUED = Regex("(?<=[^\\s=?&:%])(?=https?://)", RegexOption.IGNORE_CASE)
+    fun normalize(text: String): String {
+        val t = text.trim().replace(Regex("^/(media|audio)(?=/)", RegexOption.IGNORE_CASE)) { "/" + it.groupValues[1] + " " }
+        // only a command is touched, never an ordinary message
+        return if (Regex("^/(media|audio)(?![\\w])", RegexOption.IGNORE_CASE).containsMatchIn(t) || Regex("^/(media|audio)(?=https?://)", RegexOption.IGNORE_CASE).containsMatchIn(t)) t.replace(GLUED, " ") else t
+    }
     // the folder kept for later: typed once as "/media /folder/download" (no link), used by every download after it ("/folder/default" clears it)
     fun defaultFolder(ctx: Context, audio: Boolean): String = ctx.getSharedPreferences("mdl", 0).getString(if (audio) "folder_audio" else "folder_media", "").orEmpty()
     fun setDefaultFolder(ctx: Context, audio: Boolean, folder: String) { ctx.getSharedPreferences("mdl", 0).edit().putString(if (audio) "folder_audio" else "folder_media", if (folder == "default") "" else folder).apply() }

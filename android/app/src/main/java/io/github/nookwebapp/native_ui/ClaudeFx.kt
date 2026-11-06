@@ -132,32 +132,38 @@ object ClaudeFx {
         app.fxAt = now
     }
 
-    // who jumps when: a burst of four at the start, then one (sometimes two) every 0.45 to 1 s until second 36, each in the air 1.7 to 3.2 seconds
+    // who jumps when: a burst of four at the start, then one (sometimes two) every 0.5 to 0.8 s until second 36, each in the air 1.7 to 3.2 seconds
     fun plan(seed: Long): List<Flyer> {
         val r = Random(seed)
         val out = ArrayList<Flyer>()
+        // the places they come from are dealt like cards, so they are spread over the left, the right and the whole bottom
+        // instead of landing in one corner: 0 left, 1 right, 2 and 3 bottom, 4 bottom going straight up
+        val kinds = ArrayList<Int>(); val slots = ArrayList<Int>()
+        fun nextKind(): Int { if (kinds.isEmpty()) { kinds.addAll(listOf(0, 0, 1, 1, 2, 2, 3, 4)); kinds.shuffle(r) }; return kinds.removeAt(kinds.size - 1) }
+        fun nextSlot(): Float { if (slots.isEmpty()) { slots.addAll(0..5); slots.shuffle(r) }; return (slots.removeAt(slots.size - 1) + 0.15f + r.nextFloat() * 0.7f) / 6f }
         fun add(t: Long) {
-            val s = r.nextInt(6)   // 0 to 2: from the bottom, 3: left side, 4: right side, 5: from the bottom going straight up
+            val s = nextKind()
             val dur = 1700L + r.nextInt(1500)
             val size = 40f + r.nextFloat() * 56f
             val sprite = if (r.nextInt(100) < 45) STATIC_COUNT + r.nextInt(MOVING.size) else r.nextInt(STATIC_COUNT)
             val spin = (60 + r.nextInt(260)) * (if (r.nextBoolean()) 1f else -1f)
             val phase = r.nextInt(2000)
             out.add(when (s) {
-                3 -> Flyer(t, dur, sprite, size, -0.15f, 0.3f + r.nextFloat() * 0.9f, 0.15f + r.nextFloat() * 0.85f, 1.25f, 0.1f + r.nextFloat() * 0.55f, spin, phase)
-                4 -> Flyer(t, dur, sprite, size, 1.15f, 0.7f - r.nextFloat() * 0.9f, 0.15f + r.nextFloat() * 0.85f, 1.25f, 0.1f + r.nextFloat() * 0.55f, spin, phase)
-                5 -> { val x0 = 0.05f + r.nextFloat() * 0.9f; Flyer(t, dur, sprite, size, x0, x0 + (r.nextFloat() - 0.5f) * 0.1f, 1.15f, 1.15f, 0.6f + r.nextFloat() * 0.6f, spin, phase) }
+                0 -> Flyer(t, dur, sprite, size, -0.15f, 0.25f + r.nextFloat() * 0.85f, 0.15f + r.nextFloat() * 0.85f, 1.25f, 0.1f + r.nextFloat() * 0.55f, spin, phase)
+                1 -> Flyer(t, dur, sprite, size, 1.15f, 0.75f - r.nextFloat() * 0.85f, 0.15f + r.nextFloat() * 0.85f, 1.25f, 0.1f + r.nextFloat() * 0.55f, spin, phase)
+                4 -> { val x0 = nextSlot(); Flyer(t, dur, sprite, size, x0, x0 + (r.nextFloat() - 0.5f) * 0.1f, 1.15f, 1.15f, 0.6f + r.nextFloat() * 0.6f, spin, phase) }
                 else -> {
-                    val x0 = -0.05f + r.nextFloat() * 1.1f
-                    Flyer(t, dur, sprite, size, x0, (x0 + (r.nextFloat() - 0.5f) * 1.3f).coerceIn(-0.2f, 1.2f), 1.15f, 1.15f, 0.4f + r.nextFloat() * 0.7f, spin, phase)
+                    val x0 = nextSlot()
+                    val dx = (0.15f + r.nextFloat() * 0.5f) * (if (r.nextBoolean()) 1f else -1f)
+                    Flyer(t, dur, sprite, size, x0, (x0 + dx).coerceIn(-0.2f, 1.2f), 1.15f, 1.15f, 0.4f + r.nextFloat() * 0.7f, spin, phase)
                 }
             })
         }
         for (i in 0 until 4) add(i * 60L)
-        var t = 600L
+        var t = 500L
         while (t < 36_300L) {
             repeat(if (r.nextInt(5) == 0) 2 else 1) { add(t) }
-            t += 450L + r.nextInt(600)
+            t += 500L + r.nextInt(300)
         }
         return out
     }

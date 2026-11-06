@@ -29,6 +29,9 @@ class ClaudeFxTest {
         val p = ClaudeFx.plan(7)
         assertTrue(p.count { it.at < 400 } >= 4)
         // not too many: about one every 3/4 of a second
-        assertTrue(p.size in 40..90)
+        assertTrue(p.size in 50..100)
+        // spread out: from the left, the right and all over the bottom
+        assertTrue(p.count { it.sx < 0f } >= 8 && p.count { it.sx > 1f } >= 8)
+        assertTrue(p.filter { it.sx in 0f..1f }.map { (it.sx * 3).toInt() }.toSet().size == 3)
     }
 }

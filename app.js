@@ -292,7 +292,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.38.2";
+const APP_VERSION = "3.38.3";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1036,19 +1036,25 @@ function claudeFly() {
   let seed = Date.now() >>> 0;
   const rnd = () => { seed = (seed + 0x6D2B79F5) >>> 0; let t = seed; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
   const flyers = [];
+  // the places they come from are dealt like cards, so they are spread over the left, the right and the whole bottom instead of landing in
+  // one corner: 0 left, 1 right, 2 and 3 bottom, 4 bottom going straight up
+  const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  let kinds = [], slots = [];
+  const nextKind = () => { if (!kinds.length) kinds = shuffle([0, 0, 1, 1, 2, 2, 3, 4]); return kinds.pop(); };
+  const nextSlot = () => { if (!slots.length) slots = shuffle([0, 1, 2, 3, 4, 5]); return (slots.pop() + 0.15 + rnd() * 0.7) / 6; };
   const add = t => {
-    const s = Math.floor(rnd() * 6);
+    const s = nextKind();
     const f = { at: t, dur: 1700 + Math.floor(rnd() * 1500), size: 40 + rnd() * 56, spin: (60 + Math.floor(rnd() * 260)) * (rnd() < 0.5 ? 1 : -1), phase: Math.floor(rnd() * 2000),
       sprite: rnd() < 0.45 ? CLAUDE_STATIC + Math.floor(rnd() * (CLAUDE_SPRITES.length - CLAUDE_STATIC)) : Math.floor(rnd() * CLAUDE_STATIC) };
-    if (s === 3) Object.assign(f, { sx: -0.15, ex: 0.3 + rnd() * 0.9, sy: 0.15 + rnd() * 0.85, ey: 1.25, apex: 0.1 + rnd() * 0.55 });
-    else if (s === 4) Object.assign(f, { sx: 1.15, ex: 0.7 - rnd() * 0.9, sy: 0.15 + rnd() * 0.85, ey: 1.25, apex: 0.1 + rnd() * 0.55 });
-    else if (s === 5) { const x0 = 0.05 + rnd() * 0.9; Object.assign(f, { sx: x0, ex: x0 + (rnd() - 0.5) * 0.1, sy: 1.15, ey: 1.15, apex: 0.6 + rnd() * 0.6 }); }
-    else { const x0 = -0.05 + rnd() * 1.1; Object.assign(f, { sx: x0, ex: Math.max(-0.2, Math.min(1.2, x0 + (rnd() - 0.5) * 1.3)), sy: 1.15, ey: 1.15, apex: 0.4 + rnd() * 0.7 }); }
+    if (s === 0) Object.assign(f, { sx: -0.15, ex: 0.25 + rnd() * 0.85, sy: 0.15 + rnd() * 0.85, ey: 1.25, apex: 0.1 + rnd() * 0.55 });
+    else if (s === 1) Object.assign(f, { sx: 1.15, ex: 0.75 - rnd() * 0.85, sy: 0.15 + rnd() * 0.85, ey: 1.25, apex: 0.1 + rnd() * 0.55 });
+    else if (s === 4) { const x0 = nextSlot(); Object.assign(f, { sx: x0, ex: x0 + (rnd() - 0.5) * 0.1, sy: 1.15, ey: 1.15, apex: 0.6 + rnd() * 0.6 }); }
+    else { const x0 = nextSlot(), dx = (0.15 + rnd() * 0.5) * (rnd() < 0.5 ? 1 : -1); Object.assign(f, { sx: x0, ex: Math.max(-0.2, Math.min(1.2, x0 + dx)), sy: 1.15, ey: 1.15, apex: 0.4 + rnd() * 0.7 }); }
     flyers.push(f);
   };
-  // a burst of four at the start, then one (sometimes two) every 0.45 to 1 s until second 36, each in the air 1.7 to 3.2 seconds
+  // a burst of four at the start, then one (sometimes two) every 0.5 to 0.8 s until second 36, each in the air 1.7 to 3.2 seconds
   for (let i = 0; i < 4; i++) add(i * 60);
-  for (let t = 600; t < 36300; t += 450 + Math.floor(rnd() * 600)) for (let n = rnd() < 0.2 ? 2 : 1; n > 0; n--) add(t);
+  for (let t = 500; t < 36300; t += 500 + Math.floor(rnd() * 300)) for (let n = rnd() < 0.2 ? 2 : 1; n > 0; n--) add(t);
   // every frame of every drawing as horizontal runs of one colour: fewer rectangles in every frame
   const sprites = CLAUDE_SPRITES.map(d => ({ d, cycle: d.ms.reduce((a, b) => a + b, 0), frames: d.frames.map(rows => {
     const out = [];

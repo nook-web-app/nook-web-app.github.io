@@ -72,7 +72,6 @@ fun ConvScreen(id: String) {
                 IB("dots") {
                     app.open(listOf(
                         SheetItem("Rename chat", "edit") { app.panels.add(Panel.RenameChat(chat)) },
-                        SheetItem("Clear messages", "trash", danger = true) { app.confirm("Clear every message in this chat?", "Clear") { chat.msgs.clear(); app.persist() } },
                         SheetItem("Delete chat", "close", danger = true) { app.confirm("Delete this chat?", "Delete") { s.chats.remove(chat); app.persist(); app.pop() } },
                     ))
                 }

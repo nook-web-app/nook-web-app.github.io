@@ -1,1 +1,21 @@
-{"permissions":{"allow":["Bash(git push:*)"]}}
+{
+  "permissions": {
+    "allow": [
+      "Bash(git push:*)"
+    ]
+  },
+  "spinnerVerbs": {
+    "mode": "replace",
+    "verbs": [
+      "smashing keyboard :3",
+      "studying :(",
+      "burning gpus >×<",
+      "replacing broken keyboard :<",
+      "buying new monitors :p",
+      "eating snacks :D",
+      "killing bugs >:3",
+      "opp no one saw this one qwq",
+      "67 or 69?"
+    ]
+  }
+}

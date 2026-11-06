@@ -71,6 +71,7 @@ fun NookApp(app: AppState) {
                 PostLockedHost(app)
                 OfflineHost(app)
                 ToastHost(app)
+                ClaudeFxLayer(app)
             }
         }
     }

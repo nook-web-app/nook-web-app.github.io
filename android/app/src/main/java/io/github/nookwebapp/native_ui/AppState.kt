@@ -89,6 +89,8 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     var drawer by mutableStateOf(false)
     val panels = mutableStateListOf<Panel>()
     var toast by mutableStateOf<Toast?>(null)
+    // when the "/claude" mascots started (0 when they are not here), see ClaudeFx
+    var fxAt by mutableLongStateOf(0L)
     var viewer by mutableStateOf<Viewer?>(null)
     val warns = mutableStateListOf<Warn>()
     // a post of Zenith opened from a chat

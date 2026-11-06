@@ -292,7 +292,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.37.11";
+const APP_VERSION = "3.38.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -998,6 +998,79 @@ function toast(m, act) {
   toastEl.classList.add("show");
   clearTimeout(toastT);
   toastT = setTimeout(() => toastEl.classList.remove("show"), act ? 5000 : 1900);
+}
+// "/claude": the little mascots jump in from the bottom and from both sides of the screen, in arcs, for 40 seconds in all (not 40
+// seconds for each one). The bottom is the top of the keyboard while it is open. A second "/claude" is refused until the first is over.
+// Nothing is sent: it is a command, like "/media" in the app. The drawings are the same as in the app: 13 x 8 cells, o body, k eyes,
+// h hearts, s stars, t a tear, b a blush.
+const CLAUDE_MOODS = [["..ooooooooo..", "..ooooooooo..", "ooookoookoooo", "ooookoookoooo", "..ooooooooo..", "..ooooooooo..", "..o.o...o.o..", "..o.o...o.o.."], ["..ooooooooo..", "..ooooooooo..", "ooookoookoooo", "oookokokokooo", "..ooooooooo..", "..ooooooooo..", "..o.o...o.o..", "..o.o...o.o.."], ["..ooooooooo..", "..ooooooooo..", "ooookoooooooo", "ooookookkkooo", "..ooooooooo..", "..ooooooooo..", "..o.o...o.o..", "..o.o...o.o.."], ["..ooooooooo..", "..ooooooooo..", "ooohohohohooo", "ooohhhohhhooo", "..oohooohoo..", "..ooooooooo..", "..o.o...o.o..", "..o.o...o.o.."], ["..ooooooooo..", "..oosooosoo..", "ooosssosssooo", "oooosooosoooo", "..ooooooooo..", "..ooooooooo..", "..o.o...o.o..", "..o.o...o.o.."], ["..ooooooooo..", "..ooooooooo..", "ooookoookoooo", "ooookoookoooo", "..bbooooobb..", "..ooooooooo..", "..o.o...o.o..", "..o.o...o.o.."], ["..ooooooooo..", "..ooooooooo..", "ooookoookoooo", "ooookokokoooo", "..ooookoooo..", "..ooooooooo..", "..o.o...o.o..", "..o.o...o.o.."], ["..ooooooooo..", "..okoooooko..", "ooookoookoooo", "ooookokokoooo", "..oookokooo..", "..ooooooooo..", "..o.o...o.o..", "..o.o...o.o.."], ["..ooooooooo..", "..ooooooooo..", "ooookoookoooo", "ooookokokoooo", "..ootkokooo..", "..ooooooooo..", "..o.o...o.o..", "..o.o...o.o.."], ["..ooooooooo..", "..ooooooooo..", "oooookoookooo", "oooookoookooo", "..ooooooooo..", "..ooooooooo..", "..o.o...o.o..", "..o.o...o.o.."]];
+const CLAUDE_PAL = { o: "#D97757", k: "#1D1B1A", h: "#EE5A7A", s: "#FFD54A", t: "#7CC4FF", b: "#F29A9A" };
+const CLAUDE_MS = 40000;
+let claudeUntil = 0;
+// false when the text is not the command; true when it was taken (the caller stops; the text stays only when it was refused)
+function claudeCmd(ta, done) {
+  const t = ta.value.trim();
+  if (/\/claude[\s\S]*\/claude/i.test(t)) { toast("Write /claude only once"); return true; }
+  if (!/^\/claude$/i.test(t)) return false;
+  if (Date.now() < claudeUntil) { toast("Claude is already here, wait until he is gone"); return true; }
+  ta.value = "";
+  if (done) done();
+  claudeFly();
+  return true;
+}
+function claudeFly() {
+  claudeUntil = Date.now() + CLAUDE_MS + 1500;
+  // a small seeded random, so the plan is made once and the frames only move things
+  let seed = Date.now() >>> 0;
+  const rnd = () => { seed = (seed + 0x6D2B79F5) >>> 0; let t = seed; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const flyers = [];
+  for (let t = 0; t < 35500; t += 450 + Math.floor(rnd() * 600)) {
+    const side = Math.floor(rnd() * 5), n = rnd() < 0.2 ? 2 : 1;
+    for (let i = 0; i < n; i++) {
+      const s = n === 2 ? (i + side) % 5 : side;
+      const f = { at: t, dur: 3000 + Math.floor(rnd() * 1500), mood: Math.floor(rnd() * CLAUDE_MOODS.length), size: 44 + rnd() * 44, tilt: (12 + Math.floor(rnd() * 28)) * (rnd() < 0.5 ? 1 : -1) };
+      if (s === 2) Object.assign(f, { sx: -0.12, ex: 0.35 + rnd() * 0.8, sy: 0.45 + rnd() * 0.5, ey: 1.2, apex: 0.2 + rnd() * 0.35 });
+      else if (s === 3) Object.assign(f, { sx: 1.12, ex: 0.65 - rnd() * 0.8, sy: 0.45 + rnd() * 0.5, ey: 1.2, apex: 0.2 + rnd() * 0.35 });
+      else { const x0 = 0.05 + rnd() * 0.9; Object.assign(f, { sx: x0, ex: Math.max(-0.1, Math.min(1.1, x0 + (rnd() - 0.5) * 0.9)), sy: 1.12, ey: 1.12, apex: 0.35 + rnd() * 0.5 }); }
+      flyers.push(f);
+    }
+  }
+  // every drawing as horizontal runs of one colour: fewer rectangles in every frame
+  const runs = CLAUDE_MOODS.map(rows => {
+    const out = [];
+    rows.forEach((row, y) => { let x = 0; while (x < row.length) { const ch = row[x]; if (ch === ".") { x++; continue; } let e = x; while (e + 1 < row.length && row[e + 1] === ch) e++; out.push([x, y, e - x + 1, CLAUDE_PAL[ch]]); x = e + 1; } });
+    return out;
+  });
+  const cv = document.createElement("canvas");
+  cv.style.cssText = "position:fixed;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:2147483000";
+  cv.setAttribute("aria-hidden", "true");
+  document.body.append(cv);
+  const ctx = cv.getContext("2d");
+  const t0 = performance.now();
+  const frame = now => {
+    const ms = now - t0;
+    const dpr = window.devicePixelRatio || 1, w = window.innerWidth, h = window.innerHeight;
+    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    // the floor is the top of the keyboard while it is open
+    const vv = window.visualViewport, floor = vv ? vv.offsetTop + vv.height : h;
+    for (const f of flyers) {
+      const e = ms - f.at;
+      if (e < 0 || e > f.dur) continue;
+      const p = e / f.dur;
+      const cx = (f.sx + (f.ex - f.sx) * p) * w, cy = (f.sy + (f.ey - f.sy) * p - 4 * f.apex * p * (1 - p)) * floor;
+      const cell = f.size / 13;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate((f.tilt * (2 * p - 1)) * Math.PI / 180);
+      for (const [x, y, len, col] of runs[f.mood]) { ctx.fillStyle = col; ctx.fillRect(-f.size / 2 + x * cell, -cell * 4 + y * cell, len * cell + 0.6, cell + 0.6); }
+      ctx.restore();
+    }
+    if (ms < CLAUDE_MS) requestAnimationFrame(frame);
+    else { cv.remove(); claudeUntil = 0; }
+  };
+  requestAnimationFrame(frame);
 }
 function dismiss(...els) {
   els.forEach(e => e.classList.add("out"));
@@ -2053,6 +2126,7 @@ function convV(c) {
   const att = pickBtn("image", "Add photo", false, f => addMedia(f, pend, jobs, 4, draw), false, f => addMedia(f, pend, jobs, 4, draw));
   ta.addEventListener("input", sync);
   send.addEventListener("click", () => {
+    if (!pend.length && claudeCmd(ta, () => { chat.draft = ""; persistDraft(); sync(); })) return;
     const v = cleanText(ta.value.trim());
     if ((!v && !pend.length) || jobs.length) return;
     const m = { id: uid(), text: v, t: Date.now(), imgs: pend.splice(0) };
@@ -7532,6 +7606,7 @@ function dmV(c) {
     } catch (e) { nb.remove(); toast("Could not send Zenith's answer"); }
   };
   const doSend = async () => {
+    if (!pend.length && !busy && claudeCmd(ta, () => { sendTyping(c.id, false); sync(); })) return;
     const text = cleanText(ta.value.trim());
     if ((!text && !pend.length) || jobs.length || busy || locked) return;
     busy = true;

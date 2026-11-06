@@ -139,6 +139,7 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
             )
             val can = text.isNotBlank() || pend.isNotEmpty()
             Box(Modifier.size(42.dp).alpha(if (can) 1f else 0.45f).clip(CircleShape).background(c.fill).pressTap(CircleShape, enabled = can) {
+                if (pend.isEmpty()) { val fx = ClaudeFx.handle(app, text); if (fx != 0) { if (fx == 1) setText(""); return@pressTap } }
                 // "/media <link>" in a note: the card of the video is made instead of a message with the words
                 // (any chat of the notes list, also one that holds an answer of Zenith: earlier messages never stop the command)
                 val cmd = MediaGrab.normalize(text)

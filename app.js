@@ -292,7 +292,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.38.1";
+const APP_VERSION = "3.38.2";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1046,9 +1046,9 @@ function claudeFly() {
     else { const x0 = -0.05 + rnd() * 1.1; Object.assign(f, { sx: x0, ex: Math.max(-0.2, Math.min(1.2, x0 + (rnd() - 0.5) * 1.3)), sy: 1.15, ey: 1.15, apex: 0.4 + rnd() * 0.7 }); }
     flyers.push(f);
   };
-  // a burst of ten at the start, then one to three every 0.1 to 0.4 s until second 36, each in the air 1.7 to 3.2 seconds
-  for (let i = 0; i < 10; i++) add(i * 30);
-  for (let t = 300; t < 36300; t += 100 + Math.floor(rnd() * 300)) for (let n = 1 + (rnd() < 1 / 3 ? 1 : 0) + (rnd() < 1 / 6 ? 1 : 0); n > 0; n--) add(t);
+  // a burst of four at the start, then one (sometimes two) every 0.45 to 1 s until second 36, each in the air 1.7 to 3.2 seconds
+  for (let i = 0; i < 4; i++) add(i * 60);
+  for (let t = 600; t < 36300; t += 450 + Math.floor(rnd() * 600)) for (let n = rnd() < 0.2 ? 2 : 1; n > 0; n--) add(t);
   // every frame of every drawing as horizontal runs of one colour: fewer rectangles in every frame
   const sprites = CLAUDE_SPRITES.map(d => ({ d, cycle: d.ms.reduce((a, b) => a + b, 0), frames: d.frames.map(rows => {
     const out = [];

@@ -132,7 +132,7 @@ object ClaudeFx {
         app.fxAt = now
     }
 
-    // who jumps when: a burst of ten at the start, then one to three every 0.1 to 0.4 s until second 36, each in the air 1.7 to 3.2 seconds
+    // who jumps when: a burst of four at the start, then one (sometimes two) every 0.45 to 1 s until second 36, each in the air 1.7 to 3.2 seconds
     fun plan(seed: Long): List<Flyer> {
         val r = Random(seed)
         val out = ArrayList<Flyer>()
@@ -153,11 +153,11 @@ object ClaudeFx {
                 }
             })
         }
-        for (i in 0 until 10) add(i * 30L)
-        var t = 300L
+        for (i in 0 until 4) add(i * 60L)
+        var t = 600L
         while (t < 36_300L) {
-            repeat(1 + (if (r.nextInt(3) == 0) 1 else 0) + (if (r.nextInt(6) == 0) 1 else 0)) { add(t) }
-            t += 100L + r.nextInt(300)
+            repeat(if (r.nextInt(5) == 0) 2 else 1) { add(t) }
+            t += 450L + r.nextInt(600)
         }
         return out
     }

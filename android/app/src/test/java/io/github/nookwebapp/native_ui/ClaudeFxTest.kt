@@ -27,7 +27,8 @@ class ClaudeFxTest {
 
     @Test fun itStartsWithABurst() {
         val p = ClaudeFx.plan(7)
-        assertTrue(p.count { it.at < 400 } >= 10)
-        assertTrue(p.size > 100)
+        assertTrue(p.count { it.at < 400 } >= 4)
+        // not too many: about one every 3/4 of a second
+        assertTrue(p.size in 40..90)
     }
 }

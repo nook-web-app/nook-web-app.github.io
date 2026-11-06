@@ -9,11 +9,13 @@ import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -192,13 +194,23 @@ fun Pic(path: String?, modifier: Modifier = Modifier, want: Int = 1280, scale: C
         return
     }
     var ok by remember(path) { mutableStateOf(false) }
+    // a photo that cannot be loaded stops shimmering and says so; a tap tries again (it used to shimmer for ever)
+    var attempt by remember(path) { mutableIntStateOf(0) }
+    var failed by remember(path, attempt) { mutableStateOf(false) }
     val ctx = androidx.compose.ui.platform.LocalContext.current
-    val req = remember(path, want, small) {
+    val req = remember(path, want, small, attempt) {
         coil.request.ImageRequest.Builder(ctx).data(Img.model(path)).apply { if (small) size(want) }.build()
+    }
+    if (failed) {
+        Box(modifier.background(c.bg2).tap { attempt++ }, contentAlignment = androidx.compose.ui.Alignment.Center) {
+            T("Could not load this photo. Tap to try again", Fs.sm, color = c.muted, align = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.padding(androidx.compose.ui.unit.Dp(16f)))
+        }
+        return
     }
     coil.compose.AsyncImage(
         req, null, modifier = if (ok || bare) modifier else modifier.background(c.bg2).shimmer(), imageLoader = Img.loader(ctx), contentScale = scale,
         filterQuality = if (smooth) androidx.compose.ui.graphics.FilterQuality.High else androidx.compose.ui.graphics.FilterQuality.Low,
+        onError = { failed = true },
         onSuccess = { st: coil.compose.AsyncImagePainter.State.Success ->
             ok = true
             val d = st.result.drawable

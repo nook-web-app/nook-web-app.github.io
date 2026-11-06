@@ -723,7 +723,10 @@ suspend fun Online.syncRows(l: LiveDm, rows0: List<JSONObject>, prune: Boolean, 
     changed.forEach { r -> val old = have[r.id] ?: return@forEach; val at = l.rows.indexOf(old); if (at >= 0) l.rows[at] = r }
     fresh.forEach { m ->
         if (l.rows.any { it.id == m.id }) return@forEach
-        if (m.sender != me && !initial) { m.fresh = true; l.typing = false }
+        if (m.sender != me && !initial) {
+            m.fresh = true; l.typing = false
+            if (m.text?.trim().equals("/claude", true)) ClaudeFx.received(app, m.t)
+        }
         val at = l.rows.indexOfFirst { it.t > m.t && !it.tmp }
         if (at < 0) l.rows.add(m) else l.rows.add(at, m)
     }

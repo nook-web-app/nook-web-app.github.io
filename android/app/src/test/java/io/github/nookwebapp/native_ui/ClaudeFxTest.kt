@@ -14,9 +14,20 @@ class ClaudeFxTest {
         }
     }
 
-    @Test fun everyDrawingIsThirteenByEightAndHasARun() {
-        assertEquals(10, ClaudeFx.MOODS.size)
-        ClaudeFx.MOODS.forEach { rows -> assertEquals(8, rows.size); rows.forEach { assertEquals(13, it.length) } }
-        ClaudeFx.RUNS.forEach { assertTrue(it.isNotEmpty()) }
+    @Test fun everyDrawingHasItsSizeAndFrames() {
+        assertEquals(15, ClaudeFx.SPRITES.size)
+        ClaudeFx.SPRITES.forEach { s ->
+            assertEquals(s.def.frames.size, s.def.ms.size)
+            s.def.frames.forEach { rows -> assertEquals(s.def.rows, rows.size); rows.forEach { assertEquals(s.def.cols, it.length) } }
+            s.frames.forEach { assertTrue(it.isNotEmpty()) }
+        }
+        // some of them move
+        assertTrue(ClaudeFx.SPRITES.count { it.frames.size > 1 } >= 5)
+    }
+
+    @Test fun itStartsWithABurst() {
+        val p = ClaudeFx.plan(7)
+        assertTrue(p.count { it.at < 400 } >= 10)
+        assertTrue(p.size > 100)
     }
 }

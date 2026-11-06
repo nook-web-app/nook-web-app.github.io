@@ -233,7 +233,8 @@ private fun DmDock(id: String, l: LiveDm) {
             )
             val can = !busy && !off && (text.isNotBlank() || pend.isNotEmpty())
             Box(Modifier.size(42.dp).alpha(if (can) 1f else 0.45f).clip(CircleShape).background(c.fill).pressTap(CircleShape, enabled = can) {
-                if (pend.isEmpty()) { val fx = ClaudeFx.handle(app, text); if (fx != 0) { if (fx == 1) setText(""); return@pressTap } }
+                // "/claude" is sent like any message, and starts the mascots here at once (one every 30 seconds)
+                if (pend.isEmpty() && ClaudeFx.handle(app, text, send = true) == 2) return@pressTap
                 val t = cleanText(text.trim()); val srcs = pend.toList()
                 busy = true; setText(""); pend.clear()
                 // the app's own scope and the keep-alive: leaving the chat or the app never cancels a message on its way

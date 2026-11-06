@@ -229,6 +229,11 @@ fun otherSheet(app: AppState, p: LPost) {
     ), "More")
 }
 
+// an own photo whose copy on this phone is gone is drawn from the link the server keeps for it
+fun shownImgs(p: LPost): List<String> = p.imgs.mapIndexed { i, s ->
+    if (s.startsWith("/") && !java.io.File(s).exists()) p.media.getOrNull(i)?.takeIf { it.startsWith("http") } ?: s else s
+}
+
 // .imgs: one photo at its own shape (at most min(460dp, 60% of the screen) tall), two side by side, three with the first
 // one tall, four in a square grid, more in two columns of squares; 3dp gaps, a 1dp line and rounded corners
 @Composable
@@ -317,7 +322,7 @@ fun PostCard(p: LPost, lab: String? = null, pin: Boolean = false, replyTo: Boole
             }
             val txt = remember(p.text, p.imgs) { cardless(p) }
             if (txt.isNotEmpty()) Tx(txt, modifier = Modifier.probe("text:" + p.id), onTap = open, onLong = hold, edited = p.edited)
-            if (p.imgs.isNotEmpty()) ImgGrid(p.imgs) else remember(p.text) { firstUrl(p.text) }?.let { LinkCard(it) }
+            if (p.imgs.isNotEmpty()) ImgGrid(remember(p.imgs, p.media) { shownImgs(p) }) else remember(p.text) { firstUrl(p.text) }?.let { LinkCard(it) }
             if (!compact) Acts(p, nc = nc)
         }
     }
@@ -366,7 +371,7 @@ fun MainPost(p: LPost) {
         }
         val txt = cardless(p)
         if (txt.isNotEmpty()) Tx(txt, big = true, modifier = Modifier.padding(top = 12.dp), edited = p.edited)
-        if (p.imgs.isNotEmpty()) ImgGrid(p.imgs, whenText(p.t)) else firstUrl(p.text)?.let { LinkCard(it) }
+        if (p.imgs.isNotEmpty()) ImgGrid(remember(p.imgs, p.media) { shownImgs(p) }, whenText(p.t)) else firstUrl(p.text)?.let { LinkCard(it) }
         T(whenText(p.t), Fs.md, color = c.muted, modifier = Modifier.padding(top = 12.dp, bottom = 12.dp))
     }
     if (p.saved) Row(Modifier.padding(horizontal = 16.dp).padding(bottom = 12.dp)) { T("1", Fs.md, FontWeight.Bold); T(" save", Fs.md, color = c.muted) }

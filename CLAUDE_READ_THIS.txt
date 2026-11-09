@@ -11,7 +11,10 @@ how to write updates here
 - use exactly those two sentences, do not name a feature, a bug, a page or a number
 - skip the "new:" line when nothing was added and the "fixed:" line when nothing was fixed
 - do not add summary lines or anything else under a version
-- the only extra allowed is a ! after the version, like "## 3.38.4
+- the only extra allowed is a ! after the version, like "## 3.38.5
+fixed: Fixed some bugs
+
+## 3.38.4
 fixed: Fixed some bugs
 
 ## 3.38.3

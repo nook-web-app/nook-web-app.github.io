@@ -338,6 +338,14 @@ suspend fun Online.bannerUrl(src: String?): String? {
     return Sb.publicUrl("media", path)
 }
 
+// dropOldFile(): a replaced or removed banner or moving picture is deleted from storage so old ones do not pile up
+fun Online.dropOldFile(old: String?, new: String?) {
+    if (old == null || old == new) return
+    val path = Sb.pathOf(old, "media") ?: return
+    if (!Regex("/(banner|avatar)-\\d+\\.").containsMatchIn(path)) return
+    app.scope.launch { Sb.remove("media", listOf(path)) }
+}
+
 // uploadKept(): true when the file could not be stored. A try whose answer was lost may have worked, so a second try that
 // says "already there" counts as done; up to three tries
 suspend fun uploadKept(path: String, bytes: ByteArray, type: String): Boolean {
@@ -381,10 +389,11 @@ suspend fun Online.saveProfile(name0: String, handle0: String, bio: String, avat
         val ue = Sb.update(Q("accounts").eq("id", me), org.json.JSONObject().put("bio", pr.bio).put("display_name", pr.name).put("banner_theme", pr.bannerTheme))
         if (!ue.ok) { pr.name = was[0]!!; pr.bio = was[1]!!; pr.avatar = was[2]; pr.banner = was[3]; pr.bannerTheme = was[4]!!; return "Could not save your profile. " + plainErr(ue.error?.message, "Try again") }
         // a picture already saved on the server is not sent again
+        val oldAv = pr.avSrv; val oldBn = pr.bnSrv
         if (!(avatar == was[2] && pr.avSynced == avatar)) app.scope.launch {
             val small = if (avatar == null) null else avatarValue(avatar) ?: run { app.say("Could not upload profile photo"); return@launch }
             val r = Sb.update(Q("accounts").eq("id", me), org.json.JSONObject().put("avatar", small ?: org.json.JSONObject.NULL))
-            if (!r.ok) app.say("The new picture was not saved. " + plainErr(r.error?.message, "Try again later")) else { pr.avSynced = avatar; app.persist() }
+            if (!r.ok) app.say("The new picture was not saved. " + plainErr(r.error?.message, "Try again later")) else { pr.avSynced = avatar; dropOldFile(oldAv, small); pr.avSrv = small; app.persist() }
             loadFeed()
             rememberAccount(pr.handle, pr.name.ifEmpty { pr.handle }, small)
         }
@@ -392,7 +401,7 @@ suspend fun Online.saveProfile(name0: String, handle0: String, bio: String, avat
             val url = if (banner == null) null else bannerUrl(banner) ?: run { app.say("Could not upload banner"); return@launch }
             val r = Sb.update(Q("accounts").eq("id", me), org.json.JSONObject().put("banner", url ?: org.json.JSONObject.NULL))
             if (!r.ok) app.say("The new banner was not saved. " + plainErr(r.error?.message, "Try again later"))
-            else if (pr.banner == banner || pr.banner == url) { pr.bnSynced = url; if (url != null && pr.banner == banner) pr.banner = url; app.persist() }
+            else if (pr.banner == banner || pr.banner == url) { pr.bnSynced = url; if (url != null && pr.banner == banner) pr.banner = url; dropOldFile(oldBn, url); pr.bnSrv = url; app.persist() }
         }
         rememberAccount(pr.handle, pr.name.ifEmpty { pr.handle }, null)
     }

@@ -295,7 +295,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.38.4";
+const APP_VERSION = "3.38.5";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -4204,6 +4204,16 @@ async function avatarValue(src) {
   if (error) return undefined;
   return sb.storage.from("media").getPublicUrl(path).data.publicUrl;
 }
+// what the server holds now for a picture of this account, read before it is replaced
+async function oldFileOf(id, col) {
+  try { const { data } = await sb.from("accounts").select(col).eq("id", id).single(); return data ? data[col] : null; } catch (e) { return null; }
+}
+// a replaced or removed banner or moving picture is deleted from storage so old ones do not pile up
+function dropOldFile(old, url) {
+  if (!old || old === url) return;
+  const p = storagePath(old, "media");
+  if (p && /\/(banner|avatar)-\d+\./.test(p)) sb.storage.from("media").remove([p]).then(() => {}, () => {});
+}
 async function bannerUrl(src) {
   if (!src) return null;
   if (!/^data:/.test(src)) return src;
@@ -4598,14 +4608,16 @@ function editProfile() {
           if (ue) { Object.assign(pr, was); toast("Could not save your profile. " + plainErr(ue, "Try again")); return; }
           // a picture already saved on the server (same as the last saved one) is not sent again
           const avSrc = pr.avatar;
-          if (avSrc === was.avatar && pr.avSynced === avSrc) { /* unchanged and already saved */ } else avatarValue(pr.avatar).then(small => {
+          if (avSrc === was.avatar && pr.avSynced === avSrc) { /* unchanged and already saved */ } else avatarValue(pr.avatar).then(async small => {
             if (small === undefined) { toast("Could not upload profile photo"); return; }
-            if (sbUser) sb.from("accounts").update({ avatar: small }).eq("id", uid0).then(({ error }) => { if (error) toast("The new picture was not saved. " + plainErr(error, "Try again later")); else { pr.avSynced = avSrc; persist(); } loadFeed(); if (sbUser && sbUser.id === uid0) rememberAccount({ username: pr.handle, name: pr.name || pr.handle, avatar: small }).catch(() => {}); });
+            const oldAv = await oldFileOf(uid0, "avatar");
+            if (sbUser) sb.from("accounts").update({ avatar: small }).eq("id", uid0).then(({ error }) => { if (error) toast("The new picture was not saved. " + plainErr(error, "Try again later")); else { pr.avSynced = avSrc; dropOldFile(oldAv, small); persist(); } loadFeed(); if (sbUser && sbUser.id === uid0) rememberAccount({ username: pr.handle, name: pr.name || pr.handle, avatar: small }).catch(() => {}); });
           });
           const src = pr.banner;
-          if (src === was.banner && pr.bnSynced === src) { /* unchanged and already saved */ } else bannerUrl(src).then(url => {
+          if (src === was.banner && pr.bnSynced === src) { /* unchanged and already saved */ } else bannerUrl(src).then(async url => {
             if (url === undefined) { toast("Could not upload banner"); return; }
-            sb.from("accounts").update({ banner: url }).eq("id", uid0).then(({ error }) => { if (error) toast("The new banner was not saved. " + plainErr(error, "Try again later")); else if (pr.banner === src || pr.banner === url) { pr.bnSynced = url || null; persist(); } });
+            const oldBn = await oldFileOf(uid0, "banner");
+            sb.from("accounts").update({ banner: url }).eq("id", uid0).then(({ error }) => { if (error) toast("The new banner was not saved. " + plainErr(error, "Try again later")); else if (pr.banner === src || pr.banner === url) { pr.bnSynced = url || null; dropOldFile(oldBn, url); persist(); } });
             if (url && pr.banner === src && url !== src) { pr.banner = url; persist(); }
           });
         }

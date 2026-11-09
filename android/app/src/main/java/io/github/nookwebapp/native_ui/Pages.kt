@@ -31,6 +31,8 @@ fun UserScreen(id: String, fromMenu: Boolean = false) {
     val on = app.on
     val pg = remember(id) { UserPage(id) }
     LaunchedEffect(id) { on.loadUser(pg) }
+    var autoTry by remember(id) { mutableIntStateOf(0) }
+    LaunchedEffect(pg.state) { if (pg.state == "fail" && autoTry < 3) { kotlinx.coroutines.delay(2500); autoTry++; pg.state = ""; on.loadUser(pg) } }
     pg.version
     val found = s.posts.firstOrNull { it.ra?.id == id }?.ra
     val acc = pg.st?.acc
@@ -93,7 +95,7 @@ fun UserScreen(id: String, fromMenu: Boolean = false) {
                 }
             }
             val tabs = listOf("posts" to "Posts", "replies" to "Replies", "reposts" to "Reposts", "media" to "Media", "likes" to "Likes")
-            stickyHeader(key = "tabs") { Box(Modifier.background(c.bg).lineBelow(c.line)) { Tabs(tabs.map { it.second }, tabs.indexOfFirst { it.first == tab }.coerceAtLeast(0), scroll = true) { tab = tabs[it].first } } }
+            item(key = "tabs") { Box(Modifier.background(c.bg).lineBelow(c.line)) { Tabs(tabs.map { it.second }, tabs.indexOfFirst { it.first == tab }.coerceAtLeast(0), scroll = true) { tab = tabs[it].first } } }
             when (tab) {
                 "replies" -> postList(mine.filter { it.parent != null }, { Empty("reply", "No replies yet.") }, replyTo = true)
                 "media" -> mediaTiles(app, mine)
@@ -257,13 +259,7 @@ fun SettingsScreen() {
             }
             Sec("Danger zone")
             Group {
-                SRow(ic("trash", 22.dp), "Delete account", "Deleted after 30 days", danger = true, last = true) {
-                    app.open(listOf(
-                        SheetItem("Download my data first", "copy") { app.backup(); app.scope.launch { kotlinx.coroutines.delay(400); app.panels.add(Panel.DeleteAccount) } },
-                        SheetItem("Delete without downloading", "trash", danger = true) { app.panels.add(Panel.DeleteAccount) },
-                        SheetItem("Cancel", cancel = true),
-                    ), "Want a copy of your data before you delete your account?")
-                }
+                SRow(ic("trash", 22.dp), "Delete account", "Gone after 30 days", danger = true, last = true) { app.panels.add(Panel.DeleteAccount) }
             }
         }
     }

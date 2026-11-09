@@ -197,12 +197,15 @@ fun Pic(path: String?, modifier: Modifier = Modifier, want: Int = 1280, scale: C
     // a photo that cannot be loaded stops shimmering and says so; a tap tries again (it used to shimmer for ever)
     var attempt by remember(path) { mutableIntStateOf(0) }
     var failed by remember(path, attempt) { mutableStateOf(false) }
+    var auto by remember(path) { mutableIntStateOf(0) }
+    LaunchedEffect(failed) { if (failed && auto < 3) { kotlinx.coroutines.delay(1500L * (auto + 1)); auto++; attempt++ } }
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val req = remember(path, want, small, attempt) {
         coil.request.ImageRequest.Builder(ctx).data(Img.model(path)).apply { if (small) size(want) }.build()
     }
+    if (failed && auto < 3) { Box(if (bare) modifier else modifier.background(c.bg2).shimmer()); return }
     if (failed) {
-        Box(modifier.background(c.bg2).tap { attempt++ }, contentAlignment = androidx.compose.ui.Alignment.Center) {
+        Box(modifier.background(c.bg2).tap { auto = 0; attempt++ }, contentAlignment = androidx.compose.ui.Alignment.Center) {
             T("Could not load this photo. Tap to try again", Fs.sm, color = c.muted, align = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.padding(androidx.compose.ui.unit.Dp(16f)))
         }
         return
@@ -242,8 +245,12 @@ fun PicBare(src: String, modifier: Modifier = Modifier, scale: ContentScale = Co
         return
     }
     val ctx = androidx.compose.ui.platform.LocalContext.current
-    val req = remember(src) { coil.request.ImageRequest.Builder(ctx).data(Img.model(src)).build() }
-    coil.compose.AsyncImage(req, null, modifier = modifier, imageLoader = Img.loader(ctx), contentScale = scale, onSuccess = { onIn() })
+    // a profile picture that did not load is asked for again a few times (cold connection after a long break)
+    var attempt by remember(src) { mutableIntStateOf(0) }
+    val req = remember(src, attempt) { coil.request.ImageRequest.Builder(ctx).data(Img.model(src)).build() }
+    var failed by remember(src, attempt) { mutableStateOf(false) }
+    LaunchedEffect(failed) { if (failed && attempt < 3) { kotlinx.coroutines.delay(1500L * (attempt + 1)); attempt++ } }
+    coil.compose.AsyncImage(req, null, modifier = modifier, imageLoader = Img.loader(ctx), contentScale = scale, onError = { failed = true }, onSuccess = { onIn() })
 }
 
 // The one image loader of the app: OkHttp of the app (same connections as the server calls), a memory cache of a

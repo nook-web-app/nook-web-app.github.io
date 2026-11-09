@@ -292,9 +292,24 @@ fun NicknamePanel(app: AppState, p: Panel.Nickname) {
 fun DeleteAccountPanel(app: AppState, p: Panel) {
     var email by remember { mutableStateOf("") }
     var pw by remember { mutableStateOf("") }
-    Form(p, "", "Delete", run = { app.on.deleteAccount(email, pw) }) {
+    // after the password is right, a sheet offers the data download; the data is saved, then the next tap deletes
+    var saved by remember { mutableStateOf(false) }
+    var checked by remember { mutableStateOf("") }
+    Form(p, "", "Delete", run = {
+        if (checked != email.trim() + "\u0000" + pw) {
+            app.on.checkDeleteLogin(email, pw)?.let { return@Form it }
+            checked = email.trim() + "\u0000" + pw
+        }
+        if (saved) return@Form app.on.deleteAccount()
+        app.open(listOf(
+            SheetItem("Download my data first", "copy") { saved = true; app.backup() },
+            SheetItem("Delete without downloading", "trash", danger = true) { app.scope.launch { app.on.deleteAccount()?.let { app.say(it) } } },
+            SheetItem("Cancel", cancel = true),
+        ), "Want a copy of your data first?")
+        ""
+    }) {
         T("Delete account", Fs.x3, FontWeight.Bold, align = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 16.dp))
-        T("Your account is hidden and kept for 30 days. Sign in any time in that period to get it back. After that it is deleted for good.", color = LocalNook.current.muted, align = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp))
+        T("You can sign in again within 30 days to get it back. After that it is gone for good.", color = LocalNook.current.muted, align = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp))
         Field(email, { email = it }, "Email", border = true); Gap(); PwField(pw, { pw = it }, "Password")
     }
 }

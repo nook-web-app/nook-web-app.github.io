@@ -590,11 +590,15 @@ fun Online.deactivate() {
     }
 }
 
-// confirmLogin() + delete-account: the account is hidden and kept for 30 days; the phone is cleared
-suspend fun Online.deleteAccount(email: String, pw: String): String? {
+// confirmLogin(): the email and password are checked first; only then is the data download offered
+suspend fun Online.checkDeleteLogin(email: String, pw: String): String? {
     if (email.trim().isEmpty() || pw.isEmpty()) return "Type your email and password"
     if (email.trim().lowercase() != (Sb.user?.email ?: "").lowercase()) return "That is not the email of this account"
-    verifyPassword(pw)?.let { return it.replace("Current password", "Password") }
+    return verifyPassword(pw)?.replace("Current password", "Password")
+}
+
+// delete-account: the account is hidden and kept for 30 days; the phone is cleared
+suspend fun Online.deleteAccount(): String? {
     val r = Sb.fn("delete-account")
     if (!r.ok) return failText(r, "Could not delete the account. Try again")
     runCatching { pushDetach() }

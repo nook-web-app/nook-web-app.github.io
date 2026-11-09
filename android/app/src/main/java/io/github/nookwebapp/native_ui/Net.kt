@@ -228,8 +228,18 @@ object Sb {
                 return@withContext exec(true, build)
             }
             got
-        } catch (e: Exception) { Triple(0, e.message ?: "network", null) }
+        } catch (e: Exception) {
+            // after a long time away the pooled connections are dead: they are dropped and a read is tried once more
+            if (!retried && e is java.io.IOException) {
+                val again = runCatching { build() }.getOrNull()
+                if (again != null && (again.method == "GET" || again.method == "HEAD")) { dropConnections(); return@withContext exec(true, build) }
+            }
+            Triple(0, e.message ?: "network", null)
+        }
     }
+
+    // the connections kept from before the phone slept or changed network are closed
+    fun dropConnections() { runCatching { http.connectionPool.evictAll() } }
 
     // the answer of a big call is parsed off the main thread
     private suspend fun parsed(code: Int, txt: String, res: Response?): Res =

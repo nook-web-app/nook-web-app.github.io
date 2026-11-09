@@ -309,7 +309,7 @@ suspend fun Online.avatarValue(src: String?): String? {
     val b = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Photos.bytesOf(src) } ?: return null
     if (mimeOf(b) == "image/gif") {
         val path = "$me/avatar-" + System.currentTimeMillis() + ".gif"
-        if (Sb.upload("media", path, b, "image/gif") != null) return null
+        if (uploadKept(path, b, "image/gif")) return null
         return Sb.publicUrl("media", path)
     }
     return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
@@ -334,8 +334,19 @@ suspend fun Online.bannerUrl(src: String?): String? {
     val me = uid ?: return null
     val b = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Photos.bytesOf(src) } ?: return null
     val path = "$me/banner-" + System.currentTimeMillis() + ".jpg"
-    if (Sb.upload("media", path, b, mimeOf(b)) != null) return null
+    if (uploadKept(path, b, mimeOf(b))) return null
     return Sb.publicUrl("media", path)
+}
+
+// uploadKept(): true when the file could not be stored. A try whose answer was lost may have worked, so a second try that
+// says "already there" counts as done; up to three tries
+suspend fun uploadKept(path: String, bytes: ByteArray, type: String): Boolean {
+    repeat(3) { i ->
+        val e = Sb.upload("media", path, bytes, type) ?: return false
+        if (e.status == 409 || Regex("exist|duplicate", RegexOption.IGNORE_CASE).containsMatchIn(e.message)) return false
+        kotlinx.coroutines.delay(1200L * (i + 1))
+    }
+    return true
 }
 
 // editProfile(): the editor only closes when the server took the change; the pictures follow behind it

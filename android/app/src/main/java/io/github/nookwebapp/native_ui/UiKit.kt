@@ -19,6 +19,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.runtime.*
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -159,7 +160,11 @@ fun IB(icon: String, size: Dp = 24.dp, tint: Color = LocalNook.current.muted, bo
 // .bar: 44dp, the title, 44dp, 54dp high, with the line under the whole top area drawn by Top()
 @Composable
 fun Bar(title: String, left: (@Composable () -> Unit)? = null, right: (@Composable () -> Unit)? = null) {
-    Row(Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+    val app = LocalApp.current
+    val page = LocalPage.current
+    val scope = rememberCoroutineScope()
+    // a tap anywhere on the bar (the buttons keep their own taps) brings the page back to its top
+    Row(Modifier.fillMaxWidth().height(54.dp).tap { scope.launch { app.listStateFor(page).animateScrollToItem(0) } }.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.width(44.dp).offset(x = (-10).dp), contentAlignment = Alignment.CenterStart) { left?.invoke() }
         T(title, Fs.xl, FontWeight.Bold, modifier = Modifier.weight(1f), align = TextAlign.Center, maxLines = 1)
         // only the left button is pulled out by 10dp: in the CSS grid the right one keeps its place (margin-right does not move it)

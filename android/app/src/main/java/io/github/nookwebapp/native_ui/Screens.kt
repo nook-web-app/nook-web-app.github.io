@@ -78,8 +78,7 @@ fun Fab(icon: String, onClick: () -> Unit) {
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 fun LazyListScope.postList(a: List<LPost>, empty: @Composable () -> Unit, lab: ((LPost) -> String?)? = null, pin: Boolean = false, replyTo: Boolean = false) {
     if (a.isEmpty()) item { empty() }
-    // a post that arrives or moves slides into place instead of popping in
-    items(a, key = { it.id }, contentType = { "post" }) { Box(Modifier.animateItemPlacement()) { PostCard(it, lab = lab?.invoke(it), pin = pin, replyTo = replyTo) } }
+    items(a, key = { it.id }, contentType = { "post" }) { PostCard(it, lab = lab?.invoke(it), pin = pin, replyTo = replyTo) }
 }
 
 // .empty with "Loading..."
@@ -220,7 +219,7 @@ fun ProfileScreen() {
                     if (pr.bio.isNotEmpty()) Tx(pr.bio, modifier = Modifier.padding(top = 10.dp))
                 }
             }
-            stickyHeader(key = "tabs") { Box(Modifier.background(c.bg).lineBelow(c.line)) { Tabs(tabs.map { it.second }, tabs.indexOfFirst { it.first == tab }.coerceAtLeast(0), scroll = true) { s.profTab = tabs[it].first; app.persist() } } }
+            item(key = "tabs") { Box(Modifier.background(c.bg).lineBelow(c.line)) { Tabs(tabs.map { it.second }, tabs.indexOfFirst { it.first == tab }.coerceAtLeast(0), scroll = true) { s.profTab = tabs[it].first; app.persist() } } }
             when (tab) {
                 "replies" -> postList(shown, { Empty("reply", "No replies yet. Reply to one of your own posts.") }, replyTo = true)
                 "reposts" -> postList(shown, { Empty("repost", "Posts you repost show up here.") })

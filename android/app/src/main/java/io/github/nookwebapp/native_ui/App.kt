@@ -62,6 +62,9 @@ fun NookApp(app: AppState) {
                     // the bottom bar goes away on the sign in, banned and age pages, inside a chat, and on the legal pages before signing in
                     if (top != Route.Auth && top != Route.Banned && top != Route.Age && top !is Route.Conv && top !is Route.Dm && !(top is Route.Legal && !app.signedIn)) NavBar(app)
                 }
+                // a tap on the time and the icons at the very top scrolls the page up
+                val topScope = rememberCoroutineScope()
+                Box(Modifier.fillMaxWidth().windowInsetsTopHeight(WindowInsets.statusBars).tap { topScope.launch { app.listStateFor(app.stack.size).animateScrollToItem(0) } })
                 PanelHost(app)
                 DrawerHost(app)
                 ZCardHost(app)

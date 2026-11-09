@@ -234,7 +234,10 @@ function view(src) {
   return u;
 }
 function wireImg(i, src, cls) {
+  // a picture that did not load (a cold connection after a long break) is asked for again up to three times, a little later each time
+  let tries = 0;
   i.onerror = () => {
+    if (tries < 3) { tries++; setTimeout(() => { i.src = /^https?:/.test(src) ? src + (src.includes("?") ? "&" : "?") + "r=" + tries : src; }, 1200 * tries); return; }
     i.onerror = () => { if (!cls && i.parentNode) i.replaceWith(h("div", { class: "dmgone" }, "Photo not available")); };
     i.src = src;
   };
@@ -292,7 +295,7 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.38.3";
+const APP_VERSION = "3.38.4";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1454,7 +1457,7 @@ function root(name) { stack = [{ r: name }]; scrolls.length = 0; hist(false); re
 const ibtn = (n, label, fn) => h("button", { class: "ib", "aria-label": label, onclick: fn }, ic(n, 24));
 const menuBtn = () => ibtn("menu", "Menu", openDrawer);
 const backBtn = () => ibtn("back", "Back", back);
-const bar = (l, c, r) => h("div", { class: "bar" }, l || h("span"), c, r || h("span"));
+const bar = (l, c, r) => h("div", { class: "bar", onclick: e => { if (!e.target.closest("button, a, input")) main.scrollTo({ top: 0, behavior: "smooth" }); } }, l || h("span"), c, r || h("span"));
 const ttl = t => h("div", { class: "ttl" }, t);
 function fab(n, label, fn) { main.style.paddingBottom = "88px"; fabs.append(h("button", { class: "fab", "aria-label": label, onclick: fn }, ic(n, 26))); }
 function emptyState(icon, text, btn) { return h("div", { class: "empty" }, ic(icon, 56), h("p", {}, text), btn || null); }
@@ -3135,19 +3138,25 @@ function settingsV() {
     row(ic("eyeoff", 22), "Privacy Policy", "What we collect", () => go({ r: "privacy" })),
     row(ic("list", 22), "Terms of Use", "The rules of Nook", () => go({ r: "terms" }))));
   main.append(sec("Danger zone"));
-  main.append(h("div", { class: "group" }, row(ic("trash", 22), "Delete account", "Deleted after 30 days", () => {
-    const ask = () => confirmLogin("Delete account", "Your account is hidden and kept for 30 days. Sign in any time in that period to get it back. After that it is deleted for good.", "Delete", async () => {
+  main.append(h("div", { class: "group" }, row(ic("trash", 22), "Delete account", "Gone after 30 days", () => {
+    const doDelete = async () => {
       const r = await callFn("delete-account");
       if (!r.ok) return failText(r, "Could not delete the account. Try again");
       await pushDetach().catch(() => {});
       await wipeLocal();
       await leaveThisAccount();
+    };
+    // the email and password come first; then the person is asked if they want a copy of their data
+    let saved = false;
+    confirmLogin("Delete account", "You can sign in again within 30 days to get it back. After that it is gone for good.", "Delete", async () => {
+      if (saved) return doDelete();
+      sheet([
+        { icon: "copy", label: "Download my data first", fn: async () => { await downloadBackup(); saved = true; toast("Saved. Tap Delete to finish"); } },
+        { icon: "trash", label: "Delete without downloading", danger: true, fn: async () => { const e = await doDelete(); if (e) toast(e); } },
+        { label: "Cancel", cancel: true }], "Want a copy of your data first?");
+      // false: the screen stays open and says nothing
+      return false;
     });
-    // the data goes with the account, so the person is asked first if they want a copy
-    sheet([
-      { icon: "copy", label: "Download my data first", fn: async () => { await downloadBackup(); setTimeout(ask, 400); } },
-      { icon: "trash", label: "Delete without downloading", danger: true, fn: ask },
-      { label: "Cancel", cancel: true }], "Want a copy of your data before you delete your account?");
   }, "dng")));
 }
 
@@ -6481,6 +6490,7 @@ function confirmLogin(title, warn, label, fn) {
       go1.textContent = "Please wait";
       // the screen stays until the work is done; a returned text is the reason it failed
       const err = await fn();
+      if (err === false) return;
       if (typeof err === "string" && err) { say(err); return; }
       close();
     } catch (e) { say("Something went wrong. Try again"); } finally { go1.disabled = false; go1.textContent = label; }

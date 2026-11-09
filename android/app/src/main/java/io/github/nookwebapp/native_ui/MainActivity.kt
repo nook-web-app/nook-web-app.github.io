@@ -118,6 +118,8 @@ class MainActivity : ComponentActivity() {
             if (on == app.online) return@runOnUiThread
             app.online = on
             if (!on) return@runOnUiThread
+            Sb.dropConnections()
+            if (app.signedIn) { app.on.feedTries = 0; if (app.on.feedStatus == "error") app.on.loadFeed() }
             if (app.bootOffline) { app.bootOffline = false; app.scope.launch { app.on.boot() } }
         }
         runCatching {
@@ -141,7 +143,9 @@ class MainActivity : ComponentActivity() {
         closeRt?.let { window.decorView.removeCallbacks(it) }
         val was = app.foreground
         app.foreground = true
+        if (!was) Sb.dropConnections()
         if (!was && app.signedIn) app.scope.launch {
+            app.on.feedTries = 0
             app.on.checkBan(); app.on.refreshBadge(true); app.on.checkModNotices(); app.on.notesSync(); app.on.loadFeed()
             if (app.dm.rtChan == null) app.on.startRealtime()
         }

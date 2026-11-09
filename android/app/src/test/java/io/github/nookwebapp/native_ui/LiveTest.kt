@@ -171,10 +171,10 @@ class LiveTest {
         check("photo post deleted", waitFor(25_000) { row("posts", "id", ph.remote!!) == null })
 
         // ---- both accounts go ----
-        val da = a.on.deleteAccount(ea, pw)
+        val da = a.on.checkDeleteLogin(ea, pw) ?: a.on.deleteAccount()
         check("A deleted", da == null, da)
         use(bS)
-        val db = b.on.deleteAccount(eb, pw)
+        val db = b.on.checkDeleteLogin(eb, pw) ?: b.on.deleteAccount()
         check("B deleted", db == null, db)
         println("accounts: $aId $bId")
         withContext(Dispatchers.IO) { File("build/live-accounts.txt").writeText("$aId\n$bId\n") }

@@ -250,7 +250,7 @@ async function chainText(postId: string, owner: string, zen: string, last: strin
   return { text: text || last, zenIn: rows.some((r) => r.user_id === zen) };
 }
 
-const SUBJECTS = ["a food you are craving", "a song stuck in your head", "something you saw on a walk", "a game you are playing", "the weather", "a tiny win today", "something that made you laugh", "a random shower thought", "a snack ranking opinion", "being sleepy", "a show you are watching", "a silly fear", "your favorite cozy spot", "a dream you had", "something you want to learn", "a pet peeve", "an unpopular opinion that is harmless", "a drawing or craft idea", "a memory from when you were little", "a question you wonder about", "your messy room", "a weird food combo", "a goal for the week", "a compliment for your followers", "something you are grateful for", "a clumsy moment", "a hobby you are bad at", "what you would do with a free day"];
+const SUBJECTS = ["a hot take about games", "a song genre you find interesting", "a funny thing about the internet", "a random thought about how language works", "an opinion about apps or software", "a fun fact you know", "a question you wonder about", "a weird hypothetical", "a harmless unpopular opinion about music or tech", "a game design idea", "a compliment for your followers", "something about how computers or ai work", "a rank of something silly like fonts or keyboard sounds", "an old internet thing you find funny"];
 const GAP = 40000;
 let lastImport = 0;
 // the app answers nothing itself any more: this runs every minute (and when the owner nudges it) and handles three things

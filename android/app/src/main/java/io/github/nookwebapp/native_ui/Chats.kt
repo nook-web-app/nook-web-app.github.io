@@ -196,7 +196,7 @@ fun DmScreen(id: String) {
     }) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
         ToBottomButton(list, unread, Modifier.align(Alignment.BottomEnd).padding(end = 10.dp).zIndex(2f))
-        LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), state = list, verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom), contentPadding = PaddingValues(vertical = 14.dp)) {
+        LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), state = list, verticalArrangement = Arrangement.Bottom, contentPadding = PaddingValues(top = 14.dp, bottom = 8.dp)) {
             if (!l.loaded && l.rows.isEmpty()) item { Loading() }
             else if (l.failed && l.rows.isEmpty()) item { Empty(null, "Could not load messages. Trying again...") }
             else if (l.rows.isEmpty()) item { Empty("chat", "No messages yet. Say hi.", iconSize = 48.dp) }
@@ -204,7 +204,7 @@ fun DmScreen(id: String) {
                 // one of Zenith's messages pulled to the right starts an answer to him (the owner's chats only)
                 val mineM = m.sender == on.uid && !m.ai
                 val anim = remember(m) { (if (!m.fresh) MsgAnim.None else if (!mineM) MsgAnim.In else if (m.tmp) MsgAnim.Send else MsgAnim.Land).also { m.fresh = false } }
-                FoldAway(m.leaving) { Box(Modifier.msgIn(anim, mineM)) { SwipeReply(m.ai && zOn(), { l.fill?.invoke("@zenith ") }) { DmBubble(m, id, open === m, onTap = { open = if (open === m) null else m }) {
+                FoldAway(m.leaving) { Box(Modifier.padding(bottom = 6.dp).msgIn(anim, mineM)) { SwipeReply(m.ai && zOn(), { l.fill?.invoke("@zenith ") }) { DmBubble(m, id, open === m, onTap = { open = if (open === m) null else m }) {
                     val body = m.text ?: m.body
                     app.open(listOfNotNull(
                         if (body.isNotEmpty()) SheetItem("Copy message", "copy") { app.clipboard(body) } else null,
@@ -215,7 +215,7 @@ fun DmScreen(id: String) {
             // .trow: the typing dots, in a slot that grows smoothly
             item(key = "typing") {
                 androidx.compose.animation.AnimatedVisibility(visible = l.typing, enter = expandVertically(tween(300, easing = TROW_EASE)) + fadeIn(tween(250, easing = CSS_EASE)), exit = shrinkVertically(tween(300, easing = TROW_EASE)) + fadeOut(tween(250, easing = CSS_EASE))) {
-                    Box(Modifier.fillMaxWidth()) { TypingBubble(Modifier.align(Alignment.CenterStart)) }
+                    Box(Modifier.fillMaxWidth().padding(bottom = 6.dp)) { TypingBubble(Modifier.align(Alignment.CenterStart)) }
                 }
             }
         }

@@ -102,13 +102,13 @@ fun ConvScreen(id: String) {
         LaunchedEffect(chat.id) { snapshotFlow { app.zenTyping[chat.id]?.text?.length }.collect { if (it != null && atBottom) list.scrollToItem(chat.msgs.size - shownFrom + 2) } }
         Box(Modifier.weight(1f).fillMaxWidth()) {
         ToBottomButton(list, unread, Modifier.align(Alignment.BottomEnd).padding(end = 10.dp).zIndex(2f))
-        LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), state = list, verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom), contentPadding = PaddingValues(vertical = 14.dp)) {
+        LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), state = list, verticalArrangement = Arrangement.Bottom, contentPadding = PaddingValues(top = 14.dp, bottom = 8.dp)) {
             if (chat.msgs.isEmpty()) item { Empty("smile", "Nothing here yet. Say something to yourself.", iconSize = 48.dp) }
             if (shownFrom > 0) item { Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) { Pill("Show earlier messages", Btn.Ghost) { shownFrom = maxOf(0, shownFrom - 80) } } }
             items(chat.msgs.drop(shownFrom), key = { it.id }) { m ->
                 // pulling one of Zenith's messages to the right starts an answer to him
                 val anim = remember(m.id) { if (m.id in had || m.id in app.zenNoAnim) MsgAnim.None else if (m.ai) MsgAnim.In else MsgAnim.Send }
-                FoldAway(m.leaving) { Box(Modifier.msgIn(anim, !m.ai)) { SwipeReply(m.ai, { fill[0]?.invoke("@zenith ") }) { Bubble(m, open == m.id, onTap = { open = if (open == m.id) null else m.id }) {
+                FoldAway(m.leaving) { Box(Modifier.padding(bottom = 6.dp).msgIn(anim, !m.ai)) { SwipeReply(m.ai, { fill[0]?.invoke("@zenith ") }) { Bubble(m, open == m.id, onTap = { open = if (open == m.id) null else m.id }) {
                     app.open(listOfNotNull(
                         if (m.text.isNotEmpty()) SheetItem("Copy message", "copy") { app.clipboard(m.text) } else null,
                         SheetItem("Delete message", "trash", danger = true) {
@@ -123,7 +123,7 @@ fun ConvScreen(id: String) {
             // his answer while it is still being typed out
             // (the same key as the message it becomes, so the finished message takes the place of the typed one without a jump)
             if (typing != null && chat.msgs.none { it.id == typing.id }) item(key = typing.id) {
-                Box(Modifier.animateContentSize(tween(120))) { if (typing.text.isEmpty()) Box(Modifier.fillMaxWidth()) { TypingBubble() } else Bubble(typing, false, {}) {} }
+                Box(Modifier.padding(bottom = 6.dp).animateContentSize(tween(120))) { if (typing.text.isEmpty()) Box(Modifier.fillMaxWidth()) { TypingBubble() } else Bubble(typing, false, {}) {} }
             }
         }
         }

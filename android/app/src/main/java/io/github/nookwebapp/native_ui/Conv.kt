@@ -57,7 +57,13 @@ fun ConvScreen(id: String) {
     val list = rememberLazyListState()
     // the messages already there when the chat opened come in without an animation
     val had = remember(chat.id) { chat.msgs.map { it.id }.toHashSet() }
-    LaunchedEffect(chat.msgs.size) { if (chat.msgs.isNotEmpty()) list.scrollToItem(chat.msgs.size - shownFrom + 1) }
+    // a new message takes the view to the bottom; deleting one leaves the view where it is
+    var seenCount by remember(chat.id) { mutableIntStateOf(chat.msgs.size) }
+    LaunchedEffect(chat.msgs.size) {
+        val grew = chat.msgs.size > seenCount
+        seenCount = chat.msgs.size
+        if (chat.msgs.isNotEmpty() && grew) list.scrollToItem(chat.msgs.size - shownFrom + 1)
+    }
     KeepAtBottom(list)
     Page({
         // .bar.chb: back, the chat's picture, name and handle, and its options
@@ -92,7 +98,12 @@ fun ConvScreen(id: String) {
                 FoldAway(m.leaving) { Box(Modifier.msgIn(anim, !m.ai)) { SwipeReply(m.ai, { fill[0]?.invoke("@zenith ") }) { Bubble(m, open == m.id, onTap = { open = if (open == m.id) null else m.id }) {
                     app.open(listOfNotNull(
                         if (m.text.isNotEmpty()) SheetItem("Copy message", "copy") { app.clipboard(m.text) } else null,
-                        SheetItem("Delete message", "trash", danger = true) { app.foldOut(chat.msgs, m) { m.leaving = it } },
+                        SheetItem("Delete message", "trash", danger = true) {
+                            // the command and every card it brought in go together (a post with several files has one message per file)
+                            val first = m.mcard?.let { it.optInt("n") == 0 && it.optInt("x") != 1 } == true
+                            val group = if (first) chat.msgs.filter { x -> x.mcard != null && x.text == m.text && x.t >= m.t && x.t <= m.t + 40 } else listOf(m)
+                            group.forEach { g -> app.foldOut(chat.msgs, g) { g.leaving = it } }
+                        },
                     ))
                 } } } }
             }
@@ -198,6 +209,9 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
     }
 }
 
+// "/media link" and "/audio link" are commands: the link in them never gets a preview card of its own
+private fun isMediaCmd(t: String) = Regex("^/(media|audio)\\b", RegexOption.IGNORE_CASE).containsMatchIn(t.trim())
+
 // .mrow: my message on the right in an accent bubble (photos above it), Zenith's on the left (.mrow.ai), and the time
 // under it while it is open
 @Composable
@@ -219,7 +233,7 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onLong: () -> Unit
         m.rpost?.let { Box(Modifier.padding(top = if (m.imgs.isNotEmpty()) 4.dp else 0.dp)) { RCard(it.id, it.u) } }
         m.zpost?.let { Box(Modifier.padding(top = 4.dp)) { ZCard(it) } }
         // the text of a "/media" message is only its link (it is what the web app shows), the card is drawn instead
-        val url = if (m.mcard != null) null else firstUrl(m.text)
+        val url = if (m.mcard != null || isMediaCmd(m.text)) null else firstUrl(m.text)
         if (url != null) Box(Modifier.padding(top = if (m.imgs.isNotEmpty() || m.rpost != null) 4.dp else 0.dp)) { LinkCard(url, chat = true) }
         if (m.text.isNotEmpty() && m.mcard == null) {
             val shape = if (left) RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.bubble, Rad.xs) else RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.xs, Rad.bubble)

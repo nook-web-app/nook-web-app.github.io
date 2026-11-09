@@ -159,7 +159,13 @@ fun DmScreen(id: String) {
     var open by remember { mutableStateOf<DmMsg?>(null) }
     val list = rememberLazyListState()
     // the chat stays at its newest message while new ones come in
-    LaunchedEffect(l.rows.size, l.typing) { if (l.rows.isNotEmpty()) list.animateScrollToItem(l.rows.size + 1) }
+    // a new message (or the typing dots) takes the view to the bottom; deleting a message leaves the view where it is
+    var seenRows by remember(id) { mutableIntStateOf(l.rows.size) }
+    LaunchedEffect(l.rows.size, l.typing) {
+        val grew = l.rows.size > seenRows
+        seenRows = l.rows.size
+        if (l.rows.isNotEmpty() && (grew || l.typing)) list.animateScrollToItem(l.rows.size + 1)
+    }
     KeepAtBottom(list)
     Page({
         // .bar.chb: back, the person's picture, name and handle, and the chat's options

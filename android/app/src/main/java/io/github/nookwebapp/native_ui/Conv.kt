@@ -88,7 +88,7 @@ fun ConvScreen(id: String) {
             if (shownFrom > 0) item { Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) { Pill("Show earlier messages", Btn.Ghost) { shownFrom = maxOf(0, shownFrom - 80) } } }
             items(chat.msgs.drop(shownFrom), key = { it.id }) { m ->
                 // pulling one of Zenith's messages to the right starts an answer to him
-                val anim = remember(m.id) { if (m.id in had) MsgAnim.None else if (m.ai) MsgAnim.In else MsgAnim.Send }
+                val anim = remember(m.id) { if (m.id in had || m.id in app.zenNoAnim) MsgAnim.None else if (m.ai) MsgAnim.In else MsgAnim.Send }
                 FoldAway(m.leaving) { Box(Modifier.msgIn(anim, !m.ai)) { SwipeReply(m.ai, { fill[0]?.invoke("@zenith ") }) { Bubble(m, open == m.id, onTap = { open = if (open == m.id) null else m.id }) {
                     app.open(listOfNotNull(
                         if (m.text.isNotEmpty()) SheetItem("Copy message", "copy") { app.clipboard(m.text) } else null,

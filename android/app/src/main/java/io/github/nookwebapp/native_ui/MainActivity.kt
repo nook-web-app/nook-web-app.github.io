@@ -303,15 +303,38 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun getUpdate(quiet: Boolean = false) {
-        if (!quiet) app.updProgress = 0f
+        // one bar for both parts: the download fills the first 80 percent, the install the rest
+        if (!quiet) { app.updPhase = "Downloading the update"; app.updProgress = 0f }
         Thread {
-            val f = runCatching { Updater.download(this) { p -> if (!quiet) runOnUiThread { app.updProgress = p } } }.getOrNull()
+            // a try that fails (a slow start, a cut line) is made once more before it is called a failure
+            var f: File? = null
+            for (n in 0 until 2) {
+                if (f != null) break
+                f = runCatching { Updater.download(this) { p -> if (!quiet) runOnUiThread { app.updProgress = if (p < 0f) -1f else p * 0.8f } } }.getOrNull()
+                if (f == null && n == 0) Thread.sleep(1500)
+            }
             runOnUiThread {
-                app.updProgress = null
-                if (f == null) { if (!quiet) app.say("Could not download the update. Try again") }
-                else if (!Updater.install(this, f)) app.say("Allow Nook to install the update, then tap Update now again")
+                if (f == null) { app.updProgress = null; if (!quiet) app.say("Could not download the update. Try again") }
+                else {
+                    if (!quiet) { app.updPhase = "Installing the update"; app.updProgress = 0.8f; creepInstall() }
+                    val ok = runCatching { Updater.install(this, f) { p -> if (!quiet) app.updProgress = maxOf(app.updProgress ?: 0f, 0.8f + 0.2f * p) } }.getOrDefault(false)
+                    if (!ok) { app.updProgress = null; app.say("Allow Nook to install the update, then tap Update now again") }
+                }
             }
         }.start()
+    }
+
+    // while the phone installs, the bar keeps moving toward the end (the phone only says when it is done, and then the app restarts)
+    private fun creepInstall() {
+        val tick = object : Runnable {
+            override fun run() {
+                val p = app.updProgress ?: return
+                if (app.updPhase != "Installing the update") return
+                app.updProgress = minOf(0.98f, p + (0.98f - p) * 0.04f + 0.0008f)
+                window.decorView.postDelayed(this, 120)
+            }
+        }
+        window.decorView.postDelayed(tick, 120)
     }
 
     // Download backup: everything on this phone (the state file and the photos) in one zip, handed to the share sheet

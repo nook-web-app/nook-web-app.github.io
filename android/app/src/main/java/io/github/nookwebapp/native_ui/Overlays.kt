@@ -389,7 +389,7 @@ fun UpdateHost(app: AppState) {
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                T("Downloading the update", Fs.sm, FontWeight.SemiBold)
+                T(app.updPhase, Fs.sm, FontWeight.SemiBold)
                 T(if (p >= 0f) (p * 100).toInt().toString() + "%" else "", Fs.sm, color = c.muted)
             }
             Box(Modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(c.line)) {

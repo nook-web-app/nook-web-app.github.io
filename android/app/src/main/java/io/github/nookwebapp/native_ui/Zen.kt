@@ -87,6 +87,8 @@ fun Online.zAsk(chat: LChat, m: LMsg) {
         app.zenTyping.remove(chat.id)
         // an error line stays on the screen for a moment but is never saved as something Zenith said
         if (failed) { app.say(ai.text) } else {
+            // it was already on the screen while it was typed, so it takes its place without fading in again
+            app.zenNoAnim.add(ai.id)
             chat.msgs.add(ai); app.persist(); zenSyncSoon()
             // answered while the person is somewhere else: a notification says so
             app.ctx?.let { c -> if (!app.foreground) Notify.show(c, "Zenith", ai.text.take(180), "zen:" + chat.id, ai.id.hashCode()) }

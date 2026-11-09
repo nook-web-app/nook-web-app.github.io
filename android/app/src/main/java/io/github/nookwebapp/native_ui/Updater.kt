@@ -97,14 +97,29 @@ object Updater {
         ctx.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + ctx.packageName)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
-    fun install(ctx: Context, apk: File): Boolean {
+    // onProgress gets the installer's own 0..1 while the apk is checked and put in place
+    fun install(ctx: Context, apk: File, onProgress: ((Float) -> Unit)? = null): Boolean {
         if (!mayInstall(ctx)) { askInstallRight(ctx); return false }
         val pi = ctx.packageManager.packageInstaller
+        // a session left over from an earlier try would block this one
+        runCatching { pi.mySessions.forEach { pi.abandonSession(it.sessionId) } }
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
             setAppPackageName(ctx.packageName)
             if (Build.VERSION.SDK_INT >= 31) setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+            // Android 14: Nook keeps the update ownership of itself, so its later updates need no question
+            if (Build.VERSION.SDK_INT >= 34) runCatching { setRequestUpdateOwnership(true) }
         }
         val id = pi.createSession(params)
+        if (onProgress != null) {
+            val cb = object : PackageInstaller.SessionCallback() {
+                override fun onCreated(sessionId: Int) {}
+                override fun onBadgingChanged(sessionId: Int) {}
+                override fun onActiveChanged(sessionId: Int, active: Boolean) {}
+                override fun onProgressChanged(sessionId: Int, progress: Float) { if (sessionId == id) onProgress(progress) }
+                override fun onFinished(sessionId: Int, success: Boolean) { if (sessionId == id) pi.unregisterSessionCallback(this) }
+            }
+            runCatching { pi.registerSessionCallback(cb, android.os.Handler(android.os.Looper.getMainLooper())) }
+        }
         pi.openSession(id).use { s ->
             apk.inputStream().use { i -> s.openWrite("nook.apk", 0, apk.length()).use { o -> i.copyTo(o); s.fsync(o) } }
             val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
@@ -122,12 +137,18 @@ class UpdateReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, i: Intent) {
         when (i.getIntExtra(PackageInstaller.EXTRA_STATUS, -1)) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                AppState.current?.updPhase = "Confirm the install on the screen that opened"
                 @Suppress("DEPRECATION")
                 val next = if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java) else i.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
                 next?.let { ctx.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
             }
             PackageInstaller.STATUS_SUCCESS -> {}
-            else -> AppState.current?.say("The update could not be installed")
+            else -> {
+                AppState.current?.updProgress = null
+                // the installer says why, so the reason can be told
+                val why = i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE).orEmpty().take(80)
+                AppState.current?.say("The update could not be installed" + if (why.isNotEmpty()) " ($why)" else "")
+            }
         }
     }
 }

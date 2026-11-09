@@ -121,6 +121,10 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     var checkUpdate: (Boolean) -> Unit = {}
     // the download of an update that was asked for by hand: 0..1, -1 when the size is not known, null when none runs
     var updProgress by mutableStateOf<Float?>(null)
+    // what the bar says while it fills: the download first, then the install
+    var updPhase by mutableStateOf("Downloading the update")
+    // messages of Zenith that were typed out on the screen: they land in the list without their entrance animation
+    val zenNoAnim = HashSet<String>()
     var askNotifs: () -> Unit = {}
     var shareFile: (java.io.File, String) -> Unit = { _, _ -> }
     var ctx: android.content.Context? = null

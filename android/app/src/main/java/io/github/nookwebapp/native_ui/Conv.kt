@@ -58,11 +58,16 @@ fun ConvScreen(id: String) {
     // the messages already there when the chat opened come in without an animation
     val had = remember(chat.id) { chat.msgs.map { it.id }.toHashSet() }
     // a new message takes the view to the bottom; deleting one leaves the view where it is
+    val atBottom by rememberAtBottom(list)
     var seenCount by remember(chat.id) { mutableIntStateOf(chat.msgs.size) }
     LaunchedEffect(chat.msgs.size) {
         val grew = chat.msgs.size > seenCount
         seenCount = chat.msgs.size
-        if (chat.msgs.isNotEmpty() && grew) list.scrollToItem(chat.msgs.size - shownFrom + 1)
+        if (chat.msgs.isEmpty()) return@LaunchedEffect
+        val mine = chat.msgs.lastOrNull()?.let { !it.ai } == true
+        // what I send always takes the view down; an answer or a delete only follows when the view is at the bottom already
+        if (grew && mine) { list.scrollToItem(chat.msgs.size - shownFrom + 1); list.pinBottom() }
+        else if (atBottom) { if (grew) list.scrollToItem(chat.msgs.size - shownFrom + 1); list.pinBottom() }
     }
     KeepAtBottom(list)
     Page({
@@ -88,7 +93,7 @@ fun ConvScreen(id: String) {
     }) {
         val typing = app.zenTyping[chat.id]
         // the length of his answer is read in an effect, so each streamed piece does not redraw the screen
-        LaunchedEffect(chat.id) { snapshotFlow { app.zenTyping[chat.id]?.text?.length }.collect { if (it != null) list.scrollToItem(chat.msgs.size - shownFrom + 2) } }
+        LaunchedEffect(chat.id) { snapshotFlow { app.zenTyping[chat.id]?.text?.length }.collect { if (it != null && atBottom) list.scrollToItem(chat.msgs.size - shownFrom + 2) } }
         LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp), state = list, verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom), contentPadding = PaddingValues(vertical = 14.dp)) {
             if (chat.msgs.isEmpty()) item { Empty("smile", "Nothing here yet. Say something to yourself.", iconSize = 48.dp) }
             if (shownFrom > 0) item { Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) { Pill("Show earlier messages", Btn.Ghost) { shownFrom = maxOf(0, shownFrom - 80) } } }

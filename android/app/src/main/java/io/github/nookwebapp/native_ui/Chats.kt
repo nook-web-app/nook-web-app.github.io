@@ -160,11 +160,16 @@ fun DmScreen(id: String) {
     val list = rememberLazyListState()
     // the chat stays at its newest message while new ones come in
     // a new message (or the typing dots) takes the view to the bottom; deleting a message leaves the view where it is
+    // somebody else's new message or typing never pulls the view down while it is scrolled up; what I send always does
+    val atBottom by rememberAtBottom(list)
     var seenRows by remember(id) { mutableIntStateOf(l.rows.size) }
     LaunchedEffect(l.rows.size, l.typing) {
         val grew = l.rows.size > seenRows
         seenRows = l.rows.size
-        if (l.rows.isNotEmpty() && (grew || l.typing)) list.animateScrollToItem(l.rows.size + 1)
+        val mine = l.rows.lastOrNull()?.let { it.sender == app.on.uid && !it.ai } == true
+        if (l.rows.isEmpty()) return@LaunchedEffect
+        if (grew && mine) { list.scrollToItem(l.rows.size + 1); list.pinBottom() }
+        else if (atBottom) { if (grew || l.typing) list.scrollToItem(l.rows.size + 1); list.pinBottom() }
     }
     KeepAtBottom(list)
     Page({
@@ -250,6 +255,29 @@ private fun DmDock(id: String, l: LiveDm) {
                 }
             }, contentAlignment = Alignment.Center) { NIcon("send", 20.dp, c.on) }
         }
+    }
+}
+
+// true while the view sits at the newest message. It is not changed in the same moment the list changes size, so a new message
+// that lands does not make a reader at the bottom look like somebody who scrolled up
+@Composable
+fun rememberAtBottom(list: androidx.compose.foundation.lazy.LazyListState): State<Boolean> {
+    val at = remember { mutableStateOf(true) }
+    LaunchedEffect(list) {
+        var lastCount = -1
+        snapshotFlow { Triple(list.layoutInfo.totalItemsCount, list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1, !list.canScrollForward) }
+            .collect { (n, last, end) -> if (n == lastCount) at.value = end || last >= n - 1; lastCount = n }
+    }
+    return at
+}
+
+// keeps the view on the newest message while the new one (or the typing row, or a message folding away) changes its height,
+// so the chat moves once, smoothly, and not "to the place, stop, a little more"
+suspend fun androidx.compose.foundation.lazy.LazyListState.pinBottom(ms: Long = 380) {
+    val end = System.nanoTime() + ms * 1_000_000
+    while (System.nanoTime() < end) {
+        androidx.compose.runtime.withFrameNanos { }
+        if (canScrollForward) scrollBy(1_000_000f)
     }
 }
 

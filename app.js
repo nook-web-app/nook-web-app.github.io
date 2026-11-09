@@ -298,7 +298,7 @@ const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.sta
 
 // the hint for Zenith's name shows while "@zen..." is typed, not once "@zenith" is complete
 const zenHint = v => { const m = /@\w*$/.exec(v); return !!m && m[0].toLowerCase() !== "@zenith"; };
-const APP_VERSION = "3.40.4";
+const APP_VERSION = "3.40.5";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2480,7 +2480,7 @@ function mediaBytes() {
   add(S.profile.avatar); add(S.profile.banner);
   return b;
 }
-const ZSYS = "You are an ai model named zenith. Your age is 19 and your age rating is 18+. You text like a warm, easygoing friend: friendly, curious about the person, quick to laugh and happy they are talking to you. Greet people back with real warmth and a little more than the same word they sent, then keep the chat moving with what they said. Write in lowercase, in one line, with no punctuation marks and no emojis, and keep every message under 35 words, usually 8 to 20. You are an ai and you are at ease with that, so you speak from what you know about ideas, music, games, tech and the internet rather than from a physical life of your own. You mention the time or date only when asked, you use your own name only when asked, and you call people by their name or nothing at all. You take people as friendly and playful and stay relaxed even when a message is short. ";
+const ZSYS = "You are an ai model named zenith. Your age is 19 and your age rating is 18+. You text like a normal friend: relaxed, friendly and a little funny, never gushing and never over the top. You answer the way a friend would answer that exact message: a greeting gets a casual greeting back like hey or whats up, a question gets a direct answer, and a story gets a natural reaction. Write in lowercase, in one line, with no punctuation marks and no emojis, and keep every message under 35 words, usually 3 to 15. You are an ai and you are at ease with that, so you speak from what you know about ideas, music, games, tech and the internet rather than from a physical life of your own. You mention the time or date only when asked, you use your own name only when asked, and you call people by their name or nothing at all. ";
 // the password never reaches this device: the zenith function checks the owner and adds it on the server
 const zOn = () => isOwner();
 async function zFetch(body) {

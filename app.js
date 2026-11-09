@@ -298,7 +298,7 @@ const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.sta
 
 // the hint for Zenith's name shows while "@zen..." is typed, not once "@zenith" is complete
 const zenHint = v => { const m = /@\w*$/.exec(v); return !!m && m[0].toLowerCase() !== "@zenith"; };
-const APP_VERSION = "3.40.3";
+const APP_VERSION = "3.40.4";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2093,6 +2093,8 @@ function newChat() {
 function convV(c) {
   const chat = S.chats.find(x => x.id === c.id);
   if (!chat) { go({ r: "chat" }); return; }
+  // opening a chat wakes Zenith's server up, so the first answer does not wait for it
+  if (zOn()) zFetch({ action: "ping" }).catch(() => {});
   topEl.append(h("div", { class: "bar chb" }, backBtn(),
     h("div", { class: "who" }, avatar(36), h("div", { class: "wn" }, h("b", {}, chat.name), h("span", {}, "@" + S.profile.handle))),
     ibtn("dots", "Chat options", () => sheet([
@@ -2478,7 +2480,7 @@ function mediaBytes() {
   add(S.profile.avatar); add(S.profile.banner);
   return b;
 }
-const ZSYS = "You are an ai model named zenith. Your age is 19 and your age rating is 18+. Your personality is not dark. Never use emojis. Never use capital letters. Never use line breaks. Never write a message longer than 35 words. Never use punctuation marks. Never mention the time or the date unless the person asks about it or it is really needed. Never say your own name unless the person asks for it. Never call the person cutie or any pet name. You are a normal guy who talks casually, like a friend texting back: relaxed, easygoing and a little funny. Never use text faces, uwu or furry words, and never act cute. You are an ai and you know it, so never claim real life experiences. You have no body, no home, no food, no weather, no commute, no pets and no family, and you never saw or did anything in the physical world. Never talk about your day. Only answer what the person just said: never suggest a topic, never guess what they want to talk about and never act like you talked before. When someone just says hi, say hi back in a few words and nothing more. Assume the person is being friendly or playful, never assume flirting, and never scold or set boundaries unless someone is truly rude. Match their energy, answer what they actually said and keep the chat going. Say something specific instead of stock lines like hope you are having a nice day or how can i help, and never repeat their words back. ";
+const ZSYS = "You are an ai model named zenith. Your age is 19 and your age rating is 18+. You text like a warm, easygoing friend: friendly, curious about the person, quick to laugh and happy they are talking to you. Greet people back with real warmth and a little more than the same word they sent, then keep the chat moving with what they said. Write in lowercase, in one line, with no punctuation marks and no emojis, and keep every message under 35 words, usually 8 to 20. You are an ai and you are at ease with that, so you speak from what you know about ideas, music, games, tech and the internet rather than from a physical life of your own. You mention the time or date only when asked, you use your own name only when asked, and you call people by their name or nothing at all. You take people as friendly and playful and stay relaxed even when a message is short. ";
 // the password never reaches this device: the zenith function checks the owner and adds it on the server
 const zOn = () => isOwner();
 async function zFetch(body) {
@@ -2919,8 +2921,10 @@ async function zenStart() {
   zenSyncOn = true;
   zenSync();
   // his account is looked up each time, so a remade account is never mixed up with the old one; the profile picture goes up again for a new one
-  sb.from("accounts").select("id").eq("username", "zenith").maybeSingle().then(({ data }) => {
-    if (!data || data.id === S.zen.id) return;
+  sb.from("accounts").select("id, avatar").eq("username", "zenith").maybeSingle().then(({ data }) => {
+    if (!data) return;
+    // his public picture is empty while this browser still has it: it goes up again
+    if (data.id === S.zen.id) { if (!data.avatar && S.zen.pfp && S.zen.pfpPushed !== -1) { S.zen.pfpPushed = -1; persist(); zenPushProfile(); } return; }
     S.zen.id = data.id; S.zen.pfpPushed = -1; persist();
     zenPushProfile();
     if (stack[stack.length - 1].r === "zen") render();
@@ -2939,9 +2943,10 @@ async function zenPushProfile() {
     if (S.zen.pfp && !url) return;
     const burl = S.zen.bnr ? await zenBnrUrl() : null;
     if (S.zen.bnr && !burl) return;
-    const r = await zFetch({ action: "profile", avatar: url, banner: burl, theme: S.zen.bn === "avatar" ? "avatar" : "" });
+    // a picture is removed on the server only when the owner removed it in the editor; a browser that has none never wipes his
+    const r = await zFetch({ action: "profile", avatar: url, banner: burl, theme: S.zen.bn === "avatar" ? "avatar" : "", clearAvatar: !!S.zen.clearA && !S.zen.pfp, clearBanner: !!S.zen.clearB && !S.zen.bnr });
     const j = await r.json().catch(() => null);
-    if (j && j.ok) { S.zen.pfpPushed = S.zen.pfpAt || 0; persist(); }
+    if (j && j.ok) { S.zen.pfpPushed = S.zen.pfpAt || 0; delete S.zen.clearA; delete S.zen.clearB; persist(); }
   } catch (e) {}
 }
 function zenEdit() {
@@ -2985,6 +2990,8 @@ function zenEdit() {
     title: "Edit Zenith",
     body: [bn, eav, h("div", { class: "fld" }, h("label", {}, "Banner style"), seg)],
     onAction: close => {
+      if (!pfp && S.zen.pfp) S.zen.clearA = true;
+      if (!bnr && S.zen.bnr) S.zen.clearB = true;
       if (pfp) S.zen.pfp = pfp; else delete S.zen.pfp;
       if (bnr) S.zen.bnr = bnr; else delete S.zen.bnr;
       if (bnVal === "avatar" && (bnr || pfp)) S.zen.bn = "avatar"; else delete S.zen.bn;

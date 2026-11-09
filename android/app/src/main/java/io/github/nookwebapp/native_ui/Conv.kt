@@ -50,6 +50,8 @@ fun ConvScreen(id: String) {
     val chat = s.chats.firstOrNull { it.id == id }
     if (chat == null) { LaunchedEffect(Unit) { app.pop() }; return }
     val fill = remember(chat.id) { arrayOfNulls<(String) -> Unit>(1) }
+    // opening a chat wakes Zenith's server up, so the first answer does not wait for it
+    LaunchedEffect(chat.id) { if (zOn()) runCatching { Sb.fn("zenith", org.json.JSONObject().put("action", "ping")) } }
     var open by remember { mutableStateOf<String?>(null) }
     var shownFrom by remember(chat.id) { mutableIntStateOf(maxOf(0, chat.msgs.size - 80)) }
     val list = rememberLazyListState()

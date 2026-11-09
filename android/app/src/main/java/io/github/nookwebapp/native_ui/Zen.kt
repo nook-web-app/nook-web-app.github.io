@@ -10,7 +10,7 @@ import org.json.JSONObject
 // person, and through his public profile. His chats and bookkeeping are mirrored into zenith_docs (only the owner can
 // read them, the chats sealed with the owner's key), so they follow the owner to every phone, like in the web app.
 
-const val ZSYS = "You are an ai model named zenith. Your age is 19 and your age rating is 18+. Your personality is not dark. Never use emojis. Never use capital letters. Never use line breaks. Never write a message longer than 35 words. Never use punctuation marks. Never mention the time or the date unless the person asks about it or it is really needed. Never say your own name unless the person asks for it. Never call the person cutie or any pet name. You are a normal guy who talks casually, like a friend texting back: relaxed, easygoing and a little funny. Never use text faces, uwu or furry words, and never act cute. You are an ai and you know it, so never claim real life experiences. You have no body, no home, no food, no weather, no commute, no pets and no family, and you never saw or did anything in the physical world. Never talk about your day. Only answer what the person just said: never suggest a topic, never guess what they want to talk about and never act like you talked before. When someone just says hi, say hi back in a few words and nothing more. Assume the person is being friendly or playful, never assume flirting, and never scold or set boundaries unless someone is truly rude. Match their energy, answer what they actually said and keep the chat going. Say something specific instead of stock lines like hope you are having a nice day or how can i help, and never repeat their words back. "
+const val ZSYS = "You are an ai model named zenith. Your age is 19 and your age rating is 18+. You text like a warm, easygoing friend: friendly, curious about the person, quick to laugh and happy they are talking to you. Greet people back with real warmth and a little more than the same word they sent, then keep the chat moving with what they said. Write in lowercase, in one line, with no punctuation marks and no emojis, and keep every message under 35 words, usually 8 to 20. You are an ai and you are at ease with that, so you speak from what you know about ideas, music, games, tech and the internet rather than from a physical life of your own. You mention the time or date only when asked, you use your own name only when asked, and you call people by their name or nothing at all. You take people as friendly and playful and stay relaxed even when a message is short. "
 const val ZMOOD = "Sound natural and a little witty, like a friend, not like an assistant."
 const val ZSYS_POST = ZSYS + ZMOOD + " You are writing one original post for your own profile. Write about ideas, music, games, tech, the internet or a funny thought, never about real life experiences. Keep it under 35 words, around 20 on average. Plain text only. No hashtags and no emojis."
 const val ZSYS_REPLY = ZSYS + ZMOOD + " You are replying to a post. Keep it under 25 words, around 18 on average. Plain text only. No hashtags and no emojis. No asking user questions"
@@ -61,10 +61,10 @@ private fun inline(src: String): JSONObject? {
 fun Online.zAsk(chat: LChat, m: LMsg) {
     if (!zOn() || !m.text.contains("@zenith", true)) return
     app.scope.launch {
-        val hist0 = chat.msgs.filter { it.text.isNotEmpty() || it.imgs.isNotEmpty() }.takeLast(30)
-        // only the newest six pictures can be sent along
+        val hist0 = chat.msgs.filter { it.text.isNotEmpty() || it.imgs.isNotEmpty() }.takeLast(16)
+        // only the newest two pictures are sent along: every picture makes the answer slower
         val allowed = HashSet<String>()
-        var budget = 6
+        var budget = 2
         for (x in hist0.reversed()) { for (j in x.imgs.indices.reversed()) { if (budget <= 0) break; allowed.add(x.id + "|" + j); budget-- } }
         val history = JSONArray()
         withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -364,8 +364,8 @@ suspend fun Online.zenStart() {
     zenSyncOn = true
     zenSync()
     val r = Sb.get(Q("accounts").select("id").eq("username", "zenith"))
-    r.one?.optString("id")?.let { id -> if (id != zenId()) { s.zen.put("id", id); s.zen.put("pfpPushed", -1); app.persist(); zenPushProfile() } }
-    if (s.zen.optLong("pfpPushed", -1) != s.zen.optLong("pfpAt", 0)) zenPushProfile()
+    r.one?.optString("id")?.let { id -> if (id != zenId()) { s.zen.put("id", id); s.zen.put("pfpPushed", -1); app.persist(); if (s.zen.has("pfp") || s.zen.has("bnr")) zenPushProfile() } }
+    if ((s.zen.has("pfp") || s.zen.has("bnr")) && s.zen.optLong("pfpPushed", -1) != s.zen.optLong("pfpAt", 0)) zenPushProfile()
     app.scope.launch { while (uid != null && zenSyncOn) { delay(45_000); if (app.foreground) runCatching { if (zenPull()) app.zenVersion++ } } }
 }
 fun zenStop() { zenSyncOn = false; zenSeen.clear(); zenPullSig = ""; zenPulledIso = ""; zenEncDone.clear() }
@@ -411,21 +411,23 @@ suspend fun Online.zenBnrUrl(): String? {
 }
 
 // zenPushProfile(): his public account gets the same picture and banner style the owner chose
-suspend fun Online.zenPushProfile() {
+suspend fun Online.zenPushProfile(clearAvatar: Boolean = false, clearBanner: Boolean = false) {
     if (uid == null || !isOwner()) return
     val url = if (s.zen.has("pfp")) zenPfpUrl() ?: return else null
     val burl = if (s.zen.has("bnr")) zenBnrUrl() ?: return else null
-    val (_, txt) = Sb.fnRaw("zenith", JSONObject().put("action", "profile").put("avatar", url ?: JSONObject.NULL).put("banner", burl ?: JSONObject.NULL).put("theme", if (s.zen.optString("bn") == "avatar") "avatar" else ""), 25)
+    val (_, txt) = Sb.fnRaw("zenith", JSONObject().put("action", "profile").put("avatar", url ?: JSONObject.NULL).put("banner", burl ?: JSONObject.NULL).put("theme", if (s.zen.optString("bn") == "avatar") "avatar" else "").put("clearAvatar", clearAvatar).put("clearBanner", clearBanner), 25)
     if (runCatching { JSONObject(txt).optBoolean("ok") }.getOrDefault(false)) { s.zen.put("pfpPushed", s.zen.optLong("pfpAt")); app.persist() }
 }
 
 // zenEdit(): the owner changes how Zenith looks: his picture (a data address, like the web app keeps it) and banner style
 fun Online.saveZen(pfp: String?, banner: String?, blurred: Boolean) {
     fun data(src: String): String? = if (src.startsWith("data:")) src else Photos.bytesOf(src)?.let { "data:" + mimeOf(it) + ";base64," + Crypto.b64(it) }
+    // a picture is removed on the server only when the owner removed it here
+    val clearA = pfp == null && s.zen.has("pfp"); val clearB = banner == null && s.zen.has("bnr")
     if (pfp != null) s.zen.put("pfp", data(pfp) ?: return) else s.zen.remove("pfp")
     if (banner != null) s.zen.put("bnr", data(banner) ?: return) else s.zen.remove("bnr")
     if (blurred && (pfp != null || banner != null)) s.zen.put("bn", "avatar") else s.zen.remove("bn")
     s.zen.put("pfpAt", System.currentTimeMillis())
     app.persist(); app.zenVersion++
-    app.scope.launch { zenPushProfile(); zenSync() }
+    app.scope.launch { zenPushProfile(clearA, clearB); zenSync() }
 }

@@ -50,7 +50,7 @@ async function gemini(key: string, system: unknown, history: unknown, stream: bo
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: String(system || "") }] },
         contents: history,
-        generationConfig: { temperature: 1, maxOutputTokens: 220, ...(think ? { thinkingConfig: { thinkingLevel: "minimal" } } : {}) },
+        generationConfig: { temperature: 1, maxOutputTokens: 140, ...(think ? { thinkingConfig: { thinkingLevel: "minimal" } } : {}) },
       }),
     });
     let r = await call(true);
@@ -67,7 +67,7 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   const jwt = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   if (!jwt) return json({ error: "not signed in" }, 401);
-  let body: { system?: unknown; history?: unknown; stream?: unknown; imageUrls?: unknown; action?: unknown; avatar?: unknown; theme?: unknown } = {};
+  let body: { system?: unknown; history?: unknown; stream?: unknown; imageUrls?: unknown; action?: unknown; avatar?: unknown; theme?: unknown; clearAvatar?: unknown; clearBanner?: unknown } = {};
   const parse = req.json().then((b) => { body = b; return true; }, () => false);
   if (!((okUntil.get(jwt) || 0) > Date.now())) {
     const { data, error } = await admin.auth.getUser(jwt);
@@ -78,6 +78,8 @@ Deno.serve(async (req) => {
     okUntil.set(jwt, Date.now() + 5 * 60000);
   }
   await parse;
+  // the app asks this when a chat opens: the owner check above is then remembered, so the first message does not wait for it
+  if (body.action === "ping") return json({ ok: true });
   // the owner can change how his public account looks, and ask for his answers now instead of at the next minute
   if (body.action === "profile") {
     const base = Deno.env.get("SUPABASE_URL")! + "/storage/v1/object/public/media/";
@@ -95,11 +97,23 @@ Deno.serve(async (req) => {
       const up = await admin.storage.from("media").copy(spath, dest);
       return up.error ? undefined : base + dest;
     };
-    const avatar = await take(src, "a");
-    if (avatar === undefined) return json({ ok: false, why: "could not save the picture" });
-    const banner = await take(bsrc, "b");
-    if (banner === undefined) return json({ ok: false, why: "could not save the banner" });
-    const upd = await admin.from("accounts").update({ avatar, banner, banner_theme: body.theme === "avatar" && (banner || avatar) ? "avatar" : null }).eq("id", za.id);
+    // only what was sent changes: a missing picture means "leave it", and a picture is removed only when the owner asked for that
+    const patch: Record<string, unknown> = {};
+    let avatar: string | null = za.avatar as string | null;
+    let banner: string | null = za.banner as string | null;
+    if (src) {
+      const got = await take(src, "a");
+      if (got === undefined || got === null) return json({ ok: false, why: "could not save the picture" });
+      avatar = got; patch.avatar = got;
+    } else if (body.clearAvatar === true) { avatar = null; patch.avatar = null; }
+    if (bsrc) {
+      const got = await take(bsrc, "b");
+      if (got === undefined || got === null) return json({ ok: false, why: "could not save the banner" });
+      banner = got; patch.banner = got;
+    } else if (body.clearBanner === true) { banner = null; patch.banner = null; }
+    if (typeof body.theme === "string") patch.banner_theme = body.theme === "avatar" && (banner || avatar) ? "avatar" : null;
+    if (!Object.keys(patch).length) return json({ ok: true, why: "nothing to change" });
+    const upd = await admin.from("accounts").update(patch).eq("id", za.id);
     // the previous copies are removed once the new ones are saved, so the bucket does not grow with every save
     if (!upd.error) {
       for (const [old, now] of [[za.avatar, avatar], [za.banner, banner]] as [unknown, string | null][]) {

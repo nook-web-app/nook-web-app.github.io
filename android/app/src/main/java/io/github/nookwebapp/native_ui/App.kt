@@ -58,8 +58,14 @@ fun NookApp(app: AppState) {
                     val slide = with(LocalDensity.current) { 14.dp.roundToPx() }
                     AnimatedContent(
                         app.top to app.stack.size, Modifier.weight(1f), label = "page",
-                        // a page just appears: no slide, no fade and no size animation (they showed the screen drawing from the left to the right on an older phone)
-                        transitionSpec = { (androidx.compose.animation.EnterTransition.None togetherWith androidx.compose.animation.ExitTransition.None).using(null) },
+                        // the page slides 14dp and fades in, like go-fwd / go-back / go-root in style.css
+                        transitionSpec = {
+                            when (app.dir) {
+                                Dir.Fwd -> (fadeIn(tween(180)) + slideInHorizontally(tween(180)) { slide }) togetherWith fadeOut(tween(0))
+                                Dir.Back -> (fadeIn(tween(180)) + slideInHorizontally(tween(180)) { -slide }) togetherWith fadeOut(tween(0))
+                                Dir.Root -> fadeIn(tween(140)) togetherWith fadeOut(tween(0))
+                            }
+                        },
                     ) { (r, n) -> CompositionLocalProvider(LocalPage provides n) { PageFor(r) } }
                     // the bottom bar goes away on the sign in, banned and age pages, inside a chat, and on the legal pages before signing in
                     if (top != Route.Auth && top != Route.Banned && top != Route.Age && top !is Route.Conv && top !is Route.Dm && !(top is Route.Legal && !app.signedIn)) NavBar(app)

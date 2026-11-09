@@ -316,18 +316,18 @@ class MainActivity : ComponentActivity() {
             if (f == null) { runOnUiThread { app.updProgress = null; if (!quiet) app.say("Could not download the update. Try again") }; return@Thread }
             if (!quiet) runOnUiThread { app.updPhase = "Installing the update"; app.updProgress = 0.8f; creepInstall() }
             // the apk is written into the installer on this thread, not on the screen's, so the bar keeps moving meanwhile
-            val ok = runCatching { Updater.install(this, f) { p -> if (!quiet) runOnUiThread { app.updProgress = maxOf(app.updProgress ?: 0f, 0.8f + 0.2f * p) } } }.getOrDefault(false)
+            val ok = runCatching { Updater.install(this, f) }.getOrDefault(false)
             if (!ok) runOnUiThread { app.updProgress = null; app.say("Allow Nook to install the update, then tap Update now again") }
         }.start()
     }
 
-    // while the phone installs, the bar keeps moving toward the end (the phone only says when it is done, and then the app restarts)
+    // while the phone installs, the bar keeps moving slowly toward the end over the last 20 percent (the installer's own progress is done as soon as the file is handed over, so it is not used; the app restarts when the install is finished)
     private fun creepInstall() {
         val tick = object : Runnable {
             override fun run() {
                 val p = app.updProgress ?: return
                 if (app.updPhase != "Installing the update") return
-                app.updProgress = minOf(0.98f, p + (0.98f - p) * 0.04f + 0.0008f)
+                app.updProgress = minOf(0.99f, p + (0.99f - p) * 0.015f + 0.0003f)
                 window.decorView.postDelayed(this, 120)
             }
         }

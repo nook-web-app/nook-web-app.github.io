@@ -1,5 +1,9 @@
 package io.github.nookwebapp.native_ui
 
+import kotlinx.coroutines.flow.collectLatest
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.zIndex
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -163,10 +167,14 @@ fun DmScreen(id: String) {
     // somebody else's new message or typing never pulls the view down while it is scrolled up; what I send always does
     val atBottom by rememberAtBottom(list)
     var seenRows by remember(id) { mutableIntStateOf(l.rows.size) }
+    var unread by remember(id) { mutableIntStateOf(0) }
+    LaunchedEffect(atBottom) { if (atBottom) unread = 0 }
     LaunchedEffect(l.rows.size, l.typing) {
         val grew = l.rows.size > seenRows
+        val added = l.rows.size - seenRows
         seenRows = l.rows.size
         val mine = l.rows.lastOrNull()?.let { it.sender == app.on.uid && !it.ai } == true
+        if (grew && !mine && !atBottom) unread += added
         if (l.rows.isEmpty()) return@LaunchedEffect
         if (grew && mine) { list.scrollToItem(l.rows.size + 1); list.pinBottom() }
         else if (atBottom) { if (grew || l.typing) list.scrollToItem(l.rows.size + 1); list.pinBottom() }
@@ -186,7 +194,9 @@ fun DmScreen(id: String) {
             Box(Modifier.width(44.dp)) { IB("dots") { on.dmMenu(id, acct?.optString("name") ?: "user", true) } }
         }
     }) {
-        LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp), state = list, verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom), contentPadding = PaddingValues(vertical = 14.dp)) {
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+        ToBottomButton(list, unread, Modifier.align(Alignment.BottomEnd).padding(end = 10.dp).zIndex(2f))
+        LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), state = list, verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom), contentPadding = PaddingValues(vertical = 14.dp)) {
             if (!l.loaded && l.rows.isEmpty()) item { Loading() }
             else if (l.failed && l.rows.isEmpty()) item { Empty(null, "Could not load messages. Trying again...") }
             else if (l.rows.isEmpty()) item { Empty("chat", "No messages yet. Say hi.", iconSize = 48.dp) }
@@ -204,10 +214,11 @@ fun DmScreen(id: String) {
             }
             // .trow: the typing dots, in a slot that grows smoothly
             item(key = "typing") {
-                AnimatedVisibility(l.typing, enter = expandVertically(tween(300, easing = TROW_EASE)) + fadeIn(tween(250, easing = CSS_EASE)), exit = shrinkVertically(tween(300, easing = TROW_EASE)) + fadeOut(tween(250, easing = CSS_EASE))) {
+                androidx.compose.animation.AnimatedVisibility(visible = l.typing, enter = expandVertically(tween(300, easing = TROW_EASE)) + fadeIn(tween(250, easing = CSS_EASE)), exit = shrinkVertically(tween(300, easing = TROW_EASE)) + fadeOut(tween(250, easing = CSS_EASE))) {
                     Box(Modifier.fillMaxWidth()) { TypingBubble(Modifier.align(Alignment.CenterStart)) }
                 }
             }
+        }
         }
         DmDock(id, l)
     }
@@ -278,6 +289,46 @@ suspend fun androidx.compose.foundation.lazy.LazyListState.pinBottom(ms: Long = 
     while (System.nanoTime() < end) {
         androidx.compose.runtime.withFrameNanos { }
         if (canScrollForward) scrollBy(1_000_000f)
+    }
+}
+
+// the round button at the bottom right of a chat that has been scrolled away from its newest message: it shows a moment after
+// the view moved well away (a short scroll up does nothing), takes the view back down, and carries a count of the messages that
+// came in meanwhile
+@Composable
+fun ToBottomButton(list: androidx.compose.foundation.lazy.LazyListState, unread: Int, modifier: Modifier = Modifier) {
+    val c = LocalNook.current
+    val scope = rememberCoroutineScope()
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val far by remember(list) {
+        derivedStateOf {
+            val li = list.layoutInfo
+            val last = li.visibleItemsInfo.lastOrNull()
+            list.canScrollForward && last != null &&
+                (li.totalItemsCount - 1 - last.index >= 2 || (last.offset + last.size - li.viewportEndOffset) > with(density) { 220.dp.toPx() })
+        }
+    }
+    var show by remember { mutableStateOf(false) }
+    LaunchedEffect(list) { snapshotFlow { far }.collectLatest { f -> if (f) { kotlinx.coroutines.delay(400); show = true } else show = false } }
+    androidx.compose.animation.AnimatedVisibility(show, modifier = modifier, enter = fadeIn(tween(160)) + androidx.compose.animation.scaleIn(tween(160), 0.8f), exit = fadeOut(tween(140)) + androidx.compose.animation.scaleOut(tween(140), 0.8f)) {
+        Box(Modifier.padding(end = 6.dp, bottom = 10.dp)) {
+            Box(
+                Modifier.size(44.dp).shadow(14.dp, CircleShape, ambientColor = Color(0x38000000), spotColor = Color(0x38000000)).clip(CircleShape).background(c.bg2).border(1.dp, c.line, CircleShape)
+                    .pressTap(CircleShape) {
+                        scope.launch {
+                            val n = list.layoutInfo.totalItemsCount
+                            if (n - 1 - list.firstVisibleItemIndex > 8) list.scrollToItem(maxOf(0, n - 6))
+                            list.animateScrollToItem(maxOf(0, n - 1))
+                            list.pinBottom(250)
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) { NIcon("back", 22.dp, c.fg, modifier = Modifier.rotate(-90f)) }
+            if (unread > 0) Box(
+                Modifier.align(Alignment.BottomEnd).offset(x = 6.dp, y = 6.dp).defaultMinSize(minWidth = 22.dp, minHeight = 22.dp).clip(CircleShape).background(c.accent).padding(horizontal = 6.dp),
+                contentAlignment = Alignment.Center,
+            ) { T(if (unread > 99) "99+" else unread.toString(), Fs.xs, FontWeight.Bold, c.on) }
+        }
     }
 }
 

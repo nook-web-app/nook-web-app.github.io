@@ -59,7 +59,13 @@ fun Page(top: @Composable ColumnScope.() -> Unit, fab: (@Composable () -> Unit)?
     Box(Modifier.fillMaxSize().background(LocalNook.current.bg)) {
         Column(Modifier.fillMaxSize()) {
             Top(top)
-            Column(Modifier.weight(1f).fillMaxWidth(), content = body)
+            // the pages with a feed or a profile refresh with a pull down, like the web app
+            val app = LocalApp.current
+            val t = app.top
+            val pullable = app.signedIn && (t == Route.Home || t == Route.Profile || t == Route.Saved || t == Route.Notifs || t is Route.User || t is Route.Thread || t is Route.Tag)
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                PullRefresh(pullable, { app.pullRefresh() }) { Column(Modifier.fillMaxSize(), content = body) }
+            }
         }
         if (fab != null) Box(Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 16.dp)) { fab() }
     }
@@ -204,7 +210,7 @@ fun ProfileScreen() {
                         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Pill("Edit Profile", Btn.Ghost, small = true) { app.panels.add(Panel.EditProfile) }
                             GhostIcon("dots") {
-                                app.open(listOf(SheetItem("Copy handle", "copy") { app.clipboard("@" + pr.handle) }, SheetItem("Settings", "sliders") { app.root(Route.Settings) }, SheetItem("Cancel", cancel = true)), "@" + pr.handle)
+                                app.open(listOf(SheetItem("Copy handle", "copy") { app.clipboard("@" + pr.handle) }, SheetItem("Settings", "sliders") { app.root(Route.Settings) }, SheetItem("Cancel", cancel = true)))
                             }
                         }
                     }

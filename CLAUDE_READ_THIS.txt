@@ -11,7 +11,13 @@ how to write updates here
 - use exactly those two sentences, do not name a feature, a bug, a page or a number
 - skip the "new:" line when nothing was added and the "fixed:" line when nothing was fixed
 - do not add summary lines or anything else under a version
-- the only extra allowed is a ! after the version, like "## 3.38.5
+- the only extra allowed is a ! after the version, like "## 3.0.8 !", for an update that people must install right away (privacy or security fixes). It installs at once and cannot be skipped.
+- every update installs quietly in the background without asking, whether it is a patch like 3.0.7 to 3.0.8, a new minor or a new major version.
+-->
+## 3.39.0
+new: Added new features
+
+## 3.38.5
 fixed: Fixed some bugs
 
 ## 3.38.4
@@ -45,9 +51,6 @@ fixed: Fixed some bugs
 ## 3.37.7
 fixed: Fixed some bugs
 
-## 3.0.8 !", for an update that people must install right away (privacy or security fixes). It installs at once and cannot be skipped.
-- every update installs quietly in the background without asking, whether it is a patch like 3.0.7 to 3.0.8, a new minor or a new major version.
--->
 ## 3.37.6
 fixed: Fixed some bugs
 

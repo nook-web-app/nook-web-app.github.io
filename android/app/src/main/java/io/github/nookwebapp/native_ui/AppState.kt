@@ -20,6 +20,7 @@ sealed interface Route {
     data object Lists : Route
     data object Search : Route
     data object Notifs : Route
+    data object AccountInfo : Route
     data object Blocked : Route
     data object Hidden : Route
     data object Banned : Route
@@ -165,6 +166,8 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
             drawer -> drawer = false
             panels.isNotEmpty() -> panelBack()
             stack.size > 1 -> pop()
+            // a page opened from the menu (settings, search, lists) or a tab is a page of its own: back goes home first
+            signedIn && rootRoute != Route.Home && rootRoute != Route.Auth && rootRoute != Route.Banned && rootRoute != Route.Age -> root(Route.Home)
             else -> return false
         }
         return true
@@ -173,6 +176,19 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     val panelBackHooks = mutableMapOf<Panel, () -> Unit>()
     fun panelBack() { val p = panels.lastOrNull() ?: return; panelBackHooks.remove(p)?.invoke(); panels.remove(p) }
     fun closePanel(p: Panel) { panelBackHooks.remove(p); panels.remove(p) }
+    // a page can set its own work for the pull down to refresh; without one the feed, the bell and the notes are read again
+    var pullHook: (suspend () -> Unit)? = null
+    suspend fun pullRefresh() {
+        Sb.dropConnections()
+        pullHook?.let { it(); return }
+        on.feedTries = 0
+        on.loadFeed()
+        scope.launch { on.refreshBadge(true); on.notesSync() }
+        // loadFeed runs by itself: the spinner stays until the feed answered (or a few seconds passed)
+        val t0 = System.currentTimeMillis()
+        kotlinx.coroutines.delay(600)
+        while (on.feedLoading && System.currentTimeMillis() - t0 < 7000) kotlinx.coroutines.delay(150)
+    }
     fun open(items: List<SheetItem>, title: String? = null, onDone: (() -> Unit)? = null) { sheet = SheetSpec(items, title, onDone) }
     fun closeSheet() { val s = sheet; sheet = null; s?.onDone?.invoke() }
     fun confirm(msg: String, label: String, fn: () -> Unit) = open(listOf(SheetItem(label, danger = true, fn = fn), SheetItem("Cancel", cancel = true)), msg)

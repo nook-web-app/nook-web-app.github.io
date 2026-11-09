@@ -25,6 +25,7 @@ class Online(val app: AppState) {
     var feedTries = 0
     private var feedRetry: kotlinx.coroutines.Job? = null
     private var feedBusy = false
+    val feedLoading: Boolean get() = feedBusy
     private var feedAgain = false
     var follows by mutableStateOf<Set<String>>(app.store.folSeed)
     // the bell's dot and the number on the chats button

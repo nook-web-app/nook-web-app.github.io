@@ -116,10 +116,10 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
     val focus = remember { FocusRequester() }
     val pend = remember { mutableStateListOf<String>() }
     val picker = rememberPicker(4 - pend.size) { got -> pend.addAll(got.take(4 - pend.size)) }
-    fill[0] = { pre -> setText(pre); runCatching { focus.requestFocus() } }
+    fill[0] = { pre -> val cur = tv.text; if (!cur.startsWith(pre.trim(), true)) setText(pre + cur); runCatching { focus.requestFocus() } }
     // .cdock: the pending photos and the text box with its photo and send buttons
     Column(Modifier.fillMaxWidth().background(c.bg).lineAbove(c.line).navigationBarsPadding().padding(bottom = 10.dp)) {
-        ZenPopHost(zOn() && ZEN_AT.containsMatchIn(text)) { setText(text.replace(ZEN_AT, "@zenith ")) }
+        ZenPopHost(zOn() && zenHint(text)) { setText(text.replace(ZEN_AT, "@zenith ")) }
         if (pend.isNotEmpty()) Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             pend.forEachIndexed { i, src ->
                 Box(Modifier.size(64.dp).clip(RoundedCornerShape(Rad.s))) {

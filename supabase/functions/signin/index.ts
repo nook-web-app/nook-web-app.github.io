@@ -84,19 +84,33 @@ Deno.serve(async (req) => {
     }
 
     if (action === "setpw") {
-      const next = password;
+      // spaces at the ends (usually from pasting) are not part of a password
+      const next = password.trim();
       if (next.length < 8 || next.length > 72) return json({ error: "setpw_failed", message: "Password needs 8 to 72 characters." , code: "weak_password" }, 400);
       // somebody who just opened the link of a reset email may set a new password without the old one; everybody else must prove the old one
       if (!recovering(jwt, user)) {
         const current = typeof body.current === "string" ? body.current : "";
         if (!current) return json({ error: "no_password" }, 400);
-        if (current === next) return json({ error: "setpw_failed", code: "same_password", message: "New password should be different from the old password." }, 400);
+        if (current.trim() === next) return json({ error: "setpw_failed", code: "same_password", message: "New password should be different from the old password." }, 400);
         const bad = await proveOld(email, current, ip);
         if (bad instanceof Response) return bad;
+        // the password in use now counts as an old one too, from the first change on
+        for (const c of new Set([current, current.trim()])) await admin.rpc("nook_pw_add", { p_user: user!.id, p_mixed: await pepper(admin, c), p_kind: "seed" });
       }
       const mixedNew = await pepper(admin, next);
+      // no going back to an older password; a change once a week (a reset by email is not held to the week)
+      const reset = recovering(jwt, user);
+      const chk = await admin.rpc("nook_pw_check", { p_user: user!.id, p_mixed: mixedNew, p_week: !reset });
+      if (chk.error) return json({ error: "server" }, 500);
+      if (chk.data === "reused") return json({ error: "setpw_failed", code: "reused_password", message: "You already used this password before. Pick a new one." }, 400);
+      if (typeof chk.data === "string" && chk.data.startsWith("week:")) {
+        const until = chk.data.slice(5);
+        const day = new Date(until).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+        return json({ error: "setpw_failed", code: "weekly_limit", until, message: "You can change your password once a week. Try again on " + day + "." }, 400);
+      }
       const upd = await admin.auth.admin.updateUserById(user!.id, { password: mixedNew });
       if (upd.error) return json({ error: "setpw_failed", code: (upd.error as { code?: string }).code || "", message: upd.error.message }, 400);
+      await admin.rpc("nook_pw_add", { p_user: user!.id, p_mixed: mixedNew, p_kind: reset ? "reset" : "change" });
       // changing the password ends the old sessions, so the person gets a fresh one
       const fresh = await mk().auth.signInWithPassword({ email, password: mixedNew });
       return json({ ok: true, session: fresh.data && fresh.data.session ? { access_token: fresh.data.session.access_token, refresh_token: fresh.data.session.refresh_token } : null });
@@ -134,7 +148,8 @@ function recovering(jwt: string, user: { app_metadata?: Record<string, unknown> 
   } catch { return false; }
 }
 
-async function signup(email: string, password: string, ip: string): Promise<Response> {
+async function signup(email: string, password0: string, ip: string): Promise<Response> {
+  const password = password0.trim();
   if (!email) return json({ error: "no_email" }, 400);
   if (!okEmail(email)) return json({ error: "bad_email" }, 400);
   if (password.length < 8 || password.length > 72) return json({ error: "signup_failed", code: "weak_password", message: "Password needs 8 to 72 characters." }, 400);
@@ -217,6 +232,11 @@ async function proveOld(email: string, password: string, ip: string): Promise<Re
       // the upgrade ends every session that exists, so a fresh one is made
       if (!up.error) { r = await mk().auth.signInWithPassword({ email, password: mixed }); upgraded = true; }
     }
+  }
+  if (r.error && wrong(r.error) && password !== password.trim() && password.trim()) {
+    const m2 = await pepper(admin, password.trim());
+    const r2 = await mk().auth.signInWithPassword({ email, password: m2 });
+    if (!r2.error) r = r2;
   }
   if (r.error) {
     const code = String((r.error as { code?: string }).code || "");

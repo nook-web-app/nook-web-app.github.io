@@ -193,7 +193,7 @@ fun DmScreen(id: String) {
             }
             // .trow: the typing dots, in a slot that grows smoothly
             item(key = "typing") {
-                AnimatedVisibility(l.typing, enter = expandVertically(tween(300)) + fadeIn(tween(250)), exit = shrinkVertically(tween(300)) + fadeOut(tween(250))) {
+                AnimatedVisibility(l.typing, enter = expandVertically(tween(300, easing = TROW_EASE)) + fadeIn(tween(250, easing = CSS_EASE)), exit = shrinkVertically(tween(300, easing = TROW_EASE)) + fadeOut(tween(250, easing = CSS_EASE))) {
                     Box(Modifier.fillMaxWidth()) { TypingBubble(Modifier.align(Alignment.CenterStart)) }
                 }
             }
@@ -215,10 +215,10 @@ private fun DmDock(id: String, l: LiveDm) {
     val pend = remember(id) { mutableStateListOf<String>() }
     var busy by remember { mutableStateOf(false) }
     val picker = rememberPicker(4 - pend.size) { got -> val room = 4 - pend.size; pend.addAll(got.take(room)); if (got.size > room) app.say("Only 4 allowed, extra ones skipped") }
-    l.fill = { pre -> if (l.locked.isEmpty()) { setText(if (text.isNotBlank()) text.trimEnd() + " " + pre else pre); runCatching { focus.requestFocus() } } }
+    l.fill = { pre -> if (l.locked.isEmpty()) { if (!text.startsWith(pre.trim(), true)) setText(pre + text); runCatching { focus.requestFocus() } } }
     // .cdock: the note when messaging is off, the pending photos, and the text box with its photo and send buttons
     Column(Modifier.fillMaxWidth().background(c.bg).lineAbove(c.line).navigationBarsPadding().padding(bottom = 10.dp)) {
-        ZenPopHost(zOn() && ZEN_AT.containsMatchIn(text)) { setText(text.replace(ZEN_AT, "@zenith ")) }
+        ZenPopHost(zOn() && zenHint(text)) { setText(text.replace(ZEN_AT, "@zenith ")) }
         if (l.locked.isNotEmpty()) T(l.locked, Fs.sm, color = c.muted, align = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp))
         if (pend.isNotEmpty()) PendStrip(pend)
         val off = l.locked.isNotEmpty()
@@ -249,6 +249,8 @@ private fun DmDock(id: String, l: LiveDm) {
 
 // the end of what is typed, when it is an @ with some letters
 val ZEN_AT = Regex("@\\w*$")
+// the hint only shows while the word is still being typed: not when "@zenith" is already written in full
+fun zenHint(text: String) = ZEN_AT.find(text)?.value?.equals("@zenith", true) == false
 
 // .zpop: typing @ offers Zenith (the owner's chats only)
 @Composable
@@ -291,6 +293,11 @@ fun PendStrip(pend: MutableList<String>) {
     }
 }
 
+// the easings of the style sheet: .trow grows with cubic-bezier(.2,.8,.2,1), opacity uses "ease", the dots "ease-in-out"
+val TROW_EASE = androidx.compose.animation.core.CubicBezierEasing(0.2f, 0.8f, 0.2f, 1f)
+val CSS_EASE = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1f)
+private val EASE_IN_OUT = androidx.compose.animation.core.CubicBezierEasing(0.42f, 0f, 0.58f, 1f)
+
 // .bub.typing: three dots that bob
 @Composable
 fun TypingBubble(modifier: Modifier = Modifier) {
@@ -298,9 +305,10 @@ fun TypingBubble(modifier: Modifier = Modifier) {
     val tr = rememberInfiniteTransition(label = "dots")
     Row(modifier.clip(RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.bubble, Rad.xs)).background(c.bg2).border(1.dp, c.line, RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.bubble, Rad.xs)).padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         repeat(3) { i ->
-            val y by tr.animateFloat(0f, 1f, infiniteRepeatable(tween(1000, delayMillis = 0), RepeatMode.Restart, initialStartOffset = androidx.compose.animation.core.StartOffset(i * 150)), label = "d$i")
+            val y by tr.animateFloat(0f, 1f, infiniteRepeatable(tween(1000, easing = androidx.compose.animation.core.LinearEasing), RepeatMode.Restart, initialStartOffset = androidx.compose.animation.core.StartOffset(i * 150)), label = "d$i")
             // zdot: each dot lifts 4dp during the first 30 percent of the second, then rests
-            val k = if (y < 0.3f) y / 0.3f else if (y < 0.6f) (0.6f - y) / 0.3f else 0f
+            // the keyframes (0, 30, 60, 100 percent) each ease in and out, as the style sheet's animation does
+            val k = if (y < 0.3f) EASE_IN_OUT.transform(y / 0.3f) else if (y < 0.6f) 1f - EASE_IN_OUT.transform((y - 0.3f) / 0.3f) else 0f
             Box(Modifier.offset(y = (-4 * k).dp).size(7.dp).alpha(0.35f + 0.65f * k).clip(CircleShape).background(c.muted))
         }
     }

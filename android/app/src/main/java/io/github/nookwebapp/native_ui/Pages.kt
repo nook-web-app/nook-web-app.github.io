@@ -31,6 +31,12 @@ fun UserScreen(id: String, fromMenu: Boolean = false) {
     val on = app.on
     val pg = remember(id) { UserPage(id) }
     LaunchedEffect(id) { on.loadUser(pg) }
+    // the pull down to refresh reads this profile again
+    DisposableEffect(id) {
+        val hook: suspend () -> Unit = { on.loadUser(pg); on.loadUserPosts(id); kotlinx.coroutines.delay(900) }
+        app.pullHook = hook
+        onDispose { if (app.pullHook === hook) app.pullHook = null }
+    }
     var autoTry by remember(id) { mutableIntStateOf(0) }
     LaunchedEffect(pg.state) { if (pg.state == "fail" && autoTry < 3) { kotlinx.coroutines.delay(2500); autoTry++; pg.state = ""; on.loadUser(pg) } }
     pg.version
@@ -185,6 +191,7 @@ fun SettingsScreen() {
             }
             Sec("Login")
             Group {
+                SRow(ic("user", 22.dp), "Account info", "Email, created, phones") { app.go(Route.AccountInfo) }
                 SRow(ic("pass", 22.dp), "Change password", "Update your password") { app.panels.add(Panel.ChangePassword) }
                 SRow(ic("mail", 22.dp), "Change email", "Update your email") { app.panels.add(Panel.ChangeEmail) }
                 SRow(ic("lock", 22.dp), "Fingerprint", pkText) {
@@ -259,7 +266,7 @@ fun SettingsScreen() {
             }
             Sec("Danger zone")
             Group {
-                SRow(ic("trash", 22.dp), "Delete account", "Gone after 30 days", danger = true, last = true) { app.panels.add(Panel.DeleteAccount) }
+                SRow(ic("trash", 22.dp), "Delete account", "Deleted after 30 days", danger = true, last = true) { app.panels.add(Panel.DeleteAccount) }
             }
         }
     }
@@ -390,3 +397,40 @@ fun AgeScreen() {
         Box(Modifier.tap { app.confirm("Sign out of this account?", "Sign out") { app.on.signOutNow() } }.vpad(8.dp)) { T("Sign out", Fs.base, color = c.fg) }
     }
 }
+
+// accountInfoV: the email, the day the account was made and the phones that can sign in with their fingerprint.
+// The password is not shown: the server only keeps a scrambled copy of it that nobody can turn back into the password.
+@Composable
+fun AccountInfoScreen() {
+    val app = LocalApp.current
+    val c = LocalNook.current
+    val ic: (String, Dp) -> @Composable () -> Unit = { n, sz -> { NIcon(n, sz, androidx.compose.material3.LocalContentColor.current) } }
+    var created by remember { mutableStateOf<String?>(null) }
+    var keys by remember { mutableStateOf<List<org.json.JSONObject>?>(null) }
+    LaunchedEffect(Unit) {
+        created = Sb.createdAt()?.let { dayText(parseIso(it)) } ?: ""
+        keys = Sb.get(Q("passkeys").select("id, name, created_at").order("created_at")).let { if (it.ok) it.rows else emptyList() }
+    }
+    Page({ Bar("Account info", { BackBtn() }) }) {
+        Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+            Sec("Account")
+            Group {
+                SRow(ic("mail", 22.dp), "Email", Sb.user?.email ?: "") {}
+                SRow(ic("user", 22.dp), "Account made", created ?: "Loading...") {}
+                SRow(ic("pass", 22.dp), "Password", "Hidden. Nobody can read it, not even Nook", last = true) {}
+            }
+            Sec("Phones with fingerprint sign in")
+            Group {
+                val k = keys
+                when {
+                    k == null -> SRow(null, "Loading...", last = true) {}
+                    k.isEmpty() -> SRow(null, "No phones saved", "Add one in Settings, under Fingerprint", last = true) {}
+                    else -> k.forEachIndexed { i, x -> SRow(ic("lock", 22.dp), x.optString("name").ifEmpty { "Phone" }, "Added " + dayText(parseIso(x.optString("created_at"))), last = i == k.size - 1) {} }
+                }
+            }
+        }
+    }
+}
+
+// a day with no clock time: 9 Nov 2026
+fun dayText(ms: Long): String = java.text.SimpleDateFormat("d MMM yyyy", java.util.Locale.getDefault()).format(java.util.Date(ms))

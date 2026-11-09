@@ -68,7 +68,7 @@ lines = ["new: Added new features"] if (os.environ["ISNEW"] == "1" or minor_or_m
 if not minor_or_major: lines.append("fixed: Fixed some bugs")
 head = "## " + new + (" !" if os.environ["FORCED"] == "1" else "") + "\n" + "\n".join(lines) + "\n\n"
 s = open("CLAUDE_READ_THIS.txt").read()
-i = s.index("## ")
+i = s.index("\n## ", s.index("-->")) + 1
 open("CLAUDE_READ_THIS.txt", "w").write(s[:i] + head + s[i:])
 PY
 

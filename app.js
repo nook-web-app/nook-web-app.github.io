@@ -295,7 +295,9 @@ const picImg = src => mkImg(src, "pic");
 // pictures of other people are only loaded from our own storage or inline data, never from an address they chose
 const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.startsWith(SB_URL + "/storage/v1/object/public/media/"));
 
-const APP_VERSION = "3.38.5";
+// the hint for Zenith's name shows while "@zen..." is typed, not once "@zenith" is complete
+const zenHint = v => { const m = /@\w*$/.exec(v); return !!m && m[0].toLowerCase() !== "@zenith"; };
+const APP_VERSION = "3.39.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1457,7 +1459,9 @@ function root(name) { stack = [{ r: name }]; scrolls.length = 0; hist(false); re
 const ibtn = (n, label, fn) => h("button", { class: "ib", "aria-label": label, onclick: fn }, ic(n, 24));
 const menuBtn = () => ibtn("menu", "Menu", openDrawer);
 const backBtn = () => ibtn("back", "Back", back);
-const bar = (l, c, r) => h("div", { class: "bar", onclick: e => { if (!e.target.closest("button, a, input")) main.scrollTo({ top: 0, behavior: "smooth" }); } }, l || h("span"), c, r || h("span"));
+// back to the top: a long page first jumps close to it, so the glide is short and stays smooth
+function scrollMainTop() { if (main.scrollTop > main.clientHeight * 3) main.scrollTop = main.clientHeight * 3; main.scrollTo({ top: 0, behavior: "smooth" }); }
+const bar = (l, c, r) => h("div", { class: "bar", onclick: e => { if (!e.target.closest("button, a, input")) scrollMainTop(); } }, l || h("span"), c, r || h("span"));
 const ttl = t => h("div", { class: "ttl" }, t);
 function fab(n, label, fn) { main.style.paddingBottom = "88px"; fabs.append(h("button", { class: "fab", "aria-label": label, onclick: fn }, ic(n, 26))); }
 function emptyState(icon, text, btn) { return h("div", { class: "empty" }, ic(icon, 56), h("p", {}, text), btn || null); }
@@ -1974,7 +1978,7 @@ function profileV() {
     h("div", { class: "arow" }, av,
       h("div", { class: "btns" },
         h("button", { class: "ghost", onclick: editProfile }, "Edit Profile"),
-        h("button", { class: "ghost", "aria-label": "More", onclick: () => sheet([{ icon: "copy", label: "Copy handle", fn: () => copy("@" + pr.handle) }, { icon: "sliders", label: "Settings", fn: () => root("settings") }, { label: "Cancel", cancel: true }], "@" + pr.handle) }, ic("dots", 20)))),
+        h("button", { class: "ghost", "aria-label": "More", onclick: () => sheet([{ icon: "copy", label: "Copy handle", fn: () => copy("@" + pr.handle) }, { icon: "sliders", label: "Settings", fn: () => root("settings") }, { label: "Cancel", cancel: true }]) }, ic("dots", 20)))),
     pr.name ? h("h1", { class: "pname" }, pr.name) : null,
     h("p", { class: "phand" }, "@" + pr.handle),
     h("div", { class: "pstat" }, h("span", {}, h("b", {}, nPosts), nPosts === 1 ? " post" : " posts"), h("span", { class: "lk", onclick: () => go({ r: "followers", id: sbUser.id }) }, h("b", { id: "pFol" }, "0"), " followers"), h("span", { class: "lk", onclick: () => go({ r: "following", id: sbUser.id }) }, h("b", { id: "pFng" }, "0"), " following")),
@@ -2136,7 +2140,7 @@ function convV(c) {
   const strip = h("div", { class: "cpend", hidden: true });
   const ta = h("textarea", { rows: 1, placeholder: "Message", "aria-label": "Message", enterkeyhint: "send", autocomplete: "off" });
   ta.value = chat.draft || "";
-  fillReply = pre => { ta.value = pre; chat.draft = pre; persistDraft(); sync(); ta.focus(); };
+  fillReply = pre => { if (!ta.value.toLowerCase().startsWith(pre.trim())) ta.value = pre + ta.value; chat.draft = ta.value; persistDraft(); sync(); ta.focus(); };
   const send = h("button", { class: "pri", "aria-label": "Send", disabled: true }, ic("send", 20));
   const sync = () => {
     send.disabled = jobs.length > 0 || (!ta.value.trim() && !pend.length);
@@ -2176,7 +2180,7 @@ function convV(c) {
   zpop.addEventListener("pointerdown", e => e.preventDefault());
   zpop.addEventListener("click", () => { ta.value = ta.value.replace(/@\w*$/, "@zenith "); zpop.classList.remove("on"); chat.draft = ta.value; persistDraft(); sync(); ta.focus(); });
   const dock = h("div", { class: "cdock" }, zpop, strip, h("div", { class: "cin" }, att, ta, send));
-  ta.addEventListener("input", () => { chat.draft = ta.value; persistDraft(); zpop.classList.toggle("on", zOn() && /@\w*$/.test(ta.value)); });
+  ta.addEventListener("input", () => { chat.draft = ta.value; persistDraft(); zpop.classList.toggle("on", zOn() && zenHint(ta.value)); });
   sync();
   send.addEventListener("pointerdown", e => e.preventDefault());
   ta.addEventListener("keydown", e => {
@@ -3086,6 +3090,7 @@ function settingsV() {
     if (sub) sub.textContent = pkRows.length ? "On for " + pkRows.length + (pkRows.length === 1 ? " phone" : " phones") : "Off";
   }, () => { const sub = pkRow.querySelector(".sub"); if (sub) sub.textContent = "Couldn't check"; });
   main.append(h("div", { class: "group" },
+    row(ic("user", 22), "Account info", "Email, created, phones", () => go({ r: "account" })),
     row(ic("pass", 22), "Change password", "Update your password", () => changePassV()),
     row(ic("mail", 22), "Change email", "Update your email", () => changeEmailV()),
     pkRow,
@@ -3138,7 +3143,7 @@ function settingsV() {
     row(ic("eyeoff", 22), "Privacy Policy", "What we collect", () => go({ r: "privacy" })),
     row(ic("list", 22), "Terms of Use", "The rules of Nook", () => go({ r: "terms" }))));
   main.append(sec("Danger zone"));
-  main.append(h("div", { class: "group" }, row(ic("trash", 22), "Delete account", "Gone after 30 days", () => {
+  main.append(h("div", { class: "group" }, row(ic("trash", 22), "Delete account", "Deleted after 30 days", () => {
     const doDelete = async () => {
       const r = await callFn("delete-account");
       if (!r.ok) return failText(r, "Could not delete the account. Try again");
@@ -3148,7 +3153,7 @@ function settingsV() {
     };
     // the email and password come first; then the person is asked if they want a copy of their data
     let saved = false;
-    confirmLogin("Delete account", "You can sign in again within 30 days to get it back. After that it is gone for good.", "Delete", async () => {
+    confirmLogin("Delete account", "Your account is hidden for 30 days. Sign in during that time to get it back. After that it is deleted for good.", "Delete", async () => {
       if (saved) return doDelete();
       sheet([
         { icon: "copy", label: "Download my data first", fn: async () => { await downloadBackup(); saved = true; toast("Saved. Tap Delete to finish"); } },
@@ -4637,63 +4642,87 @@ async function verifyPassword(pw) {
   if (e === "wrong_password") return { ok: false, msg: "Current password is wrong" + (r.body.left > 0 ? ". " + r.body.left + (r.body.left === 1 ? " try" : " tries") + " left before a wait" : "") };
   return { ok: false, msg: signinMsg(r) };
 }
-function changePassV() {
-  const cur = h("input", { class: "in", type: "password", placeholder: "Current password", autocomplete: "current-password", "aria-label": "Current password" });
-  const nw = h("input", { class: "in", type: "password", placeholder: "New password", autocomplete: "new-password", "aria-label": "New password" });
-  const again = h("input", { class: "in", type: "password", placeholder: "New password again", autocomplete: "new-password", "aria-label": "Repeat new password" });
+// two short screens, one field each: the first asks for the current password, the last for the new value.
+// next(value, valueOfTheFirstScreen) answers a line to show when something is wrong
+function stepModal(title, steps) {
+  const box = h("div");
   const msg = h("p", { class: "note", role: "alert" });
-  let busy = false;
-  modal({
-    title: "Change password",
-    body: [h("div", { class: "fld" }, cur), h("div", { class: "fld" }, nw), h("div", { class: "fld" }, again), msg],
+  let i = 0, busy = false, cur = null, keep = "";
+  const m = modal({
+    title, action: steps[0].label, body: [box, msg],
     onAction: async close => {
       if (busy) return;
       msg.textContent = "";
-      if (!cur.value || !nw.value) { msg.textContent = "Fill in every box"; return; }
-      if (nw.value.length < 8) { msg.textContent = "New password needs 8 or more characters"; return; }
-      if (pwBytes(nw.value) > 72) { msg.textContent = "New password is too long (72 bytes at most)"; return; }
-      if (nw.value !== again.value) { msg.textContent = "New passwords do not match"; return; }
-      if (nw.value === cur.value) { msg.textContent = "Pick a different password"; return; }
-      busy = true;
+      const v = cur.input.value;
+      busy = true; m.act.disabled = true;
       try {
-        if (await pwnedPassword(nw.value)) { msg.textContent = PWNED_MSG; return; }
-        const pr = await callFn("signin", { action: "setpw", current: cur.value, password: nw.value }).catch(() => null);
-        if (!pr) { msg.textContent = "Could not reach Nook. Check your connection"; return; }
-        if (!pr.ok) { msg.textContent = setpwMsg(pr); return; }
-        await takeSession(pr);
-        const kr = await loginBackup(nw.value, { reseal: true });
+        const err = await steps[i].next(v, keep);
+        if (typeof err === "string" && err) { msg.textContent = err; return; }
+        if (i < steps.length - 1) { keep = v; i++; draw(); return; }
         close();
-        toast(kr === "fail" ? "Password changed. Your message key could not be saved with it" : "Password changed");
-      } finally { busy = false; }
+        if (steps[i].done) toast(steps[i].done());
+      } finally { busy = false; m.act.disabled = false; }
     }
   });
+  const draw = () => {
+    const s = steps[i];
+    box.textContent = "";
+    cur = s.field();
+    box.append(h("p", { class: "note" }, s.note), cur.wrap);
+    m.act.textContent = s.label;
+    cur.input.addEventListener("keydown", e => { if (e.key === "Enter") m.act.click(); });
+    setTimeout(() => cur.input.focus(), 0);
+  };
+  draw();
+}
+const firstStep = () => ({
+  note: "Type your current password to start.", label: "Next",
+  field: () => pwField("Current password", "current-password"),
+  next: async v => { if (!v) return "Type your current password"; const vp = await verifyPassword(v); if (!vp.ok) return vp.msg; }
+});
+function changePassV() {
+  let kr = "";
+  stepModal("Change password", [firstStep(), {
+    note: "Choose a new password. Use 8 or more characters. It must be one you never used before.", label: "Save",
+    field: () => pwField("New password", "new-password"),
+    next: async (raw, cur) => {
+      // spaces at the ends (usually from pasting) are not part of a password
+      const nw = raw.trim();
+      if (!nw) return "Type a new password";
+      if (nw.length < 8) return "New password needs 8 or more characters";
+      if (pwBytes(nw) > 72) return "New password is too long (72 bytes at most)";
+      if (nw === cur.trim()) return "Pick a different password";
+      if (await pwnedPassword(nw)) return PWNED_MSG;
+      const pr = await callFn("signin", { action: "setpw", current: cur, password: nw }).catch(() => null);
+      if (!pr) return "Could not reach Nook. Check your connection";
+      if (!pr.ok) return setpwMsg(pr);
+      await takeSession(pr);
+      kr = await loginBackup(nw, { reseal: true });
+    },
+    done: () => kr === "fail" ? "Password changed. Your message key could not be saved with it" : "Password changed"
+  }]);
 }
 function changeEmailV() {
-  const cur = h("input", { class: "in", type: "password", placeholder: "Current password", autocomplete: "current-password", "aria-label": "Current password" });
-  const ne = h("input", { class: "in", type: "email", placeholder: "New email", autocomplete: "email", "aria-label": "New email" });
-  const msg = h("p", { class: "note", role: "alert" });
-  let busy = false;
-  modal({
-    title: "Change email",
-    body: [h("div", { class: "fld" }, cur), h("div", { class: "fld" }, ne), msg],
-    onAction: async close => {
-      if (busy) return;
-      msg.textContent = "";
-      const e = ne.value.trim().toLowerCase();
-      if (!cur.value || !e) { msg.textContent = "Fill in every box"; return; }
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e)) { msg.textContent = "That email does not look real"; return; }
-      if (e === (sbUser.email || "").toLowerCase()) { msg.textContent = "That is already your email"; return; }
-      busy = true;
-      try {
-        const vp = await verifyPassword(cur.value);
-        if (!vp.ok) { msg.textContent = vp.msg; return; }
-        const { error } = await sb.auth.updateUser({ email: e });
-        if (error) { msg.textContent = authMsg(error); return; }
-        close();
-        toast("Confirmation link sent to " + e);
-      } finally { busy = false; }
-    }
-  });
+  let sent = "";
+  stepModal("Change email", [firstStep(), {
+    note: "Type the new email. We send a link there, and the email changes when you open it.", label: "Send link",
+    field: () => { const input = h("input", { class: "in", type: "email", placeholder: "New email", autocomplete: "email", "aria-label": "New email" }); return { input, wrap: h("div", { class: "fld" }, input) }; },
+    next: async raw => {
+      const e = raw.trim().toLowerCase();
+      if (!e) return "Type the new email";
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e)) return "That email does not look real";
+      if (e === (sbUser.email || "").toLowerCase()) return "That is already your email";
+      const { error } = await sb.auth.updateUser({ email: e }, { emailRedirectTo: location.origin + location.pathname });
+      if (error) {
+        const c = error.code || "", m = error.message || "";
+        if (c === "email_exists" || c === "user_already_exists" || /already (been )?registered/i.test(m)) return "That email is already used by another account";
+        if (c === "over_email_send_rate_limit" || error.status === 429) return "Too many emails were sent. Wait a few minutes and try again";
+        return authMsg(error);
+      }
+      sent = e;
+    },
+    done: () => "Confirmation link sent to " + sent
+  }]);
 }
 function openDrawer() {
   const scrim = h("div", { class: "scrim", onclick: () => close() });
@@ -6067,7 +6096,10 @@ function authMsg(error) {
   if (c === "validation_failed" || c === "email_address_invalid" || (/email/i.test(m) && /(invalid|valid)/i.test(m))) return "That email does not look right. Check for typos";
   if (c === "over_email_send_rate_limit" || c === "over_request_rate_limit" || (error && error.status === 429)) return "Too many tries. Wait a few minutes and try again";
   if (c === "signup_disabled") return "New accounts are closed for now";
+  if (c === "reused_password" || c === "weekly_limit") return m;
   if (/network|fetch/i.test(m)) return "Could not reach Nook. Check your connection";
+  // anything else says what the server said when it is a short plain line
+  if (m.trim() && m.length < 120 && !/[{<]/.test(m)) return /\.$/.test(m.trim()) ? m.trim() : m.trim() + ".";
   return "Something went wrong. Try again";
 }
 function setpwMsg(r) {
@@ -7531,7 +7563,7 @@ function dmV(c) {
   const zpop = h("button", { class: "zpop", type: "button" }, zenAv(34), h("span", {}, h("b", {}, "Zenith AI")));
   zpop.addEventListener("pointerdown", e => e.preventDefault());
   zpop.addEventListener("click", () => { ta.value = ta.value.replace(/@\w*$/, "@zenith "); zpop.classList.remove("on"); sync(); ta.focus(); });
-  ta.addEventListener("input", () => zpop.classList.toggle("on", zOn() && /@\w*$/.test(ta.value)));
+  ta.addEventListener("input", () => zpop.classList.toggle("on", zOn() && zenHint(ta.value)));
   const dock = h("div", { class: "cdock" }, zpop, lockNote, strip, h("div", { class: "cin" }, att, ta, send));
   const applyLock = reason => {
     if (reason === locked) return;
@@ -7756,7 +7788,7 @@ function dmV(c) {
   document.addEventListener("visibilitychange", onVis);
   liveDm = {
     id: c.id,
-    fill: pre => { if (locked) return; ta.value = ta.value.trim() ? ta.value.replace(/\s*$/, " ") + pre : pre; sync(); ta.focus(); },
+    fill: pre => { if (locked) return; if (!ta.value.toLowerCase().startsWith(pre.trim())) ta.value = pre + ta.value; sync(); ta.focus(); },
     add: async m => { threadPush(c.id, m); if (!known.some(r => r.id === m.id)) known.push(m); await syncRows([m], {}); },
     drop: id => {
       const el = list.querySelector('[data-mid="' + String(id) + '"]');
@@ -7830,6 +7862,24 @@ function hiddenChatsV() {
       });
     });
   }).catch(() => failBox(list, "Could not load hidden chats.", () => render()));
+}
+// the email, the day the account was made and the phones that can sign in with their fingerprint.
+// The password is not shown: the server only keeps a scrambled copy of it that nobody can turn back into the password.
+function accountV() {
+  topEl.append(bar(backBtn(), ttl("Account info")));
+  const sec = t => h("div", { class: "sec" }, t);
+  const row = (lead, label, sub) => h("div", { class: "srow" }, lead, h("div", { class: "nm" }, h("b", {}, label), sub ? h("span", { class: "sub" }, sub) : null));
+  const day = t => new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  const made = row(ic("user", 22), "Account made", "Loading...");
+  const list = h("div", { class: "group" }, row(null, "Loading..."));
+  main.append(sec("Account"), h("div", { class: "group" }, row(ic("mail", 22), "Email", sbUser.email || ""), made, row(ic("pass", 22), "Password", "Hidden. Nobody can read it, not even Nook")), sec("Phones with fingerprint sign in"), list);
+  sb.auth.getUser().then(({ data }) => { const s = made.querySelector(".sub"); if (s) s.textContent = data && data.user && data.user.created_at ? day(data.user.created_at) : ""; }, () => {});
+  Promise.resolve(sb.from("passkeys").select("id, name, created_at").order("created_at")).then(r => {
+    list.textContent = "";
+    const rows = r && !r.error ? r.data || [] : [];
+    if (!rows.length) { list.append(row(null, "No phones saved", "Add one in Settings, under Fingerprint")); return; }
+    rows.forEach(k => list.append(row(ic("lock", 22), k.name || "Phone", "Added " + day(k.created_at))));
+  }, () => { list.textContent = ""; list.append(row(null, "Could not load")); });
 }
 function blockedV() {
   topEl.append(bar(backBtn(), ttl("Blocked accounts")));
@@ -8204,14 +8254,18 @@ async function maybeInstallPrompt() {
   const hide = days => { try { localStorage.setItem("nook-install-hide", String(Date.now() + days * 864e5)); } catch (e) {} };
   const close = () => dismiss(scrim, sh);
   const scrim = h("div", { class: "scrim", onclick: () => { hide(3); close(); } });
-  const text = ios ? "Open Nook in Safari, tap the Share button, then tap Add to Home Screen. Then open Nook from your home screen to get the full app."
+  // on Android the real app is offered instead of the shortcut
+  const android = /Android/i.test(navigator.userAgent);
+  const text = android ? "Get the Nook app for Android. It is faster and gives you notifications. Download it, open the file and tap Install."
+    : ios ? "Open Nook in Safari, tap the Share button, then tap Add to Home Screen. Then open Nook from your home screen to get the full app."
     : installEv ? "Install Nook to open it like a normal app, full screen, with notifications."
     : "Open your browser menu and tap Install app or Add to Home screen. Then open Nook from your home screen.";
   const sh = h("div", { class: "sheet", role: "dialog" },
     h("div", { class: "grab" }, h("i")),
     h("div", { class: "st" }, "Get the Nook app"),
     h("p", { class: "note" }, text),
-    !ios && installEv ? h("div", { class: "sg" }, h("button", { class: "si plain", onclick: async () => { close(); try { installEv.prompt(); await installEv.userChoice; } catch (e) {} installEv = null; } }, h("span", {}, "Install"))) : null,
+    android ? h("div", { class: "sg" }, h("a", { class: "si plain", href: "apk/nook.apk", download: "nook.apk", style: "text-decoration:none", onclick: () => { hide(7); setTimeout(close, 300); } }, h("span", {}, "Download the app"))) : null,
+    !ios && !android && installEv ? h("div", { class: "sg" }, h("button", { class: "si plain", onclick: async () => { close(); try { installEv.prompt(); await installEv.userChoice; } catch (e) {} installEv = null; } }, h("span", {}, "Install"))) : null,
     h("button", { class: "sx", onclick: () => { hide(7); close(); } }, "Not now"));
   layer.append(scrim, sh);
 }
@@ -8278,7 +8332,7 @@ function startRealtime() {
     .subscribe();
 }
 
-const VIEWS = { privacy: legalV, terms: legalV, auth: authV, user: userV, home: homeV, thread: threadV, profile: profileV, chat: chatV, conv: convV, saved: savedV, tag: tagV, lists: listsV, list: listV, settings: settingsV, zen: zenV, dm: dmV, notifs: notifsV, followers: c => followListV(c, "followers"), following: c => followListV(c, "following"), blocked: blockedV, hidden: hiddenChatsV, banned: bannedV, age: ageV, search: searchV };
+const VIEWS = { privacy: legalV, terms: legalV, auth: authV, user: userV, home: homeV, thread: threadV, profile: profileV, chat: chatV, conv: convV, saved: savedV, tag: tagV, lists: listsV, list: listV, settings: settingsV, zen: zenV, dm: dmV, notifs: notifsV, followers: c => followListV(c, "followers"), following: c => followListV(c, "following"), blocked: blockedV, account: accountV, hidden: hiddenChatsV, banned: bannedV, age: ageV, search: searchV };
 let lastProfileTap = 0;
 // double tap on the profile button: the first one goes back to the account used before, taps in a row after that walk down the list
 async function quickSwitch() {
@@ -8301,7 +8355,7 @@ function buildNav(cur) {
     navEl.append(h("button", { class: on ? "on" : "", "aria-label": t[1], "aria-current": on ? "page" : null, onclick: () => {
       if (t[0] === "profile" && Date.now() - lastProfileTap < 350) { lastProfileTap = 0; quickSwitch(); return; }
       if (t[0] === "profile") lastProfileTap = Date.now();
-      if (on && stack.length === 1) main.scrollTo({ top: 0, behavior: "smooth" }); else root(t[0]);
+      if (on && stack.length === 1) scrollMainTop(); else root(t[0]);
     } }, t[0] === "profile" ? avatar(28) : ic(t[2], 26, on), badge));
   });
 }

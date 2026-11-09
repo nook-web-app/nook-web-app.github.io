@@ -161,21 +161,39 @@ fun RecoverCodePanel(app: AppState, p: Panel.RecoverCode) {
     }
 }
 
+// two short screens, one field each: the current password first, then the new password (or the new email)
 @Composable
 fun ChangePasswordPanel(app: AppState, p: Panel) {
+    var step by remember { mutableStateOf(0) }
     var cur by remember { mutableStateOf("") }
-    var a by remember { mutableStateOf("") }
-    var b by remember { mutableStateOf("") }
-    Form(p, "Change password", "Save", run = { app.on.changePassword(cur, a, b) }) {
-        PwField(cur, { cur = it }, "Current password"); Gap(); PwField(a, { a = it }, "New password"); Gap(); PwField(b, { b = it }, "New password again")
+    var nw by remember { mutableStateOf("") }
+    Form(p, "Change password", if (step == 0) "Next" else "Save", run = {
+        if (step == 0) {
+            if (cur.isEmpty()) return@Form "Type your current password"
+            app.on.verifyPassword(cur)?.let { return@Form it }
+            step = 1; ""
+        } else app.on.changePassword(cur, nw, nw)
+    }) {
+        if (step == 0) { Note("Type your current password to start."); PwField(cur, { cur = it }, "Current password") }
+        else { Note("Choose a new password. Use 8 or more characters. It must be one you never used before."); PwField(nw, { nw = it }, "New password") }
     }
 }
 
 @Composable
 fun ChangeEmailPanel(app: AppState, p: Panel) {
+    var step by remember { mutableStateOf(0) }
     var cur by remember { mutableStateOf("") }
     var e by remember { mutableStateOf("") }
-    Form(p, "Change email", "Save", run = { app.on.changeEmail(cur, e) }) { PwField(cur, { cur = it }, "Current password"); Gap(); Field(e, { e = it }, "New email", border = true) }
+    Form(p, "Change email", if (step == 0) "Next" else "Send link", run = {
+        if (step == 0) {
+            if (cur.isEmpty()) return@Form "Type your current password"
+            app.on.verifyPassword(cur)?.let { return@Form it }
+            step = 1; ""
+        } else app.on.changeEmail(cur, e, verified = true)
+    }) {
+        if (step == 0) { Note("Type your current password to start."); PwField(cur, { cur = it }, "Current password") }
+        else { Note("Type the new email. We send a link there, and the email changes when you open it."); Field(e, { e = it }, "New email", border = true) }
+    }
 }
 
 // authenticatorSetup(): first the password, then the key is shown (and opens the authenticator app), then the code

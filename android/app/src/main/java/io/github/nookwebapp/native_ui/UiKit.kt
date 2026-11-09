@@ -164,7 +164,7 @@ fun Bar(title: String, left: (@Composable () -> Unit)? = null, right: (@Composab
     val page = LocalPage.current
     val scope = rememberCoroutineScope()
     // a tap anywhere on the bar (the buttons keep their own taps) brings the page back to its top
-    Row(Modifier.fillMaxWidth().height(54.dp).tap { scope.launch { app.listStateFor(page).animateScrollToItem(0) } }.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().height(54.dp).tap { scope.launch { app.listStateFor(page).toTop() } }.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.width(44.dp).offset(x = (-10).dp), contentAlignment = Alignment.CenterStart) { left?.invoke() }
         T(title, Fs.xl, FontWeight.Bold, modifier = Modifier.weight(1f), align = TextAlign.Center, maxLines = 1)
         // only the left button is pulled out by 10dp: in the CSS grid the right one keeps its place (margin-right does not move it)
@@ -373,4 +373,10 @@ fun FoldAway(gone: Boolean, content: @Composable () -> Unit) {
         !gone, enter = androidx.compose.animation.EnterTransition.None,
         exit = androidx.compose.animation.shrinkVertically(androidx.compose.animation.core.tween(200)) + androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(160)),
     ) { content() }
+}
+
+// back to the top: a long list first jumps close to it, so the glide is short and stays smooth
+suspend fun androidx.compose.foundation.lazy.LazyListState.toTop() {
+    if (firstVisibleItemIndex > 3) scrollToItem(3)
+    animateScrollToItem(0)
 }

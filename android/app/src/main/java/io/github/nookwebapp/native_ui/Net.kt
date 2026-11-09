@@ -182,12 +182,24 @@ object Sb {
         }
     }
 
+    // the day this account was made, as the login server holds it (an ISO time), or null
+    suspend fun createdAt(): String? {
+        val tok = token() ?: return null
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                http.newCall(Request.Builder().url("$SB_URL/auth/v1/user").header("apikey", SB_KEY).header("Authorization", "Bearer $tok").get().build()).execute().use { r ->
+                    if (r.isSuccessful) JSONObject(r.body?.string() ?: "{}").optString("created_at").ifEmpty { null } else null
+                }
+            }.getOrNull()
+        }
+    }
+
     // updateUser({ email }): the login server sends the confirmation link
-    suspend fun updateEmail(email: String): Err? {
+    suspend fun updateEmail(email: String, redirect: String = "https://nook-web-app.github.io/reset/?rn=email"): Err? {
         val tok = token() ?: return Err("", "not signed in", 401)
         return withContext(Dispatchers.IO) {
             try {
-                val req = Request.Builder().url("$SB_URL/auth/v1/user").header("apikey", SB_KEY).header("Authorization", "Bearer $tok")
+                val req = Request.Builder().url("$SB_URL/auth/v1/user?redirect_to=" + java.net.URLEncoder.encode(redirect, "UTF-8")).header("apikey", SB_KEY).header("Authorization", "Bearer $tok")
                     .put(JSONObject().put("email", email).toString().toRequestBody(JSON_T)).build()
                 http.newCall(req).execute().use { res ->
                     if (res.isSuccessful) null else {

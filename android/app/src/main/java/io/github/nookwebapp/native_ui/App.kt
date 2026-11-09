@@ -44,7 +44,15 @@ fun NookApp(app: AppState) {
                 val w = activity?.window ?: return@LaunchedEffect
                 if (secure) w.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE) else w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
             }
-            BackHandler(app.viewer != null || app.sheet != null || app.drawer || app.panels.isNotEmpty() || app.stack.size > 1 || app.zcard != null) { if (app.zcard != null) app.zcard = null else app.back() }
+            // the last page: the first back says so, a second one within two seconds leaves the app
+            var lastBack by remember { mutableLongStateOf(0L) }
+            BackHandler(true) {
+                if (app.zcard != null) app.zcard = null
+                else if (!app.back()) {
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (now - lastBack < 2000) activity?.finish() else { lastBack = now; app.say("Swipe again to leave") }
+                }
+            }
             Box(Modifier.fillMaxSize().background(c.bg)) {
                 Column(Modifier.fillMaxSize().statusBarsPadding().imePadding()) {
                     val slide = with(LocalDensity.current) { 14.dp.roundToPx() }
@@ -64,7 +72,7 @@ fun NookApp(app: AppState) {
                 }
                 // a tap on the time and the icons at the very top scrolls the page up
                 val topScope = rememberCoroutineScope()
-                Box(Modifier.fillMaxWidth().windowInsetsTopHeight(WindowInsets.statusBars).tap { topScope.launch { app.listStateFor(app.stack.size).animateScrollToItem(0) } })
+                Box(Modifier.fillMaxWidth().windowInsetsTopHeight(WindowInsets.statusBars).tap { topScope.launch { app.listStateFor(app.stack.size).toTop() } })
                 PanelHost(app)
                 DrawerHost(app)
                 ZCardHost(app)
@@ -92,6 +100,7 @@ private fun PageFor(r: Route) = when (r) {
     Route.Search -> SearchScreen()
     Route.Notifs -> NotifsScreen()
     Route.Blocked -> BlockedScreen()
+    Route.AccountInfo -> AccountInfoScreen()
     Route.Hidden -> HiddenScreen()
     Route.Banned -> BannedScreen()
     Route.Age -> AgeScreen()
@@ -120,7 +129,7 @@ private fun NavBar(app: AppState) {
             Box(Modifier.weight(1f).fillMaxHeight().pressTap {
                 if (r == Route.Profile && System.currentTimeMillis() - lastProfileTap < 350) { lastProfileTap = 0; app.on.quickSwitch(); return@pressTap }
                 if (r == Route.Profile) lastProfileTap = System.currentTimeMillis()
-                if (on && app.stack.size == 1) scope.launch { app.listStateFor(1).animateScrollToItem(0) } else app.root(r)
+                if (on && app.stack.size == 1) scope.launch { app.listStateFor(1).toTop() } else app.root(r)
             }, contentAlignment = Alignment.Center) {
                 // the lit picture gets a 2dp ring outside it (box-shadow: 0 0 0 2px)
                 if (r == Route.Profile) Box(Modifier.size(32.dp).then(if (on) Modifier.border(2.dp, c.fg, CircleShape) else Modifier), contentAlignment = Alignment.Center) { MyAvatar(28.dp) }

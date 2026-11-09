@@ -202,6 +202,12 @@ class MainActivity : ComponentActivity() {
             val frag = android.net.Uri.parse("x://y?" + (data.fragment ?: ""))
             val at = frag.getQueryParameter("access_token"); val rt = frag.getQueryParameter("refresh_token")
             if (frag.getQueryParameter("type") == "recovery" && at != null && rt != null) app.on.takeResetLink(at, rt, data.getQueryParameter("rn") ?: "")
+            else if (data.getQueryParameter("rn") == "email" && data.fragment?.contains("error_code=") != true) {
+                // the link of an email change: the new email is confirmed, and the login is renewed so it shows
+                app.say("Your new email is confirmed")
+                Sb.session?.let { x -> Sb.useSession(Session(x.access, x.refresh, 0, x.user)) }
+                app.scope.launch { Sb.token() }
+            }
             else if (data.fragment?.contains("error_code=") == true) app.say("That link did not work. Ask for a new one.")
             return
         }

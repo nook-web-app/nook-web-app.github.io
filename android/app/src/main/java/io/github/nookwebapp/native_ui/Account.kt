@@ -200,10 +200,13 @@ fun authMsg(code: String, m: String, status: Int = 0): String = when {
     code == "user_already_exists" || code == "email_exists" || Regex("already (been )?registered", RegexOption.IGNORE_CASE).containsMatchIn(m) -> "An account with this email already exists. Sign in instead"
     code == "weak_password" || (m.contains("password", true) && Regex("short|least|weak|characters", RegexOption.IGNORE_CASE).containsMatchIn(m)) -> "That password is too weak. Use 8 or more characters"
     code == "same_password" || m.contains("different from the old", true) -> "Pick a password you are not using now"
+    code == "reused_password" || code == "weekly_limit" -> m
     code == "validation_failed" || code == "email_address_invalid" || (m.contains("email", true) && m.contains("valid", true)) -> "That email does not look right. Check for typos"
     code == "over_email_send_rate_limit" || code == "over_request_rate_limit" || status == 429 -> "Too many tries. Wait a few minutes and try again"
     code == "signup_disabled" -> "New accounts are closed for now"
     Regex("network|fetch", RegexOption.IGNORE_CASE).containsMatchIn(m) -> "Could not reach Nook. Check your connection"
+    // anything else says what the server said when it is a short plain line
+    m.isNotBlank() && m.length < 120 && !m.contains("{") && !m.contains("<") -> m.trim().let { if (it.endsWith(".")) it else "$it." }
     else -> "Something went wrong. Try again"
 }
 private fun left(b: JSONObject): String { val n = b.optInt("left"); return if (n > 0) " $n" + (if (n == 1) " try" else " tries") + " left before a wait." else "" }
@@ -499,12 +502,14 @@ suspend fun Online.verifyPassword(pw: String): String? {
     return signinMsg(r)
 }
 
-suspend fun Online.changePassword(cur: String, nw: String, again: String): String? {
+suspend fun Online.changePassword(cur: String, nw0: String, again0: String): String? {
+    // spaces at the ends (usually from pasting) are not part of a password
+    val nw = nw0.trim(); val again = again0.trim()
     if (cur.isEmpty() || nw.isEmpty()) return "Fill in every box"
     if (nw.length < 8) return "New password needs 8 or more characters"
     if (pwBytes(nw) > 72) return "New password is too long (72 bytes at most)"
     if (nw != again) return "New passwords do not match"
-    if (nw == cur) return "Pick a different password"
+    if (nw == cur.trim()) return "Pick a different password"
     if (pwned(nw)) return PWNED_MSG
     val pr = Sb.fn("signin", JSONObject().put("action", "setpw").put("current", cur).put("password", nw))
     if (pr.status == 0) return "Could not reach Nook. Check your connection"
@@ -515,14 +520,19 @@ suspend fun Online.changePassword(cur: String, nw: String, again: String): Strin
     return null
 }
 
-suspend fun Online.changeEmail(cur: String, email: String): String? {
+suspend fun Online.changeEmail(cur: String, email: String, verified: Boolean = false): String? {
     val e = email.trim().lowercase()
     if (cur.isEmpty() || e.isEmpty()) return "Fill in every box"
     if (!EMAIL_RE.matches(e)) return "That email does not look real"
     if (e == (Sb.user?.email ?: "").lowercase()) return "That is already your email"
-    verifyPassword(cur)?.let { return it }
-    val err = Sb.updateEmail(e) ?: run { app.say("Confirmation link sent to $e"); return null }
-    return authMsg(err.code, err.message, err.status)
+    if (!verified) verifyPassword(cur)?.let { return it }
+    val err = Sb.updateEmail(e) ?: run { app.say("Confirmation link sent to $e. Open it to finish"); return null }
+    return when {
+        err.status == 0 -> "Could not reach Nook. Check your connection"
+        err.code == "email_exists" || err.code == "user_already_exists" || Regex("already (been )?registered", RegexOption.IGNORE_CASE).containsMatchIn(err.message) -> "That email is already used by another account"
+        err.code == "over_email_send_rate_limit" || err.status == 429 -> "Too many emails were sent. Wait a few minutes and try again"
+        else -> authMsg(err.code, err.message, err.status)
+    }
 }
 
 var totpOn: Boolean? = null

@@ -259,7 +259,7 @@ fun SettingsScreen() {
             Group { SRow(ic("copy", 22.dp), "Download data", "Posts, notes and media", last = true) { app.backup() } }
             Sec("Updates")
             Group {
-                SRow(ic("refresh", 22.dp), "Check for updates", "Version $APP_VERSION", last = true) { app.checkUpdate(true) }
+                SRow(ic("refresh", 22.dp), "Check for updates", if (app.updProgress != null) "Updating..." else "Version $APP_VERSION", last = true) { if (app.updProgress == null && !app.updBusy) app.checkUpdate(true) }
             }
             Sec("Legal")
             Group {

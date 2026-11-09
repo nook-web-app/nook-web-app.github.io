@@ -64,6 +64,9 @@ fun ChatsScreen() {
     val on = app.on
     val dm = app.dm
     var inboxFailed by remember { mutableStateOf(false) }
+    // the chats this phone remembers are in place before the first frame, so a page opened after a long break (the phone restored
+    // a chat and the person went back) is not drawn empty and then filled in, which moved every row
+    remember { if (dm.inbox == null && on.me != null) on.cachedInbox()?.let { dm.inbox = it }; true }
     LaunchedEffect(Unit) { if (dm.locked) on.promptUnlock() }
     LaunchedEffect(on.me) {
         if (on.me == null) { dm.inboxN = 0; return@LaunchedEffect }

@@ -144,7 +144,7 @@ class UpdateReceiver : BroadcastReceiver() {
             }
             PackageInstaller.STATUS_SUCCESS -> {}
             else -> {
-                AppState.current?.updProgress = null
+                AppState.current?.updProgress = null; AppState.current?.updBusy = false
                 // the installer says why, so the reason can be told
                 val why = i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE).orEmpty().take(80)
                 AppState.current?.say("The update could not be installed" + if (why.isNotEmpty()) " ($why)" else "")

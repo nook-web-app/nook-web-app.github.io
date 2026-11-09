@@ -284,9 +284,13 @@ class MainActivity : ComponentActivity() {
 
     // the web app's update sheet; Update now downloads the new apk and opens Android's installer
     private fun checkUpdate(manual: Boolean) {
+        // an update that is already coming in (or a check that has not answered yet) is not started a second time
+        if (app.updProgress != null || app.updBusy) return
+        app.updBusy = true
         Thread {
             val r = Updater.latest(this)
             runOnUiThread {
+                app.updBusy = false
                 val rel = r.getOrNull()
                 when {
                     r.isFailure -> if (manual) app.say("Could not check. Check your connection and try again")
@@ -304,6 +308,7 @@ class MainActivity : ComponentActivity() {
 
     private fun getUpdate(quiet: Boolean = false) {
         // one bar for both parts: the download fills the first 80 percent, the install the rest
+        app.updBusy = true
         if (!quiet) { app.updPhase = "Downloading the update"; app.updProgress = 0f }
         Thread {
             // a try that fails (a slow start, a cut line) is made once more before it is called a failure
@@ -313,11 +318,11 @@ class MainActivity : ComponentActivity() {
                 f = runCatching { Updater.download(this) { p -> if (!quiet) runOnUiThread { app.updProgress = if (p < 0f) -1f else p * 0.8f } } }.getOrNull()
                 if (f == null && n == 0) Thread.sleep(1500)
             }
-            if (f == null) { runOnUiThread { app.updProgress = null; if (!quiet) app.say("Could not download the update. Try again") }; return@Thread }
+            if (f == null) { runOnUiThread { app.updProgress = null; app.updBusy = false; if (!quiet) app.say("Could not download the update. Try again") }; return@Thread }
             if (!quiet) runOnUiThread { app.updPhase = "Installing the update"; app.updProgress = 0.8f; creepInstall() }
             // the apk is written into the installer on this thread, not on the screen's, so the bar keeps moving meanwhile
             val ok = runCatching { Updater.install(this, f) }.getOrDefault(false)
-            if (!ok) runOnUiThread { app.updProgress = null; app.say("Allow Nook to install the update, then tap Update now again") }
+            if (!ok) runOnUiThread { app.updProgress = null; app.updBusy = false; app.say("Allow Nook to install the update, then tap Update now again") }
         }.start()
     }
 

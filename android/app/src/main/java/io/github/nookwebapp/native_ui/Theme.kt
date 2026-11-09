@@ -70,7 +70,7 @@ val BaseText = TextStyle(
 enum class ThemeMode { System, Dark, Light }
 
 // the same version as the web app (APP_VERSION in app.js); the app's own version code is made from it in build.gradle
-const val APP_VERSION = "3.41.1"
+const val APP_VERSION = "3.41.2"
 
 @Composable
 fun NookTheme(mode: ThemeMode = ThemeMode.System, content: @Composable () -> Unit) {

@@ -46,12 +46,18 @@ fun Online.loadUser(pg: UserPage) {
         }
     }
     app.scope.launch {
-        val acc = Sb.get(Q("accounts").select(ACC_COLS).eq("id", pg.id))
-        val fol = Sb.get(Q("follows").select("followee_id").eq("follower_id", me).eq("followee_id", pg.id))
-        val folMe = Sb.get(Q("follows").select("follower_id").eq("follower_id", pg.id).eq("followee_id", me))
-        val blk = Sb.get(Q("blocks").select("blocked_id").eq("blocker_id", me).eq("blocked_id", pg.id))
-        val theyBlock = Sb.get(Q("blocks").select("blocker_id").eq("blocker_id", pg.id).eq("blocked_id", me))
-        val mu = Sb.get(Q("mutes").select("muted_id").eq("muter_id", me).eq("muted_id", pg.id))
+        // the six questions go out together (they used to go one after the other, which took seconds)
+        val rs = kotlinx.coroutines.coroutineScope {
+            listOf(
+                async { Sb.get(Q("accounts").select(ACC_COLS).eq("id", pg.id)) },
+                async { Sb.get(Q("follows").select("followee_id").eq("follower_id", me).eq("followee_id", pg.id)) },
+                async { Sb.get(Q("follows").select("follower_id").eq("follower_id", pg.id).eq("followee_id", me)) },
+                async { Sb.get(Q("blocks").select("blocked_id").eq("blocker_id", me).eq("blocked_id", pg.id)) },
+                async { Sb.get(Q("blocks").select("blocker_id").eq("blocker_id", pg.id).eq("blocked_id", me)) },
+                async { Sb.get(Q("mutes").select("muted_id").eq("muter_id", me).eq("muted_id", pg.id)) },
+            ).map { it.await() }
+        }
+        val acc = rs[0]; val fol = rs[1]; val folMe = rs[2]; val blk = rs[3]; val theyBlock = rs[4]; val mu = rs[5]
         if (listOf(acc, fol, folMe, blk, theyBlock).any { !it.ok }) { if (pg.st == null) pg.state = "fail"; return@launch }
         val a = acc.one ?: run { pg.state = "gone"; return@launch }
         if (theyBlock.rows.isNotEmpty()) { pg.state = "blockedMe"; return@launch }

@@ -42,9 +42,11 @@ fun UserScreen(id: String, fromMenu: Boolean = false) {
     pg.version
     val found = s.posts.firstOrNull { it.ra?.id == id }?.ra
     val acc = pg.st?.acc
-    val name = acc?.let { if (it.isNull("display_name")) it.optString("username") else it.optString("display_name") } ?: found?.name ?: "user"
-    val handle = acc?.optString("username") ?: found?.handle ?: "user"
-    val avatar = acc?.optStr("avatar") ?: found?.avatar
+    // what this phone already knows about the person (from a list of people) shows while the page loads
+    val known = on.acctCache[id]
+    val name = acc?.let { if (it.isNull("display_name")) it.optString("username") else it.optString("display_name") } ?: found?.name ?: known?.optString("name")?.ifEmpty { null } ?: "user"
+    val handle = acc?.optString("username") ?: found?.handle ?: known?.optString("username")?.ifEmpty { null } ?: "user"
+    val avatar = acc?.optStr("avatar") ?: found?.avatar ?: known?.optStr("avatar")
     var tab by remember(id) { mutableStateOf("posts") }
     val ownerOfZen = on.zenId() == id && on.isOwner()
     Page({ Bar(name.ifEmpty { "@$handle" }, { if (fromMenu) MenuBtn() else BackBtn() }) }) {

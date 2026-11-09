@@ -1,5 +1,7 @@
 package io.github.nookwebapp.native_ui
 
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -358,11 +360,14 @@ fun Modifier.shimmer(): Modifier = composed {
     val clock = LocalShimmer.current
     if (androidx.compose.ui.platform.LocalInspectionMode.current || clock == null) return@composed this
     DisposableEffect(clock) { clock.users++; onDispose { clock.users-- } }
-    drawWithContent {
-        drawContent()
-        val w = size.width
-        val x = (clock.t * 2f - 1f) * w
-        drawRect(Brush.horizontalGradient(0.3f to Color.Transparent, 0.5f to c.line, 0.7f to Color.Transparent, startX = x, endX = x + w))
+    // the band is made once per size and only moved on each frame (a new gradient used to be made for every placeholder every frame)
+    drawWithCache {
+        val band = Brush.horizontalGradient(0.3f to Color.Transparent, 0.5f to c.line, 0.7f to Color.Transparent, startX = 0f, endX = size.width)
+        onDrawWithContent {
+            drawContent()
+            val x = (clock.t * 2f - 1f) * size.width
+            translate(left = x) { drawRect(band, size = size) }
+        }
     }
 }
 

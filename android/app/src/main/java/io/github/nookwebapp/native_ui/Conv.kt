@@ -225,7 +225,8 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
 }
 
 // "/media link" and "/audio link" are commands: the link in them never gets a preview card of its own
-private fun isMediaCmd(t: String) = Regex("^/(media|audio)\\b", RegexOption.IGNORE_CASE).containsMatchIn(t.trim())
+private val MEDIA_CMD = Regex("^/(media|audio)\\b", RegexOption.IGNORE_CASE)
+private fun isMediaCmd(t: String) = MEDIA_CMD.containsMatchIn(t.trim())
 
 // .mrow: my message on the right in an accent bubble (photos above it), Zenith's on the left (.mrow.ai), and the time
 // under it while it is open
@@ -248,7 +249,7 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onLong: () -> Unit
         m.rpost?.let { Box(Modifier.padding(top = if (m.imgs.isNotEmpty()) 4.dp else 0.dp)) { RCard(it.id, it.u) } }
         m.zpost?.let { Box(Modifier.padding(top = 4.dp)) { ZCard(it) } }
         // the text of a "/media" message is only its link (it is what the web app shows), the card is drawn instead
-        val url = if (m.mcard != null || isMediaCmd(m.text)) null else firstUrl(m.text)
+        val url = remember(m.text, m.mcard) { if (m.mcard != null || isMediaCmd(m.text)) null else firstUrl(m.text) }
         if (url != null) Box(Modifier.padding(top = if (m.imgs.isNotEmpty() || m.rpost != null) 4.dp else 0.dp)) { LinkCard(url, chat = true) }
         if (m.text.isNotEmpty() && m.mcard == null) {
             val shape = if (left) RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.bubble, Rad.xs) else RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.xs, Rad.bubble)

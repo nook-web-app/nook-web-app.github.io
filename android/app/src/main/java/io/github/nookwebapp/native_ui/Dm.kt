@@ -39,7 +39,8 @@ class DmMsg(val id: Long?, val sender: String, val recipient: String, val body: 
     // folding away after a delete (foldAway of the web app)
     var leaving by mutableStateOf(false)
     var fresh = false
-    val t get() = parseIso(created)
+    // read once: every comparison of messages used to parse the date again
+    val t: Long = parseIso(created)
     fun sig() = body + "|" + (0 until media.length()).joinToString(",") { media.optJSONObject(it)?.optString("url").orEmpty() }
     fun json(): JSONObject = JSONObject().put("id", id ?: JSONObject.NULL).put("sender_id", sender).put("recipient_id", recipient).put("body", body).put("media", media).put("created_at", created).put("read_at", readAt ?: JSONObject.NULL)
     companion object {

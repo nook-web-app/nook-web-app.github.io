@@ -339,7 +339,9 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
 val LocalApp = staticCompositionLocalOf<AppState> { error("no app state") }
 
 private val STOP = setOf("this", "that", "with", "have", "from", "they", "were", "what", "your", "about", "just", "will", "would", "there", "their", "been", "than", "then", "them", "into", "some", "when", "like", "more", "very", "also", "only", "over", "dont", "cant")
-fun wordsOf(text: String): List<String> = Regex("[\\p{L}\\p{N}]{4,}").findAll(text.lowercase()).map { it.value }.filter { it !in STOP }.distinct().take(12).toList()
+// (the pattern is built once: it used to be compiled again for every post each time the feed was ranked)
+private val WORDS_RE = Regex("[\\p{L}\\p{N}]{4,}")
+fun wordsOf(text: String): List<String> = WORDS_RE.findAll(text.lowercase()).map { it.value }.filter { it !in STOP }.distinct().take(12).toList()
 
 // the place on the stack of the page being drawn (1 for the first page)
 val LocalPage = androidx.compose.runtime.compositionLocalOf { 1 }

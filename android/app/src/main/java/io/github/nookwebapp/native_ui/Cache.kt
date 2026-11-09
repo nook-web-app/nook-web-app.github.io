@@ -38,7 +38,7 @@ object Cache {
         if (memOnly(k)) { mem[k] = h; return@synchronized }
         disk.remove(k); disk[k] = h
         // the oldest profiles go first when there are a lot of entries
-        if (disk.size > 3000) disk.keys.filter { it.startsWith("acct:") }.take(disk.size - 2500).forEach { disk.remove(it) }
+        if (disk.size > 3000) disk.keys.filter { it.startsWith("acct:") || it.startsWith("shape:") }.take(disk.size - 2500).forEach { disk.remove(it) }
         dirty = true
     }
 

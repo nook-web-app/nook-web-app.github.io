@@ -143,17 +143,27 @@ class MainActivity : ComponentActivity() {
         closeRt?.let { window.decorView.removeCallbacks(it) }
         val was = app.foreground
         app.foreground = true
-        if (!was) Sb.dropConnections()
-        if (!was && app.signedIn) app.scope.launch {
+        // the kept connections are only dropped after a real break (a short trip to a picker keeps them warm)
+        if (!was && System.currentTimeMillis() - bgAt > 60_000) Sb.dropConnections()
+        if (!was && app.signedIn) {
+            // the feed no longer waits for the ban and notice checks: they run side by side
             app.on.feedTries = 0
-            app.on.deviceCheck(); app.on.checkEmailChange()
-            app.on.checkBan(); app.on.refreshBadge(true); app.on.checkModNotices(); app.on.notesSync(); app.on.loadFeed()
-            if (app.dm.rtChan == null) app.on.startRealtime()
+            app.on.loadFeed()
+            app.scope.launch { app.on.checkBan(); app.on.checkModNotices() }
+            app.scope.launch {
+                app.on.deviceCheck(); app.on.checkEmailChange()
+                app.on.refreshBadge(true); app.on.notesSync()
+                if (app.dm.rtChan == null) app.on.startRealtime()
+            }
         }
     }
 
+    // when the app went to the background (a break shorter than a minute keeps the warm connections)
+    private var bgAt = 0L
+
     override fun onStop() {
         super.onStop()
+        bgAt = System.currentTimeMillis()
         if (!this::app.isInitialized) return
         app.foreground = false
         app.saveNow()

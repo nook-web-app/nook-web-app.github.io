@@ -245,7 +245,7 @@ fun ProfileScreen() {
 fun LazyListScope.mediaTiles(app: AppState, posts: List<LPost>) {
     val tiles = posts.flatMap { p -> p.imgs.map { p to it } }
     if (tiles.isEmpty()) item { Empty("image", "No photos yet.") }
-    else items(tiles.chunked(3)) { row ->
+    else items(tiles.chunked(3), key = { r -> r[0].first.id + "|" + r[0].second }, contentType = { "tiles" }) { row ->
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 3.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
             row.forEach { (p, src) -> Pic(src, Modifier.weight(1f).aspectRatio(1f).clip(RoundedCornerShape(Rad.xs)).tap { app.go(Route.Thread(p.id)) }, want = 480) }
             repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }

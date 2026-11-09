@@ -97,7 +97,8 @@ class Q(val table: String) {
 fun enc(s: String): String = URLEncoder.encode(s, "UTF-8").replace("+", "%20").replace("%2C", ",").replace("%28", "(").replace("%29", ")").replace("%3A", ":")
 
 object Sb {
-    val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).writeTimeout(60, TimeUnit.SECONDS).build()
+    // the default of 5 calls at a time to one host made the server calls, the photos and the live connection wait for each other
+    val http: OkHttpClient = OkHttpClient.Builder().dispatcher(okhttp3.Dispatcher().apply { maxRequests = 64; maxRequestsPerHost = 24 }).connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).writeTimeout(60, TimeUnit.SECONDS).build()
     private val JSON_T = "application/json".toMediaType()
 
     // the login of the account that is open; saved (sealed) on this phone by whoever sets onSession

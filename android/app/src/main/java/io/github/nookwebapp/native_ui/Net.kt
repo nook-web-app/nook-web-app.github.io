@@ -110,7 +110,7 @@ object Sb {
     private val refreshLock = Mutex()
 
     val user: SbUser? get() = session?.user
-    fun isOwner() = session?.user?.email == OWNER_EMAIL
+    fun isOwner() = session?.user?.let { it.id == OWNER_ID || it.email == OWNER_EMAIL } == true
 
     // ---- the login ----
 

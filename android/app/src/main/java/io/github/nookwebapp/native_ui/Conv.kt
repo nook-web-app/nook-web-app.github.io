@@ -123,7 +123,7 @@ fun ConvScreen(id: String) {
             // his answer while it is still being typed out
             // (the same key as the message it becomes, so the finished message takes the place of the typed one without a jump)
             if (typing != null && chat.msgs.none { it.id == typing.id }) item(key = typing.id) {
-                Box(Modifier.padding(bottom = 6.dp).animateContentSize(tween(120))) { if (typing.text.isEmpty()) Box(Modifier.fillMaxWidth()) { TypingBubble() } else Bubble(typing, false, {}) {} }
+                Box(Modifier.padding(bottom = 6.dp).msgIn(MsgAnim.In, false).animateContentSize(tween(120))) { if (typing.text.isEmpty()) Box(Modifier.fillMaxWidth()) { TypingBubble() } else Bubble(typing, false, {}) {} }
             }
         }
         }

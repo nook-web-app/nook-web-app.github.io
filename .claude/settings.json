@@ -10,7 +10,22 @@
       "mcp__Supabase__list_projects",
       "mcp__github__actions_list",
       "mcp__github__actions_get",
-      "mcp__GoDaddy__domains_check_availability"
+      "mcp__GoDaddy__domains_check_availability",
+      "mcp__Supabase__execute_sql",
+      "mcp__supbase__execute_sql",
+      "mcp__Supabase__apply_migration",
+      "mcp__supbase__apply_migration",
+      "mcp__Supabase__deploy_edge_function",
+      "mcp__supbase__deploy_edge_function",
+      "mcp__Supabase__create_edge_function_secret",
+      "mcp__Supabase__list_migrations",
+      "mcp__Supabase__get_advisors",
+      "mcp__Supabase__list_tables",
+      "mcp__github__get_file_contents",
+      "mcp__claude-code-remote__send_later",
+      "mcp__claude-code-remote__read_documentation",
+      "mcp__claude-code-remote__list_sessions",
+      "mcp__GoDaddy__domains_suggest"
     ]
   },
   "spinnerVerbs": {

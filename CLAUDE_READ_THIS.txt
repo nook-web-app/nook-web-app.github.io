@@ -14,6 +14,9 @@ how to write updates here
 - the only extra allowed is a ! after the version, like "## 3.0.8 !", for an update that people must install right away (privacy or security fixes). It installs at once and cannot be skipped.
 - every update installs quietly in the background without asking, whether it is a patch like 3.0.7 to 3.0.8, a new minor or a new major version.
 -->
+## 3.40.9
+fixed: Fixed some bugs
+
 ## 3.40.8
 fixed: Fixed some bugs
 

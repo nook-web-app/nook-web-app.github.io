@@ -313,14 +313,11 @@ class MainActivity : ComponentActivity() {
                 f = runCatching { Updater.download(this) { p -> if (!quiet) runOnUiThread { app.updProgress = if (p < 0f) -1f else p * 0.8f } } }.getOrNull()
                 if (f == null && n == 0) Thread.sleep(1500)
             }
-            runOnUiThread {
-                if (f == null) { app.updProgress = null; if (!quiet) app.say("Could not download the update. Try again") }
-                else {
-                    if (!quiet) { app.updPhase = "Installing the update"; app.updProgress = 0.8f; creepInstall() }
-                    val ok = runCatching { Updater.install(this, f) { p -> if (!quiet) app.updProgress = maxOf(app.updProgress ?: 0f, 0.8f + 0.2f * p) } }.getOrDefault(false)
-                    if (!ok) { app.updProgress = null; app.say("Allow Nook to install the update, then tap Update now again") }
-                }
-            }
+            if (f == null) { runOnUiThread { app.updProgress = null; if (!quiet) app.say("Could not download the update. Try again") }; return@Thread }
+            if (!quiet) runOnUiThread { app.updPhase = "Installing the update"; app.updProgress = 0.8f; creepInstall() }
+            // the apk is written into the installer on this thread, not on the screen's, so the bar keeps moving meanwhile
+            val ok = runCatching { Updater.install(this, f) { p -> if (!quiet) runOnUiThread { app.updProgress = maxOf(app.updProgress ?: 0f, 0.8f + 0.2f * p) } } }.getOrDefault(false)
+            if (!ok) runOnUiThread { app.updProgress = null; app.say("Allow Nook to install the update, then tap Update now again") }
         }.start()
     }
 

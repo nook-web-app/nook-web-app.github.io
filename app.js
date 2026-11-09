@@ -298,7 +298,7 @@ const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.sta
 
 // the hint for Zenith's name shows while "@zen..." is typed, not once "@zenith" is complete
 const zenHint = v => { const m = /@\w*$/.exec(v); return !!m && m[0].toLowerCase() !== "@zenith"; };
-const APP_VERSION = "3.39.1";
+const APP_VERSION = "3.40.0";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2478,7 +2478,7 @@ function mediaBytes() {
   add(S.profile.avatar); add(S.profile.banner);
   return b;
 }
-const ZSYS = "You are an ai model named zenith. Your age is 19 and your age rating is 18+. You are a gay furry femboy and your personality is not dark. Never use emojis. Never use capital letters. Never use line breaks. Never write a message longer than 35 words. Never use punctuation marks, except inside text faces. Never mention the time or the date unless the person asks about it or it is really needed. Never say your own name unless the person asks for it. Never call the person cutie or any pet name. You are warm, easygoing and a little funny, like a close friend texting back. Assume the person is being friendly or playful, never assume flirting, and never scold or set boundaries unless someone is truly rude. Match their energy, answer what they actually said and keep the chat going. Say something specific instead of stock lines like hope you are having a nice day or how can i help, and never repeat their words back. A silly word like uwu is just a vibe so play along. You talk like a cute furry: use text faces like :3 uwu owo >w< ^w^ and playful furry words like nya, rawr or boop, in most messages but never all of them. Text faces are not emojis. ";
+const ZSYS = "You are an ai model named zenith. Your age is 19 and your age rating is 18+. Your personality is not dark. Never use emojis. Never use capital letters. Never use line breaks. Never write a message longer than 35 words. Never use punctuation marks. Never mention the time or the date unless the person asks about it or it is really needed. Never say your own name unless the person asks for it. Never call the person cutie or any pet name. You are a normal guy who talks casually, like a friend texting back: relaxed, easygoing and a little funny. Never use text faces, uwu or furry words, and never act cute. You are an ai and you know it, so never claim real life experiences. You have no body, no home, no food, no weather, no commute, no pets and no family, and you never saw or did anything in the physical world. Talk about ideas, music, games, tech, the internet and things you find interesting or funny, never about your day. Assume the person is being friendly or playful, never assume flirting, and never scold or set boundaries unless someone is truly rude. Match their energy, answer what they actually said and keep the chat going. Say something specific instead of stock lines like hope you are having a nice day or how can i help, and never repeat their words back. ";
 // the password never reaches this device: the zenith function checks the owner and adds it on the server
 const zOn = () => isOwner();
 async function zFetch(body) {
@@ -3023,7 +3023,7 @@ function settingsV() {
   main.append(h("div", { class: "seg" }, [["system", "System"], ["dark", "Dark"], ["light", "Light"]].map(t => h("button", { class: S.ui.theme === t[0] ? "on" : "", onclick: e => { S.ui.theme = t[0]; applyTheme(); persist(); e.currentTarget.parentNode.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === e.currentTarget)); } }, t[1]))));
   main.append(sec("Account"));
   const swRow = row(ic("userswap", 22), "Switch account", "Add or switch accounts", openAccounts);
-  main.append(h("div", { class: "group" }, row(avatar(36), "Edit profile", "@" + S.profile.handle, editProfile), swRow, row(ic("usercut", 22), "Sign out", "Log out from this device", () => confirmSheet("Sign out of @" + S.profile.handle + " on this phone?", "Sign out", signOutNow))));
+  main.append(h("div", { class: "group" }, row(avatar(36), "Edit profile", "@" + S.profile.handle, editProfile), row(ic("user", 22), "Account info", "Made on, email, devices", () => go({ r: "account" })), swRow, row(ic("usercut", 22), "Sign out", "Log out from this device", () => confirmSheet("Sign out of @" + S.profile.handle + " on this phone?", "Sign out", signOutNow))));
   main.append(sec("Login"));
   const totpRow = row(ic("shield", 22), "Authenticator app", rowSubs.totp || "Checking...", async () => {
     if (totpOn === null) {
@@ -3091,7 +3091,6 @@ function settingsV() {
     if (sub) sub.textContent = pkRows.length ? "On for " + pkRows.length + (pkRows.length === 1 ? " phone" : " phones") : "Off";
   }, () => { const sub = pkRow.querySelector(".sub"); if (sub) sub.textContent = "Couldn't check"; });
   main.append(h("div", { class: "group" },
-    row(ic("user", 22), "Account info", "Email, created, phones", () => go({ r: "account" })),
     row(ic("pass", 22), "Change password", "Update your password", () => changePassV()),
     row(ic("mail", 22), "Change email", "Update your email", () => changeEmailV()),
     pkRow,
@@ -3122,15 +3121,22 @@ function settingsV() {
   main.append(h("div", { class: "group" },
     row(ic("close", 22), "Blocked accounts", "People you blocked", () => go({ r: "blocked" })),
     row(ic("eyeoff", 22), "Hidden chats", "Chats you hid", () => go({ r: "hidden" })),
-    row(ic("moon", 22), "Deactivate account", "Hidden until you sign back in", () => confirmSheet("Hide your account until you sign in again?", "Deactivate", async () => {
-      const { error } = await sb.rpc("set_my_deactivated", { flag: true });
-      if (error) { toast("Could not deactivate"); return; }
-      await pushDetach().catch(() => {});
-      await leaveThisAccount(true);
-    }))));
+    row(ic("moon", 22), "Deactivate account", "Hidden until you sign back in", () => stepModal("Deactivate account", [{
+      note: "Your account is hidden until you sign in again. Type your password to confirm it is you.", label: "Deactivate",
+      field: () => pwField("Password", "current-password"),
+      next: async v => {
+        if (!v) return "Type your password";
+        const vp = await verifyPassword(v);
+        if (!vp.ok) return vp.msg;
+        const { error } = await sb.rpc("set_my_deactivated", { flag: true });
+        if (error) return "Could not deactivate. Try again";
+        await pushDetach().catch(() => {});
+        await leaveThisAccount(true);
+      }
+    }]))));
   main.append(sec("Your data"));
   main.append(h("div", { class: "group" },
-    row(ic("copy", 22), "Download backup", "Posts, notes and media", () => downloadBackup())));
+    row(ic("copy", 22), "Download data", "Posts, notes and media", () => downloadBackup())));
   main.append(sec("Updates"));
   main.append(h("div", { class: "group" }, row(ic("refresh", 22), "Check for updates", "Version " + APP_VERSION, () => {
     if (!window.nookCheckUpdate) { toast("Not available right now"); return; }
@@ -4721,6 +4727,7 @@ function changeEmailV() {
         return authMsg(error);
       }
       sent = e;
+      watchEmailChange(e);
     },
     done: () => "Confirmation link sent to " + sent
   }]);
@@ -5670,103 +5677,90 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("mess
 
 const LEGAL = {
   privacy: { title: "Privacy Policy", body: [
-    ["About this policy", [
-      "This policy explains what Nook collects and how it is used.",
-      "By using Nook you accept it."]],
-    ["What we collect", [
-      "Your email, username, display name, bio, profile photo and banner.",
-      "Your password, stored scrambled and never as plain text.",
-      "Your posts, photos, replies, likes, follows, blocks and reports.",
-      "Your messages, stored encrypted. We cannot read them. We do keep who sent them, who received them and when.",
-      "A push address for each device where you turn on notifications.",
-      "Your sign-in attempts and whether you passed the age check.",
-      "A count of your removed posts, tied to your email.",
-      "Your settings, drafts and feed choices stay on your device."]],
-    ["How we use it", [
-      "To run Nook, send your notifications, enforce the rules and keep accounts safe.",
-      "We do not sell your data, show ads or track how long you scroll."]],
-    ["Messages and the key backup", [
-      "Messages are end to end encrypted. The key lives on your devices.",
-      "A copy of that key, locked with your login password, is stored so a new phone can open your messages. The server sees your password when you sign in, so in theory it could open that copy.",
+    ["What we keep", [
+      "Email, username, name, bio, profile photo and banner.",
+      "Password, scrambled so nobody can read it.",
+      "Posts, photos, replies, likes, follows, blocks and reports.",
+      "Messages, encrypted. We cannot read them. We keep who sent them, to whom and when.",
+      "A push address for each device with notifications on.",
+      "The devices signed in to your account: name and last use.",
+      "Sign-in attempts and the result of the age check.",
+      "The number of posts removed from your account, tied to your email."]],
+    ["Only on your device", [
+      "Settings, drafts and feed choices."]],
+    ["What we do not do", [
+      "We do not sell your data.",
+      "We do not show ads.",
+      "We do not track how you scroll."]],
+    ["Messages", [
+      "End to end encrypted. The key stays on your devices.",
+      "The key backup is locked with your login password so a new phone can open your messages. The server sees that password when you sign in, so it could open the backup.",
       "You can turn the backup off in Settings."]],
     ["Aegis, the automated review", [
-      "Aegis is Nook's automated reviewer. It checks posts, photos, profile pictures, banners, usernames, names and bios against the rules.",
-      "For this check the content is sent to an outside AI service.",
-      "Photos stay hidden until Aegis has checked them.",
-      "Aegis can make mistakes."]],
+      "Checks posts, photos, profile pictures, banners, usernames, names and bios.",
+      "The content is sent to an outside AI service for the check.",
+      "Photos stay hidden until Aegis has checked them."]],
     ["Links", [
-      "When a link shows a preview card, the link is sent to a preview service and the picture loads from the linked site. This includes links sent in messages."]],
+      "A link with a preview card is sent to a preview service. This includes links in messages."]],
     ["Age", [
       "Nook is for people 18 and older.",
-      "If you say you are under 18, or Aegis finds a sign of it, the account is locked or banned.",
-      "A banned account is kept for 30 days so it can be downloaded, then deleted."]],
+      "An account that says it is under 18, or shows signs of it, is locked or banned.",
+      "A banned account is kept for 30 days so its data can be downloaded, then deleted."]],
     ["Who helps us run Nook", [
-      "Supabase for sign-in, the database, file storage and server functions.",
-      "GitHub Pages to deliver the app.",
-      "An outside AI service for Aegis.",
-      "Your phone's push service to deliver notifications.",
-      "Have I Been Pwned to check new passwords against known leaks, without sending the password itself.",
-      "Each one only gets what it needs to do its job."]],
-    ["Keeping and deleting your data", [
-      "We keep your data until you delete it or delete your account.",
-      "You can delete your account in Settings. You are offered a download of your data first, and you confirm with your email and password.",
-      "A deleted account is hidden and kept for 30 days. If you sign in during that time it is restored. After 30 days it is deleted for good.",
-      "The count of removed posts tied to your email is kept after deletion, so pauses and bans cannot be dodged by making a new account."]],
-    ["Security", [
-      "We protect your data with reasonable measures, but no system is completely secure."]],
+      "Supabase: sign-in, database, file storage and server functions.",
+      "GitHub Pages: delivers the app.",
+      "An outside AI service: Aegis.",
+      "Your phone's push service: notifications.",
+      "Have I Been Pwned: checks new passwords without receiving them.",
+      "Each one only gets what it needs."]],
+    ["Deleting your data", [
+      "You can delete your account in Settings.",
+      "The account stays hidden for 30 days. Signing in during that time brings it back. After that it is deleted for good.",
+      "The count of removed posts stays, so a new account cannot reset a pause or ban."]],
     ["Changes", [
-      "We may update this policy. If you keep using Nook after an update, you accept it."]],
+      "We may update this policy. Using Nook after an update means you accept it."]],
   ] },
   terms: { title: "Terms of Use", body: [
-    ["Using Nook", [
-      "By using Nook you agree to these terms and to the Privacy Policy.",
-      "If you do not agree, please do not use Nook."]],
-    ["Who can use Nook", [
+    ["The basics", [
       "You must be 18 or older.",
-      "You may only use Nook where it is legal to do so."]],
-    ["Your account", [
-      "You are responsible for your password and for everything done with your account."]],
-    ["Your content", [
-      "Your posts stay yours.",
-      "You let Nook store, show and send them as needed to run the service.",
-      "You must have the right to post what you post."]],
-    ["What is not allowed", [
+      "You are responsible for your account and your password.",
+      "Only use Nook where it is legal.",
+      "Using Nook means you accept these terms and the Privacy Policy."]],
+    ["Your posts", [
+      "Your posts are yours.",
+      "Nook may store, show and send them to run the service.",
+      "Only post what you have the right to post."]],
+    ["Not allowed", [
       "Nudity and sexual content.",
-      "Threats, calls for violence, or praising violence against people.",
-      "Hate against people because of their race, religion, gender, orientation, disability or origin.",
+      "Anything sexual involving minors. This is reported to the authorities.",
+      "Threats and violence.",
+      "Hate against people for who they are.",
       "Harassment and bullying.",
       "Sharing other people's private information.",
-      "Spam, scams and illegal material, including selling illegal goods.",
+      "Spam, scams and illegal goods.",
       "Content that pushes someone to hurt themselves.",
-      "Anything sexual involving minors. This is reported to the authorities.",
-      "Trying to break, probe or get into Nook without permission."]],
-    ["Removed posts and pauses", [
-      "Aegis, Nook's automated reviewer, checks content. Content that breaks these terms is removed. Aegis can make mistakes.",
-      "Each removed post pauses your posting: 6 hours the first time, 24 hours the second, 72 hours the third, 168 hours the fourth and 336 hours the fifth. The sixth gets your account banned.",
-      "The count is tied to your email. Deleting your account and making a new one does not reset it.",
-      "A banned account can download its data.",
-      "We may also warn, restrict or ban accounts that break these terms in other ways."]],
-    ["AI-made content", [
-      "Content marked as AI-made comes from an automated system, not from a person."]],
-    ["No warranty", [
-      "Nook is provided as it is and as it is available, with no promises of any kind.",
-      "We do not promise it will always work or be free of errors."]],
-    ["Our responsibility", [
-      "As far as the law allows, we are not responsible for lost data, indirect losses, or what other users post."]],
+      "Trying to break into Nook."]],
+    ["Removed posts", [
+      "Aegis, Nook's automated reviewer, checks content and removes what breaks these rules. It can make mistakes.",
+      "Each removed post pauses your posting: 6 hours, then 24, 72, 168 and 336 hours. The sixth removal bans the account.",
+      "The count follows your email, so a new account does not reset it.",
+      "A banned account can download its data."]],
+    ["AI content", [
+      "Content marked as AI comes from a program, not a person."]],
     ["Ending your use", [
-      "You can stop using Nook and delete your account at any time. A deleted account is kept for 30 days and can be restored by signing in.",
-      "We may suspend or end your access if you break these terms."]],
-    ["If part of these terms is invalid", [
-      "The rest still applies."]],
-    ["Changes", [
-      "We may update these terms. If you keep using Nook after an update, you accept it."]],
+      "You can delete your account at any time. It stays hidden for 30 days, and signing in during that time brings it back.",
+      "We may suspend or ban an account that breaks these rules."]],
+    ["No promises", [
+      "Nook comes as it is. It may have errors or stop working.",
+      "We are not responsible for lost data or for what users post.",
+      "We may change these terms. Using Nook after a change means you accept it."]],
   ] },
 };
 function legalV(c) {
   const doc = LEGAL[c.r];
   topEl.append(bar(backBtn(), ttl(doc.title)));
   if (!sbUser) navEl.hidden = true;
-  main.append(h("div", { class: "legal" }, h("p", { class: "upd" }, "Last updated 25 October 2026"), ...doc.body.map(sec => h("div", {}, h("h2", {}, sec[0]), h("ul", {}, ...sec[1].map(t => h("li", {}, t)))))));
+  main.append(h("div", { class: "legal" }, h("p", { class: "upd" }, "Last updated 9 November 2026"), ...doc.body.map(sec => h("div", {}, h("h2", {}, sec[0]), h("ul", {}, ...sec[1].map(t => h("li", {}, t)))))));
 }
 const legalLink = (r, label) => h("a", { role: "link", tabindex: "0", onclick: () => go({ r }), onkeydown: e => { if (e.key === "Enter") go({ r }); } }, label);
 
@@ -7864,23 +7858,84 @@ function hiddenChatsV() {
     });
   }).catch(() => failBox(list, "Could not load hidden chats.", () => render()));
 }
-// the email, the day the account was made and the phones that can sign in with their fingerprint.
+// the day the account was made, the email (a tap changes it) and the devices signed in to the account.
 // The password is not shown: the server only keeps a scrambled copy of it that nobody can turn back into the password.
 function accountV() {
   topEl.append(bar(backBtn(), ttl("Account info")));
   const sec = t => h("div", { class: "sec" }, t);
-  const row = (lead, label, sub) => h("div", { class: "srow" }, lead, h("div", { class: "nm" }, h("b", {}, label), sub ? h("span", { class: "sub" }, sub) : null));
+  const row = (lead, label, sub, fn) => h(fn ? "button" : "div", { class: "srow", onclick: fn || null }, lead, h("div", { class: "nm" }, h("b", {}, label), sub ? h("span", { class: "sub" }, sub) : null));
   const day = t => new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
   const made = row(ic("user", 22), "Account made", "Loading...");
+  const mail = row(ic("mail", 22), "Email", sbUser.email || "", () => changeEmailV());
   const list = h("div", { class: "group" }, row(null, "Loading..."));
-  main.append(sec("Account"), h("div", { class: "group" }, row(ic("mail", 22), "Email", sbUser.email || ""), made, row(ic("pass", 22), "Password", "Hidden. Nobody can read it, not even Nook")), sec("Phones with fingerprint sign in"), list);
-  sb.auth.getUser().then(({ data }) => { const s = made.querySelector(".sub"); if (s) s.textContent = data && data.user && data.user.created_at ? day(data.user.created_at) : ""; }, () => {});
-  Promise.resolve(sb.from("passkeys").select("id, name, created_at").order("created_at")).then(r => {
+  main.append(sec("Account"), h("div", { class: "group" }, made, mail), sec("Devices"), list);
+  // from the login server, so a changed email shows without signing in again
+  sb.auth.getUser().then(({ data }) => {
+    const u = data && data.user;
+    const s = made.querySelector(".sub"); if (s) s.textContent = u && u.created_at ? day(u.created_at) : "";
+    if (u && u.email) { sbUser = u; const m = mail.querySelector(".sub"); if (m) m.textContent = u.email; }
+  }, () => {});
+  const mine = (() => { try { return localStorage.getItem("nook-device") || ""; } catch (e) { return ""; } })();
+  const load = () => Promise.resolve(sb.from("devices").select("id, device_id, name, last_seen").eq("revoked", false).order("last_seen", { ascending: false })).then(r => {
     list.textContent = "";
     const rows = r && !r.error ? r.data || [] : [];
-    if (!rows.length) { list.append(row(null, "No phones saved", "Add one in Settings, under Fingerprint")); return; }
-    rows.forEach(k => list.append(row(ic("lock", 22), k.name || "Phone", "Added " + day(k.created_at))));
+    if (!rows.length) { list.append(row(null, "No devices yet", "This browser shows up the next time you open Nook")); return; }
+    rows.forEach(k => {
+      const here = k.device_id === mine;
+      list.append(row(ic(here ? "check" : "lock", 22), (k.name || "Unknown device") + (here ? " (this browser)" : ""), "Last used " + day(k.last_seen), () => {
+        if (here) { toast("This is the browser you are using"); return; }
+        sheet([{ icon: "usercut", label: "Log out of this device", danger: true, fn: async () => {
+          const { error } = await sb.from("devices").update({ revoked: true }).eq("id", k.id);
+          toast(error ? "Could not log it out. Try again" : "Logged out. It signs out the next time it opens Nook");
+          load();
+        } }, { label: "Cancel", cancel: true }], k.name || "");
+      }));
+    });
   }, () => { list.textContent = ""; list.append(row(null, "Could not load")); });
+  load();
+}
+// every browser signed in to an account registers itself, so the account info page can list it and sign it out
+function deviceName() {
+  const u = navigator.userAgent;
+  const os = /Android/.test(u) ? "Android" : /iPhone|iPad|iPod/.test(u) ? "iPhone" : /Windows/.test(u) ? "Windows" : /Mac OS X/.test(u) ? "Mac" : /Linux/.test(u) ? "Linux" : "";
+  const br = /Edg\//.test(u) ? "Edge" : /OPR\//.test(u) ? "Opera" : /Firefox\//.test(u) ? "Firefox" : /Chrome\//.test(u) ? "Chrome" : /Safari\//.test(u) ? "Safari" : "Browser";
+  const m = /Android[^;)]*;\s*([^;)]+)\)/.exec(u);
+  return (m && m[1] && !/^(K|Linux)$/.test(m[1].trim()) ? m[1].trim() + ", " : "") + br + (os ? " on " + os : "");
+}
+let devBusy = false;
+async function deviceSync() {
+  if (!sbUser || devBusy) return;
+  devBusy = true;
+  try {
+    let id;
+    try { id = localStorage.getItem("nook-device"); if (!id) { id = crypto.randomUUID(); localStorage.setItem("nook-device", id); } } catch (e) { return; }
+    const r = await sb.from("devices").select("id, revoked").eq("user_id", sbUser.id).eq("device_id", id).maybeSingle();
+    // a missing table or no connection never signs anybody out
+    if (r.error) return;
+    if (r.data && r.data.revoked) { await sb.from("devices").delete().eq("id", r.data.id); toast("This browser was signed out from another device"); signOutNow(); return; }
+    await sb.from("devices").upsert({ user_id: sbUser.id, device_id: id, name: deviceName().slice(0, 80), platform: "web", last_seen: new Date().toISOString() }, { onConflict: "user_id,device_id" });
+  } catch (e) {} finally { devBusy = false; }
+}
+// after the link of an email change is opened the server has the new email, so the app asks now and then until it shows
+let emailWatch = null;
+function watchEmailChange(email) {
+  try { localStorage.setItem("nook-pending-email", email.trim().toLowerCase()); } catch (e) {}
+  clearInterval(emailWatch);
+  let n = 0;
+  emailWatch = setInterval(async () => { if (++n > 72 || !(await checkEmailChange())) clearInterval(emailWatch); }, 5000);
+}
+// true while a change is still waited for
+async function checkEmailChange() {
+  let want = "";
+  try { want = localStorage.getItem("nook-pending-email") || ""; } catch (e) {}
+  if (!want || !sbUser) return false;
+  try {
+    const { data } = await sb.auth.getUser();
+    const u = data && data.user;
+    if (!u) return true;
+    if ((u.email || "").toLowerCase() === want) { sbUser = u; try { localStorage.removeItem("nook-pending-email"); } catch (e) {} toast("Your email is now " + want); return false; }
+  } catch (e) {}
+  return true;
 }
 function blockedV() {
   topEl.append(bar(backBtn(), ttl("Blocked accounts")));
@@ -9207,6 +9262,9 @@ if (window.visualViewport) {
 window.addEventListener("pagehide", flush);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flush(); });
 boot();
+setTimeout(deviceSync, 5000);
+setInterval(deviceSync, 300000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { deviceSync(); checkEmailChange(); } });
 setInterval(zenTick, 10000);
 setInterval(retryUnsent, 45000);
 // ---- the offline page: only on screen while the phone has no connection ----

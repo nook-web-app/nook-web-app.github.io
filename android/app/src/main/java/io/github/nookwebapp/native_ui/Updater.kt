@@ -35,12 +35,26 @@ object Updater {
         if (r.code > myCode(ctx)) r else null
     }
 
-    fun download(ctx: Context): File {
+    // onProgress gets 0..1 while the apk comes in (a size that is not known gives -1)
+    fun download(ctx: Context, onProgress: ((Float) -> Unit)? = null): File {
         val out = File(File(ctx.cacheDir, "update").apply { mkdirs() }, "nook.apk")
         val c = URL(BASE + "nook.apk?t=" + System.currentTimeMillis()).openConnection() as HttpURLConnection
         c.connectTimeout = 10000; c.readTimeout = 30000; c.useCaches = false
         if (c.contentLengthLong > 500_000_000L) throw SecurityException("update too large")
-        c.inputStream.use { i -> out.outputStream().use { o -> i.copyTo(o) } }
+        val total = c.contentLengthLong
+        c.inputStream.use { i ->
+            out.outputStream().use { o ->
+                val buf = ByteArray(64 * 1024); var done = 0L; var last = -1
+                while (true) {
+                    val n = i.read(buf)
+                    if (n < 0) break
+                    o.write(buf, 0, n); done += n
+                    // a report for every whole percent, not for every chunk
+                    val pct = if (total > 0) (done * 100 / total).toInt() else -1
+                    if (pct != last) { last = pct; onProgress?.invoke(if (total > 0) done.toFloat() / total else -1f) }
+                }
+            }
+        }
         // only a newer build of this same app, signed with this app's own key, is ever handed to the installer
         if (!trusted(ctx, out)) { out.delete(); throw SecurityException("update not signed by Nook") }
         return out

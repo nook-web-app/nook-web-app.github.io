@@ -182,16 +182,20 @@ object Sb {
         }
     }
 
-    // the day this account was made, as the login server holds it (an ISO time), or null
-    suspend fun createdAt(): String? {
+    // the account as the login server holds it now (email, created_at ...), or null. The login held here follows it, so a changed
+    // email shows at once instead of after the next sign in
+    suspend fun me(): JSONObject? {
         val tok = token() ?: return null
-        return withContext(Dispatchers.IO) {
+        val j = withContext(Dispatchers.IO) {
             runCatching {
                 http.newCall(Request.Builder().url("$SB_URL/auth/v1/user").header("apikey", SB_KEY).header("Authorization", "Bearer $tok").get().build()).execute().use { r ->
-                    if (r.isSuccessful) JSONObject(r.body?.string() ?: "{}").optString("created_at").ifEmpty { null } else null
+                    if (r.isSuccessful) JSONObject(r.body?.string() ?: "{}") else null
                 }
             }.getOrNull()
-        }
+        } ?: return null
+        val e = j.optString("email")
+        session?.let { s -> if (e.isNotEmpty() && !e.equals(s.user.email, true) && j.optString("id") == s.user.id) useSession(Session(s.access, s.refresh, s.expiresAt, SbUser(s.user.id, e))) }
+        return j
     }
 
     // updateUser({ email }): the login server sends the confirmation link

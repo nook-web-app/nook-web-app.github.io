@@ -188,12 +188,12 @@ fun SettingsScreen() {
             Sec("Account")
             Group {
                 SRow({ MyAvatar(36.dp) }, "Edit profile", "@" + s.profile.handle) { app.panels.add(Panel.EditProfile) }
+                SRow(ic("user", 22.dp), "Account info", "Made on, email, devices") { app.go(Route.AccountInfo) }
                 SRow(ic("userswap", 22.dp), "Switch account", "Add or switch accounts") { on.openAccounts() }
                 SRow(ic("usercut", 22.dp), "Sign out", "Log out from this device", last = true) { app.confirm("Sign out of @${s.profile.handle} on this phone?", "Sign out") { on.signOutNow() } }
             }
             Sec("Login")
             Group {
-                SRow(ic("user", 22.dp), "Account info", "Email, created, phones") { app.go(Route.AccountInfo) }
                 SRow(ic("pass", 22.dp), "Change password", "Update your password") { app.panels.add(Panel.ChangePassword) }
                 SRow(ic("mail", 22.dp), "Change email", "Update your email") { app.panels.add(Panel.ChangeEmail) }
                 SRow(ic("lock", 22.dp), "Fingerprint", pkText) {
@@ -253,10 +253,10 @@ fun SettingsScreen() {
             Group {
                 SRow(ic("close", 22.dp), "Blocked accounts", "People you blocked") { app.go(Route.Blocked) }
                 SRow(ic("eyeoff", 22.dp), "Hidden chats", "Chats you hid") { app.go(Route.Hidden) }
-                SRow(ic("moon", 22.dp), "Deactivate account", "Hidden until you sign back in", last = true) { app.confirm("Hide your account until you sign in again?", "Deactivate") { on.deactivate() } }
+                SRow(ic("moon", 22.dp), "Deactivate account", "Hidden until you sign back in", last = true) { app.panels.add(Panel.Deactivate) }
             }
             Sec("Your data")
-            Group { SRow(ic("copy", 22.dp), "Download backup", "Posts, notes and media", last = true) { app.backup() } }
+            Group { SRow(ic("copy", 22.dp), "Download data", "Posts, notes and media", last = true) { app.backup() } }
             Sec("Updates")
             Group {
                 SRow(ic("refresh", 22.dp), "Check for updates", "Version $APP_VERSION", last = true) { app.checkUpdate(true) }
@@ -400,34 +400,55 @@ fun AgeScreen() {
     }
 }
 
-// accountInfoV: the email, the day the account was made and the phones that can sign in with their fingerprint.
+// accountInfoV: the day the account was made, the email (a tap changes it) and the devices signed in to the account.
 // The password is not shown: the server only keeps a scrambled copy of it that nobody can turn back into the password.
 @Composable
 fun AccountInfoScreen() {
     val app = LocalApp.current
-    val c = LocalNook.current
     val ic: (String, Dp) -> @Composable () -> Unit = { n, sz -> { NIcon(n, sz, androidx.compose.material3.LocalContentColor.current) } }
     var created by remember { mutableStateOf<String?>(null) }
-    var keys by remember { mutableStateOf<List<org.json.JSONObject>?>(null) }
+    var email by remember { mutableStateOf(Sb.user?.email ?: "") }
+    var devs by remember { mutableStateOf<List<org.json.JSONObject>?>(null) }
+    var tick by remember { mutableStateOf(0) }
+    val mine = remember { app.ctx?.let { Dev.id(it) } ?: "" }
+    // the email and the day come from the login server, so a changed email shows without signing in again
     LaunchedEffect(Unit) {
-        created = Sb.createdAt()?.let { dayText(parseIso(it)) } ?: ""
-        keys = Sb.get(Q("passkeys").select("id, name, created_at").order("created_at")).let { if (it.ok) it.rows else emptyList() }
+        val u = Sb.me()
+        created = u?.optString("created_at")?.takeIf { it.isNotEmpty() }?.let { dayText(parseIso(it)) } ?: ""
+        u?.optString("email")?.takeIf { it.isNotEmpty() }?.let { email = it }
+    }
+    LaunchedEffect(tick) {
+        val r = Sb.get(Q("devices").select("id, device_id, name, platform, last_seen").eq("revoked", false).order("last_seen", false))
+        devs = if (r.ok) r.rows else emptyList()
     }
     Page({ Bar("Account info", { BackBtn() }) }) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
             Sec("Account")
             Group {
-                SRow(ic("mail", 22.dp), "Email", Sb.user?.email ?: "") {}
                 SRow(ic("user", 22.dp), "Account made", created ?: "Loading...") {}
-                SRow(ic("pass", 22.dp), "Password", "Hidden. Nobody can read it, not even Nook", last = true) {}
+                SRow(ic("mail", 22.dp), "Email", email, last = true) { app.panels.add(Panel.ChangeEmail) }
             }
-            Sec("Phones with fingerprint sign in")
+            Sec("Devices")
             Group {
-                val k = keys
+                val k = devs
                 when {
                     k == null -> SRow(null, "Loading...", last = true) {}
-                    k.isEmpty() -> SRow(null, "No phones saved", "Add one in Settings, under Fingerprint", last = true) {}
-                    else -> k.forEachIndexed { i, x -> SRow(ic("lock", 22.dp), x.optString("name").ifEmpty { "Phone" }, "Added " + dayText(parseIso(x.optString("created_at"))), last = i == k.size - 1) {} }
+                    k.isEmpty() -> SRow(null, "No devices yet", "This phone shows up the next time you open Nook", last = true) {}
+                    else -> k.forEachIndexed { i, x ->
+                        val here = x.optString("device_id") == mine
+                        SRow(ic(if (here) "check" else "lock", 22.dp), x.optString("name").ifEmpty { "Unknown device" } + if (here) " (this phone)" else "", "Last used " + dayText(parseIso(x.optString("last_seen"))), last = i == k.size - 1) {
+                            if (here) app.say("This is the phone you are using")
+                            else app.open(listOf(
+                                SheetItem("Log out of this device", "usercut", danger = true) {
+                                    app.scope.launch {
+                                        val r = Sb.update(Q("devices").eq("id", x.optString("id")), org.json.JSONObject().put("revoked", true))
+                                        app.say(if (r.ok) "Logged out. It signs out the next time it opens Nook" else "Could not log it out. Try again")
+                                        tick++
+                                    }
+                                },
+                                SheetItem("Cancel", cancel = true)), x.optString("name"))
+                        }
+                    }
                 }
             }
         }

@@ -380,3 +380,37 @@ fun ZenEditPanel(app: AppState, p: Panel) {
         Fld("Banner style") { Seg(listOf(if (banner != null) "Custom" else "Default", "Blurred photo"), if (blurred) 1 else 0, Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 14.dp)) { if (it == 1 && pfp == null && banner == null) app.say("Pick a picture first") else blurred = it == 1 } }
     }
 }
+
+// deactivating asks for the login password first, or the fingerprint when this account has one saved
+@Composable
+fun DeactivatePanel(app: AppState, p: Panel) {
+    var pw by remember { mutableStateOf("") }
+    var keys by remember { mutableStateOf(0) }
+    var busy by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { keys = if (Passkey.ok()) app.on.passkeys()?.size ?: 0 else 0 }
+    Form(p, "Deactivate account", "Deactivate", run = {
+        if (pw.isEmpty()) return@Form "Type your password"
+        app.on.verifyPassword(pw)?.let { return@Form it }
+        app.on.deactivate()
+    }) {
+        Note("Your account is hidden until you sign in again. Type your password to confirm it is you.")
+        PwField(pw, { pw = it }, "Password")
+        if (keys > 0) {
+            Gap()
+            Pill("Use my fingerprint instead", Btn.Ghost, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                busy = true
+                app.scope.launch {
+                    val (ss, err) = app.on.passkeySession()
+                    // the fingerprint has to belong to the account that is open
+                    val msg = when {
+                        ss == null -> err
+                        jwtSub(ss.first) != app.on.uid -> "That fingerprint is for another account"
+                        else -> app.on.deactivate()
+                    }
+                    busy = false
+                    if (!msg.isNullOrEmpty()) app.say(msg)
+                }
+            }
+        }
+    }
+}

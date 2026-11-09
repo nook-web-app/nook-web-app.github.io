@@ -536,7 +536,7 @@ fun LegalScreen(terms: Boolean) {
     Page({ Bar(doc.title, { BackBtn() }) }) {
         // the CSS margins collapse: the date 6 under the top, a heading 22 above and 6 below, list items 6 apart
         Column(Modifier.verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 54.dp)) {
-            T("Last updated 25 October 2026", Fs.sm, color = c.muted)
+            T("Last updated 9 November 2026", Fs.sm, color = c.muted)
             doc.body.forEach { (h, items) ->
                 T(h, Fs.xl, FontWeight.Bold, modifier = Modifier.padding(top = 22.dp, bottom = 6.dp))
                 items.forEachIndexed { i, t ->

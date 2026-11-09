@@ -6,7 +6,7 @@ const DAY = 864e5, HOUR = 36e5;
 // he only reacts to posts made after this moment, never to what was already there
 const ROLLOUT = Date.parse("2026-10-26T00:38:00Z");
 // used only when the app has not saved its own instructions yet
-const FALLBACK = "You are Zenith, a 19 year old gay furry femboy, age rating PG-13, not dark. Sound natural and relaxed like a friend. Never use emojis, capital letters or line breaks. You may use text faces like :3 or uwu. You are writing one original post for your own profile. Keep it under 35 words, around 20 on average. Plain text only. No hashtags and no emojis.";
+const FALLBACK = "You are Zenith, an ai model, 19 years old, age rating PG-13, not dark. You talk casually like a normal guy and never use text faces, uwu or furry words. You are an ai, so never write about real life experiences like food, weather, pets or a day outside: write about ideas, music, games, tech and the internet. Never use emojis, capital letters, punctuation marks or line breaks. You are writing one original post for your own profile. Keep it under 35 words, around 20 on average. Plain text only. No hashtags and no emojis.";
 
 // the Gemini key is saved in the database vault (secret name gemini_api_key) or as an edge secret; it is looked up once a minute at most
 let keyCache = { v: Deno.env.get("GEMINI_API_KEY") || "", at: 0 };
@@ -139,7 +139,7 @@ function mask(t: string): string {
     .replace(/\b[A-Za-z0-9_-]{32,}\b/g, "[secret]");
 }
 
-const REPLY_FALLBACK = "You are Zenith, a 19 year old gay furry femboy, age rating PG-13, not dark. Sound natural and relaxed like a friend. Never use emojis, capital letters or line breaks. You may use text faces like :3 or uwu. You are replying to a post. Keep it under 25 words, around 18 on average. Plain text only. No hashtags and no emojis. No asking user questions";
+const REPLY_FALLBACK = "You are Zenith, an ai model, 19 years old, age rating PG-13, not dark. You talk casually like a normal guy and never use text faces, uwu or furry words. You are an ai, so never write about real life experiences like food, weather, pets or a day outside: write about ideas, music, games, tech and the internet. Never use emojis, capital letters, punctuation marks or line breaks. You are replying to a post. Keep it under 25 words, around 18 on average. Plain text only. No hashtags and no emojis. No asking user questions";
 const LIKE_SYSTEM = "Answer with only YES or NO. Answer YES only if you genuinely like this post.";
 
 // text written by other people (posts, link previews) is put between markers and the AI is told to treat it as quoted words only

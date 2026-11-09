@@ -73,6 +73,7 @@ suspend fun Online.restart() {
     me = Sb.user
     app.root(if (me == null) Route.Auth else Route.Home)
     boot()
+    if (me != null) deviceCheck()
 }
 
 // boot(): what happens when the app opens with a login saved
@@ -526,7 +527,7 @@ suspend fun Online.changeEmail(cur: String, email: String, verified: Boolean = f
     if (!EMAIL_RE.matches(e)) return "That email does not look real"
     if (e == (Sb.user?.email ?: "").lowercase()) return "That is already your email"
     if (!verified) verifyPassword(cur)?.let { return it }
-    val err = Sb.updateEmail(e) ?: run { app.say("Confirmation link sent to $e. Open it to finish"); return null }
+    val err = Sb.updateEmail(e) ?: run { app.say("Confirmation link sent to $e. Open it to finish"); watchEmailChange(e); return null }
     return when {
         err.status == 0 -> "Could not reach Nook. Check your connection"
         err.code == "email_exists" || err.code == "user_already_exists" || Regex("already (been )?registered", RegexOption.IGNORE_CASE).containsMatchIn(err.message) -> "That email is already used by another account"
@@ -591,13 +592,13 @@ suspend fun Online.setNewPassword(pw: String, pw2: String): String? {
 
 // ---- deactivating and deleting ----
 
-fun Online.deactivate() {
-    app.scope.launch {
-        val r = Sb.rpc("set_my_deactivated", JSONObject().put("flag", true))
-        if (!r.ok) { app.say("Could not deactivate"); return@launch }
-        runCatching { pushDetach() }
-        leaveThisAccount(true)
-    }
+// the account is hidden until the next sign in; the caller has already proved who is asking (password or fingerprint)
+suspend fun Online.deactivate(): String? {
+    val r = Sb.rpc("set_my_deactivated", JSONObject().put("flag", true))
+    if (!r.ok) return "Could not deactivate. Try again"
+    runCatching { pushDetach() }
+    leaveThisAccount(true)
+    return null
 }
 
 // confirmLogin(): the email and password are checked first; only then is the data download offered

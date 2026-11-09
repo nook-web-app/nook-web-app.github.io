@@ -60,6 +60,7 @@ sealed interface Panel {
     data class RecoverCode(val prefill: String) : Panel
     data object ChangePassword : Panel
     data object ChangeEmail : Panel
+    data object Deactivate : Panel
     data object TotpSetup : Panel
     data object TotpOff : Panel
     data object WaitApproval : Panel
@@ -118,6 +119,8 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     var sharePictureTo: (LPost, (String) -> Unit) -> Unit = { _, _ -> }
     var backup: () -> Unit = {}
     var checkUpdate: (Boolean) -> Unit = {}
+    // the download of an update that was asked for by hand: 0..1, -1 when the size is not known, null when none runs
+    var updProgress by mutableStateOf<Float?>(null)
     var askNotifs: () -> Unit = {}
     var shareFile: (java.io.File, String) -> Unit = { _, _ -> }
     var ctx: android.content.Context? = null

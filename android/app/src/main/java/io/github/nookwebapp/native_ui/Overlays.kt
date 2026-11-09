@@ -206,6 +206,7 @@ fun PanelHost(app: AppState) {
                         is Panel.RecoverCode -> RecoverCodePanel(app, p)
                         Panel.ChangePassword -> ChangePasswordPanel(app, p)
                         Panel.ChangeEmail -> ChangeEmailPanel(app, p)
+                        Panel.Deactivate -> DeactivatePanel(app, p)
                         Panel.TotpSetup -> TotpSetupPanel(app, p)
                         Panel.TotpOff -> TotpOffPanel(app, p)
                         Panel.WaitApproval -> WaitApprovalPanel(app, p)
@@ -372,5 +373,29 @@ fun ZCardHost(app: AppState) {
     val z = app.zcard ?: return
     Box(Modifier.fillMaxSize().background(LocalNook.current.bg).statusBarsPadding().navigationBarsPadding()) {
         Modal("Post", "Close", top = true, onCancel = { app.zcard = null }, onAction = { app.zcard = null }) { ZCard(z, big = true) }
+    }
+}
+
+// the progress of an update that was asked for with "Check for updates": a card with a bar that fills while the apk comes in
+@Composable
+fun UpdateHost(app: AppState) {
+    val c = LocalNook.current
+    val p = app.updProgress ?: return
+    Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)).padding(bottom = 72.dp), contentAlignment = Alignment.BottomCenter) {
+        Column(
+            Modifier.widthIn(max = minOf(LocalConfiguration.current.screenWidthDp * 0.88f, 340f).dp).fillMaxWidth()
+                .shadow(16.dp, RoundedCornerShape(Rad.m), ambientColor = Color(0x38000000), spotColor = Color(0x38000000))
+                .clip(RoundedCornerShape(Rad.m)).background(c.bg2).border(1.dp, c.line, RoundedCornerShape(Rad.m)).padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                T("Downloading the update", Fs.sm, FontWeight.SemiBold)
+                T(if (p >= 0f) (p * 100).toInt().toString() + "%" else "", Fs.sm, color = c.muted)
+            }
+            Box(Modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(c.line)) {
+                if (p >= 0f) Box(Modifier.fillMaxHeight().fillMaxWidth(p.coerceIn(0f, 1f)).clip(CircleShape).background(c.accent))
+                else Box(Modifier.fillMaxHeight().fillMaxWidth(0.3f).clip(CircleShape).background(c.accent))
+            }
+        }
     }
 }

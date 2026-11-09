@@ -146,6 +146,7 @@ class MainActivity : ComponentActivity() {
         if (!was) Sb.dropConnections()
         if (!was && app.signedIn) app.scope.launch {
             app.on.feedTries = 0
+            app.on.deviceCheck(); app.on.checkEmailChange()
             app.on.checkBan(); app.on.refreshBadge(true); app.on.checkModNotices(); app.on.notesSync(); app.on.loadFeed()
             if (app.dm.rtChan == null) app.on.startRealtime()
         }
@@ -302,10 +303,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun getUpdate(quiet: Boolean = false) {
-        if (!quiet) app.say("Downloading the update...")
+        if (!quiet) app.updProgress = 0f
         Thread {
-            val f = runCatching { Updater.download(this) }.getOrNull()
+            val f = runCatching { Updater.download(this) { p -> if (!quiet) runOnUiThread { app.updProgress = p } } }.getOrNull()
             runOnUiThread {
+                app.updProgress = null
                 if (f == null) { if (!quiet) app.say("Could not download the update. Try again") }
                 else if (!Updater.install(this, f)) app.say("Allow Nook to install the update, then tap Update now again")
             }

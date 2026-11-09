@@ -42,7 +42,7 @@ textarea{resize:none}
 .cr .ib{width:var(--btn);color:var(--muted)}
 .av{position:relative;width:40px;height:40px;border-radius:50%;background:var(--accent);color:var(--on);display:flex;align-items:center;justify-content:center;font-weight:700;flex:none;overflow:hidden}
 .pic{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
-.banner .pic{inset:-2px;width:calc(100% + 4px);height:calc(100% + 4px)}
+.banner .pic{inset:-2px;width:calc(100% + 4px);height:calc(100% + 4px);max-width:none}
 .banner:has(> .pic:not(.blur)){background:var(--bg2)}
 .avc{display:flex;flex-direction:column;align-items:center}
 .post.line{border-bottom:0}

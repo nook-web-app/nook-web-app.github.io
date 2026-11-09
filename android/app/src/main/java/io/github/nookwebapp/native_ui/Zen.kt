@@ -61,7 +61,7 @@ private fun inline(src: String): JSONObject? {
 fun Online.zAsk(chat: LChat, m: LMsg) {
     if (!zOn() || !m.text.contains("@zenith", true)) return
     app.scope.launch {
-        val hist0 = chat.msgs.filter { it.text.isNotEmpty() || it.imgs.isNotEmpty() }.takeLast(16)
+        val hist0 = chat.msgs.filter { it.ai || it.text.contains("@zenith", true) }.filter { it.text.isNotEmpty() || it.imgs.isNotEmpty() }.takeLast(16)
         // only the newest two pictures are sent along: every picture makes the answer slower
         val allowed = HashSet<String>()
         var budget = 2
@@ -98,7 +98,7 @@ fun Online.zAsk(chat: LChat, m: LMsg) {
 // zenInDm(): only the owner can call Zenith in a chat; his answer goes as a normal message with a hidden mark inside
 suspend fun Online.zenInDm(l: LiveDm, sentText: String, srcs: List<String>) {
     val me = uid ?: return
-    val hist = l.rows.filter { it.text?.isNotEmpty() == true }.takeLast(20).map { m ->
+    val hist = l.rows.filter { it.text?.isNotEmpty() == true && (it.ai || it.text!!.contains("@zenith", true)) }.takeLast(20).map { m ->
         if (m.ai) "Zenith: " + m.text else if (m.sender == me) "Person A: " + m.text!!.replace(Regex("@zenith", RegexOption.IGNORE_CASE), "Zenith") + (if (m.media.length() > 0) " (sent a photo)" else "") else "Person B: (a private message you cannot read)"
     }.toMutableList()
     hist.add("Person A: " + (sentText.replace(Regex("@zenith", RegexOption.IGNORE_CASE), "Zenith").ifEmpty { "(photo only)" }) + if (srcs.isNotEmpty()) " (the photo is attached)" else "")

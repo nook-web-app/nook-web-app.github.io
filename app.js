@@ -298,7 +298,7 @@ const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.sta
 
 // the hint for Zenith's name shows while "@zen..." is typed, not once "@zenith" is complete
 const zenHint = v => { const m = /@\w*$/.exec(v); return !!m && m[0].toLowerCase() !== "@zenith"; };
-const APP_VERSION = "3.40.5";
+const APP_VERSION = "3.40.6";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2514,7 +2514,8 @@ async function zStream(history, onText) {
 }
 async function zAsk(chat, list, bubble, m) {
   if (!zOn() || !/@zenith/i.test(m.text)) return;
-  const hist0 = chat.msgs.filter(x => x.text || (x.imgs && x.imgs.length)).slice(-30);
+  // he only gets the messages that mention him, and his own answers
+  const hist0 = chat.msgs.filter(x => x.ai || /@zenith/i.test(x.text || "")).filter(x => x.text || (x.imgs && x.imgs.length)).slice(-16);
   // only the newest pictures can be sent along, so only those are brought out of the store
   let found = 0;
   for (let i = hist0.length - 1; i >= 0 && found < 6; i--) {
@@ -7660,7 +7661,7 @@ function dmV(c) {
   // only the owner can call Zenith in a chat: the answer is sent as a normal message with a hidden mark inside the sealed text, so both people see it as Zenith
   const zenInDm = async (sentText, sentP, srcs) => {
     // what the other person wrote never leaves the sealed chat: Zenith only gets the owner's words and his own, the rest is a blank turn
-    const hist = Array.from(list.querySelectorAll("[data-mid]")).map(r => r._m).filter(m => m && m.text).slice(-20)
+    const hist = Array.from(list.querySelectorAll("[data-mid]")).map(r => r._m).filter(m => m && m.text && (m.ai || /@zenith/i.test(m.text))).slice(-20)
       .map(m => m.ai ? "Zenith: " + m.text : m.sender_id === me ? "Person A: " + m.text.replace(/@zenith/gi, "Zenith") + ((m.media || []).length ? " (sent a photo)" : "") : "Person B: (a private message you cannot read)");
     hist.push("Person A: " + (sentText.replace(/@zenith/gi, "Zenith") || "(photo only)") + ((srcs || []).length ? " (the photo is attached)" : ""));
     const ghost = h("div", { class: "mrow zdm tmpm" }, h("div", { class: "bub typing" }, h("i"), h("i"), h("i")));

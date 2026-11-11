@@ -93,14 +93,20 @@ fun ComposePanel(app: AppState, o: Panel.Compose) {
         if (parent != null) Box(Modifier.fillMaxWidth().padding(bottom = 12.dp).clip(RoundedCornerShape(Rad.m)).border(1.dp, c.line, RoundedCornerShape(Rad.m)).padding(horizontal = 12.dp, vertical = 10.dp)) {
             // .quote: the name and the words are one block of text, the words flowing on after the name
             val who = if (parent.ai) "Zenith" else parent.ra?.let { it.name.ifEmpty { "@" + it.handle } } ?: s.profile.name.ifEmpty { "@" + s.profile.handle }
-            val body = if (parent.text.isNotEmpty()) parent.text.take(140) else "Photo post"
-            androidx.compose.material3.Text(
-                androidx.compose.ui.text.buildAnnotatedString {
-                    withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold, color = c.fg)) { append(who) }
-                    withStyle(androidx.compose.ui.text.SpanStyle(color = c.muted)) { append(" $body") }
-                },
-                style = LocalTextStyle.current.copy(fontSize = Fs.md, lineHeight = (Fs.md.value * 1.4f).sp),
-            )
+            // the first 400 characters show; a longer post has a Show more under it, and Show less folds it back
+            var more by remember(parent.id) { mutableStateOf(false) }
+            val long = parent.text.codePointCount(0, parent.text.length) > 400
+            val body = if (parent.text.isEmpty()) "Photo post" else if (long && !more) cutText(parent.text, 400) + "…" else parent.text
+            Column {
+                androidx.compose.material3.Text(
+                    androidx.compose.ui.text.buildAnnotatedString {
+                        withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold, color = c.fg)) { append(who) }
+                        withStyle(androidx.compose.ui.text.SpanStyle(color = c.muted)) { append(" $body") }
+                    },
+                    style = LocalTextStyle.current.copy(fontSize = Fs.md, lineHeight = (Fs.md.value * 1.4f).sp),
+                )
+                if (long) T(if (more) "Show less" else "Show more", Fs.md, color = c.accent, modifier = Modifier.padding(top = 4.dp).tap { more = !more })
+            }
         }
         // .crow: the avatar and the text box (17px, at least 130dp tall)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

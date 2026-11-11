@@ -4360,7 +4360,19 @@ function openCompose(o) {
     onBack: () => keepDraft(),
     action: kind,
     body: [
-      parent ? h("div", { class: "quote" }, h("b", {}, parent.ai ? "Zenith" : parent.ra ? (parent.ra.name || "@" + parent.ra.handle) : (S.profile.name || "@" + S.profile.handle)), " " + (parent.text ? parent.text.slice(0, 140) : "Photo post")) : null,
+      parent ? (() => {
+        // the first 400 characters show; a longer post has a Show more under it, and Show less folds it back
+        const full = parent.text || "Photo post", long = Array.from(full).length > 400;
+        const short = long ? Array.from(full).slice(0, 400).join("") + "…" : full;
+        const words = document.createTextNode(" " + short);
+        const more = long ? h("div", { class: "quote-more", role: "button", tabindex: "0" }, "Show more") : null;
+        const flip = () => { const open = more.textContent === "Show more"; words.nodeValue = " " + (open ? full : short); more.textContent = open ? "Show less" : "Show more"; };
+        if (more) { more.onclick = flip; more.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(); } }; }
+        const q = h("div", { class: "quote" }, h("b", {}, parent.ai ? "Zenith" : parent.ra ? (parent.ra.name || "@" + parent.ra.handle) : (S.profile.name || "@" + S.profile.handle)));
+        q.append(words);
+        if (more) q.append(more);
+        return q;
+      })() : null,
       h("div", { class: "crow" }, avatar(40), ta),
       grid
     ],

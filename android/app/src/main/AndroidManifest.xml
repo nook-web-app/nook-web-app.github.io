@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
     <uses-permission android:name="android.permission.ENFORCE_UPDATE_OWNERSHIP" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Android 16: the notification of a call may be shown as a live notification in the status bar -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- nothing of the app (logins, the message key, chats) goes into phone backups or to another phone by cable, and
@@ -30,6 +32,8 @@
         </activity>
         <receiver android:name=".UpdateReceiver" android:exported="false" />
         <service android:name=".KeepService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <service android:name=".CallService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <receiver android:name=".CallReceiver" android:exported="false" />
         <service android:name=".PushService" android:exported="false"><intent-filter><action android:name="com.google.firebase.MESSAGING_EVENT" /></intent-filter></service>
         <!-- the camera writes its photo here, and shared post pictures are handed to other apps from here -->
         <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.files" android:exported="false" android:grantUriPermissions="true">

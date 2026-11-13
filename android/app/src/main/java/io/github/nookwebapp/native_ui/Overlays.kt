@@ -191,7 +191,10 @@ fun PanelHost(app: AppState) {
             if (!vis.currentState && !vis.targetState && vis.isIdle) SideEffect { shown.remove(p) }
             else AnimatedVisibility(vis, enter = slideInVertically(tween(280, easing = Snappy)) { it }, exit = slideOutVertically(tween(220)) { it }) {
                 val c = LocalNook.current
-                Box(Modifier.fillMaxSize().background(c.bg).clickable(remember { MutableInteractionSource() }, null) {}.statusBarsPadding().navigationBarsPadding().imePadding()) {
+                // the call screen draws behind the status bar and the navigation bar itself; the other panels sit between them
+                val edge = if (p is Panel.Call) Modifier.fillMaxSize().clickable(remember { MutableInteractionSource() }, null) {}
+                else Modifier.fillMaxSize().background(c.bg).clickable(remember { MutableInteractionSource() }, null) {}.statusBarsPadding().navigationBarsPadding().imePadding()
+                Box(edge) {
                     when (p) {
                         is Panel.Compose -> ComposePanel(app, p)
                         is Panel.Call -> CallPanel(app, p)

@@ -187,6 +187,27 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     val panelBackHooks = mutableMapOf<Panel, () -> Unit>()
     fun panelBack() { val p = panels.lastOrNull() ?: return; panelBackHooks.remove(p)?.invoke(); panels.remove(p) }
     fun closePanel(p: Panel) { panelBackHooks.remove(p); panels.remove(p) }
+    // the call with Zenith (owner only): it lives here, so closing the call screen does not end it
+    var call by mutableStateOf<CallSession?>(null)
+    fun openCall() { if (panels.none { it is Panel.Call }) panels.add(Panel.Call()) }
+    fun startCall() {
+        if (call == null) {
+            call = CallSession(scope) { updateCallNote() }.also { it.start() }
+            ctx?.let { c -> runCatching { androidx.core.content.ContextCompat.startForegroundService(c, android.content.Intent(c, CallService::class.java)) } }
+        }
+        openCall()
+    }
+    fun endCall() {
+        call?.stop(); call = null
+        panels.removeAll { it is Panel.Call }
+        ctx?.let { c -> runCatching { c.stopService(android.content.Intent(c, CallService::class.java)) } }
+    }
+    // the notification gets its timer when the call is picked up
+    fun updateCallNote() {
+        val c = ctx ?: return
+        val s = call ?: return
+        runCatching { androidx.core.app.NotificationManagerCompat.from(c).notify(CallNote.ID, CallNote.build(c, s.connectedAt)) }
+    }
     // a page can set its own work for the pull down to refresh; without one the feed, the bell and the notes are read again
     var pullHook: (suspend () -> Unit)? = null
     suspend fun pullRefresh() {

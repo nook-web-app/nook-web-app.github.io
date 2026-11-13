@@ -88,7 +88,7 @@ fun ConvScreen(id: String) {
                 }
             }
             // the call with Zenith: only the owner has it
-            if (zOn()) Box(Modifier.width(44.dp)) { IB("phone", tint = c.accent) { if (app.panels.none { it is Panel.Call }) app.panels.add(Panel.Call()) } }
+            if (zOn()) Box(Modifier.width(44.dp)) { IB("phone") { app.startCall() } }
             Box(Modifier.width(44.dp)) {
                 IB("dots") {
                     app.open(listOf(

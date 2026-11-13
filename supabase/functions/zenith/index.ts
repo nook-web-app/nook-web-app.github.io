@@ -46,11 +46,11 @@ async function searchFailed(model: string, status: number, said: string) {
   try { await admin.rpc("nook_ai_full", { p_model: "debug:search:" + model + ":" + status + ":" + said.replace(/[^\w .,:'-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 90), p_limit: 1 }); } catch { /* only a note */ }
 }
 // what the chat model is told about the search tool, and the tool itself
-const SEARCH_HELP = "\n\nYou can look things up on the web with your search tool. Use it when the user asks you to search or look something up, and when they ask about something current that you cannot know yourself (news, weather, prices, scores, recent events). Give it a short, specific query. Do not use it for things you know well or for plain chatting. When the results come back, tell them in your own short style and never mention the tool.";
+const SEARCH_HELP = "\n\nYou can look things up on the web with your search tool. Use it when the user asks you to search or look something up, and when they ask about something current that you cannot know yourself (news, weather, prices, scores, recent events). Give it a short, specific query. The user lives in Oman (Muscat time), so when a place name could be several places (Seeb, for example, is a city in Oman) put the country in the query, like \"weather in Seeb, Oman\". Do not use it for things you know well or for plain chatting. When the results come back, tell them in your own short style and never mention the tool.";
 const SEARCH_TOOL = { functionDeclarations: [{
   name: "search",
   description: "Search the web with Google for current or factual information: news, weather, prices, scores, recent events, or anything you are not sure about. Returns a short summary of what was found.",
-  parameters: { type: "OBJECT", properties: { query: { type: "STRING", description: "What to search for, as a short specific search query" } }, required: ["query"] },
+  parameters: { type: "OBJECT", properties: { query: { type: "STRING", description: "What to search for, as a short specific search query. Add the country when a place name could mean several places." } }, required: ["query"] },
 }] };
 // Tavily is a search service made for AI (free plan: 1,000 searches a month, no card). Its key is the secret TAVILY_API_KEY.
 // The count is kept in the database like the models' (30 a day, so about 900 a month).

@@ -48,7 +48,7 @@ const searchNoThink = new Set<string>();
 // why a search failed is written as a small row (the model and the status in its name) so it can be looked up: select * from ai_usage where model like 'debug:%'
 async function searchFailed(model: string, status: number, said: string) {
   console.error("search failed", model, status, said.slice(0, 300));
-  try { await admin.from("ai_usage").upsert({ model: "debug:search:" + model + ":" + status, day: new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" }), n: 1 }, { onConflict: "model,day" }); } catch { /* only a note */ }
+  try { await admin.rpc("nook_ai_full", { p_model: "debug:search:" + model + ":" + status + ":" + said.replace(/[^\w .,:'-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 90), p_limit: 1 }); } catch { /* only a note */ }
 }
 // the findings of one model, or null when it could not search
 async function searchWith(key: string, model: string, limit: number, question: string): Promise<{ text: string; sources: string[] } | null> {
@@ -115,7 +115,8 @@ async function searchNote(key: string, query: string): Promise<string> {
 const CHAIN = parseChain(Deno.env.get("ZENITH_CHAT_MODELS") || "gemini-4-hydrogen:20,gemini-3.8-flash:20,gemini-3.6-flash:20,gemini-3.5-flash-lite:500");
 // a model that said "too many requests" for the minute rests for half a minute; one that did not accept a thinking level or a tool is asked without it from then on
 const resting: Record<string, number> = {};
-const noThink = new Set<string>();
+// the thinking level each model is asked for: it starts at "minimal", goes to "low" when a model refuses that, and to none when it refuses that too
+const level: Record<string, string | null> = {};
 const noTools = new Set<string>();
 // why a model failed is written as a small row (the model, the status and the start of its message in the name) so it can be looked up:
 // select * from ai_usage where model like 'debug:chat:%'
@@ -124,41 +125,47 @@ async function chatFailed(model: string, status: number, said: string) {
   try { const j = JSON.parse(said); if (j && j.error && typeof j.error.message === "string") why = j.error.message; } catch { /* not json */ }
   why = why.replace(/[^\w .,:'-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 110);
   console.error("chat model failed", model, status, said.slice(0, 300));
-  try { await admin.from("ai_usage").upsert({ model: "debug:chat:" + model + ":" + status + ":" + why, day: new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" }), n: 1 }, { onConflict: "model,day" }); } catch { /* only a note */ }
+  try { await admin.rpc("nook_ai_full", { p_model: "debug:chat:" + model + ":" + status + ":" + why, p_limit: 1 }); } catch { /* only a note */ }
 }
 // the answer of the first model that gives one (or its request for a search). Whatever goes wrong with a model (used up, refuses, not found,
 // bad request, broken, no words in its answer) hands over to the next one; null only when every model is out
 async function gemini(key: string, system: unknown, history: unknown, stream: boolean, tools = false): Promise<{ res: Response | null; search: { query: string } | null }> {
+  // the whole chain gives up after 70 seconds, and one model after 25 seconds without its first words, so a slow model never holds the chat for minutes
+  const deadline = Date.now() + 70000;
   for (const { model, limit } of CHAIN) {
+    if (Date.now() > deadline) break;
     if ((resting[model] || 0) > Date.now()) continue;
     const url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + (stream ? ":streamGenerateContent?alt=sse" : ":generateContent");
-    // null when the model is used up for today; a model that does not answer in 15 seconds is given up on (the answer itself may take longer)
-    const call = async (think: boolean, withTools: boolean): Promise<Response | null> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // null when the model is used up for today
+    const call = async (think: string | null, withTools: boolean): Promise<Response | null> => {
       if (!(await useModel(admin, model, limit))) return null;
+      clearTimeout(timer);
       const ctl = new AbortController();
-      const timer = setTimeout(() => ctl.abort(), 15000);
-      try {
-        return await fetch(url, {
-          method: "POST",
-          headers: { "content-type": "application/json", "x-goog-api-key": key },
-          signal: ctl.signal,
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: String(system || "") }] },
-            contents: history,
-            ...(withTools ? { tools: [SEARCH_TOOL] } : {}),
-            generationConfig: { temperature: 1, maxOutputTokens: 140, ...(think ? { thinkingConfig: { thinkingLevel: "minimal" } } : {}) },
-          }),
-        });
-      } finally { clearTimeout(timer); }
+      timer = setTimeout(() => ctl.abort(), 25000);
+      return await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": key },
+        signal: ctl.signal,
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: String(system || "") }] },
+          contents: history,
+          ...(withTools ? { tools: [SEARCH_TOOL] } : {}),
+          // a model that cannot be told to think less needs room for its thinking too
+          generationConfig: { temperature: 1, maxOutputTokens: think === "minimal" ? 140 : 400, ...(think ? { thinkingConfig: { thinkingLevel: think } } : {}) },
+        }),
+      });
     };
     try {
-      // a 400 may mean the model takes no tools or no thinking level: it is asked again without the tool first, then without the thinking level,
-      // and what was learned is kept for the next messages
-      let tl = tools && !noTools.has(model), th = !noThink.has(model);
-      let r = await call(th, tl);
+      // a 400 may mean the model takes no tools or does not take that thinking level: it is asked again without the tool first, then with a
+      // lower thinking level, and what was learned is kept for the next messages
+      let tl = tools && !noTools.has(model);
+      let lv = level[model] === undefined ? "minimal" : level[model];
+      let r = await call(lv, tl);
       if (!r) continue;
-      if (r.status === 400 && tl) { noTools.add(model); tl = false; r = await call(th, false); if (!r) continue; }
-      if (r.status === 400 && th) { noThink.add(model); th = false; r = await call(false, false); if (!r) continue; }
+      if (r.status === 400 && tl) { noTools.add(model); tl = false; r = await call(lv, false); if (!r) continue; }
+      while (r.status === 400 && lv !== null) { lv = lv === "minimal" ? "low" : null; level[model] = lv; r = await call(lv, false); if (!r) break; }
+      if (!r) continue;
       if (!r.ok) {
         const said = await r.text().catch(() => "");
         await chatFailed(model, r.status, said);
@@ -167,10 +174,11 @@ async function gemini(key: string, system: unknown, history: unknown, stream: bo
         continue;
       }
       const peek = await peekForSearch(r, stream);
+      clearTimeout(timer);
       if (peek.search) return { res: null, search: peek.search };
       if (peek.empty) { await chatFailed(model, 200, "the answer had no words"); resting[model] = Date.now() + 15000; continue; }
       return { res: peek.replay, search: null };
-    } catch (e) { await chatFailed(model, 0, String((e as Error).message || e)); resting[model] = Date.now() + 15000; /* too slow or unreachable: the next model answers */ }
+    } catch (e) { await chatFailed(model, 0, String((e as Error).message || e)); resting[model] = Date.now() + 15000; /* too slow or unreachable: the next model answers */ } finally { clearTimeout(timer); }
   }
   return { res: null, search: null };
 }

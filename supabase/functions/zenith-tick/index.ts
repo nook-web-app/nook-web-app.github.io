@@ -190,7 +190,7 @@ async function say(zen: string, text: string, parent: string | null): Promise<st
 
 // ONE TIME TEST: a call from Zenith to the owner, asked for by the owner for this time (to be removed). It rings once, in the ten minutes after that
 // time, when the minute job of the replies finds it; the marker is a counter in the database, so it does not ring twice.
-const TEST_RING_AT = Date.parse("2026-11-13T16:27:00Z");
+const TEST_RING_AT = Date.parse("2026-11-13T16:30:20Z");
 async function testRing(owner: string) {
   const now = Date.now();
   if (now < TEST_RING_AT || now > TEST_RING_AT + 10 * 60000) return;

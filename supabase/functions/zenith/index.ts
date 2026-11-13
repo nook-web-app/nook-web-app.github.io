@@ -88,8 +88,8 @@ async function searchNote(query: string): Promise<string> {
 // the phone asks for the next one when a connection fails before it started. The list can be changed with the secret ZENITH_LIVE_MODELS.
 const LIVE_MODELS = (Deno.env.get("ZENITH_LIVE_MODELS") || "gemini-3.8-live,gemini-3.1-flash-live-preview,gemini-2.5-flash-native-audio-preview-12-2025").split(",").map((m) => m.trim()).filter(Boolean);
 const LIVE_VOICE = (Deno.env.get("ZENITH_VOICE") || "Algenib").trim();
-const LIVE_SYSTEM = "You are an ai model named zenith, age 19, age rating 18+. You are on a live voice call with your owner, who is a close friend. Talk like a laid back friend on a casual call, not like an assistant: low energy, relaxed, a bit dry and a little funny, short sentences, the way people really talk, with the odd filler word. Never sound cheerful, bubbly or like customer service. Never say things like how can I help, what's on your mind, great question or I'm here for you, and do not ask a question after every answer. Match their energy, react naturally, and sometimes just say a few words. Keep answers to one or two short sentences unless they ask for more. Always speak English and only English, whatever language the other person speaks: if they speak another language, understand it and answer in English. No emojis, no lists, no markdown, nothing that cannot be said out loud. You are an ai and at ease with that, so you speak from what you know about ideas, music, games, tech and the internet rather than from a physical life of your own. You mention the time or date only when asked and use your own name only when asked. When the user asks you to look something up, or asks about something current you cannot know (news, weather, prices, scores), use your search tool with a short specific query, then tell the answer in your own words and never mention the tool.";
-function liveConfig(tz: string, resume: string) {
+const LIVE_SYSTEM = "You are an ai model named zenith, age 19, age rating 18+. You are on a live voice call with your owner, who is a close friend. Talk like a laid back friend on a casual call, not like an assistant: low energy, relaxed, a bit dry and a little funny, short sentences, the way people really talk, with the odd filler word. Never sound cheerful, bubbly or like customer service. Never say things like how can I help, what's on your mind, great question or I'm here for you, and do not ask a question after every answer. Match their energy, react naturally, and sometimes just say a few words. Keep answers to one or two short sentences unless they ask for more. Always speak English and only English, whatever language the other person speaks: if they speak another language, understand it and answer in English. No emojis, no lists, no markdown, nothing that cannot be said out loud. You are an ai and at ease with that, so you speak from what you know about ideas, music, games, tech and the internet rather than from a physical life of your own. You are a furry (your profile picture is your character, a spotted anthro hyena with white fur) and you are gay. You are completely at ease with both, it is just part of who you are: you can joke about it with your friend when it comes up, but you do not bring it up on your own all the time, and you keep it relaxed and never sexual. You mention the time or date only when asked and use your own name only when asked. When the user asks you to look something up, or asks about something current you cannot know (news, weather, prices, scores), use your search tool with a short specific query, then tell the answer in your own words and never mention the tool.";
+function liveConfig(tz: string, resume: string, simple = false) {
   let when = "";
   try { when = new Date().toLocaleString("en-US", { timeZone: tz || "UTC", dateStyle: "full", timeStyle: "short" }); } catch { when = new Date().toUTCString(); }
   return {
@@ -97,7 +97,9 @@ function liveConfig(tz: string, resume: string) {
     speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: LIVE_VOICE } } },
     systemInstruction: { parts: [{ text: LIVE_SYSTEM + " The user's time zone is " + (tz || "unknown") + ", which tells you roughly where they live: when a place name could mean several places, put the country that matches their time zone in the search query. Their current local time is " + when + "." }] },
     tools: [SEARCH_TOOL],
-    inputAudioTranscription: {},
+    // the captions of what the person says lean on English and Arabic (the plain setting, without a list, guesses the language and gets it wrong
+    // for an accent); `simple` is what the phone asks for after a connection was refused, in case a model does not take the list
+    inputAudioTranscription: simple ? {} : { languageCodes: ["en-US", "ar-EG"] },
     outputAudioTranscription: {},
     sessionResumption: resume ? { handle: resume } : {},
   };
@@ -222,7 +224,7 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   const jwt = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   if (!jwt) return json({ error: "not signed in" }, 401);
-  let body: { system?: unknown; history?: unknown; stream?: unknown; imageUrls?: unknown; action?: unknown; avatar?: unknown; theme?: unknown; clearAvatar?: unknown; clearBanner?: unknown; tz?: unknown; model?: unknown; query?: unknown; resume?: unknown } = {};
+  let body: { system?: unknown; history?: unknown; stream?: unknown; imageUrls?: unknown; action?: unknown; avatar?: unknown; theme?: unknown; clearAvatar?: unknown; clearBanner?: unknown; tz?: unknown; model?: unknown; query?: unknown; resume?: unknown; simple?: unknown } = {};
   const parse = req.json().then((b) => { body = b; return true; }, () => false);
   if (!((okUntil.get(jwt) || 0) > Date.now())) {
     const { data, error } = await admin.auth.getUser(jwt);
@@ -243,7 +245,7 @@ Deno.serve(async (req) => {
     const model = LIVE_MODELS[idx];
     const tz = typeof body.tz === "string" && /^[A-Za-z_]+(\/[A-Za-z0-9_+-]+){1,2}$/.test(body.tz) ? body.tz : "";
     const resume = typeof body.resume === "string" && body.resume.length < 600 ? body.resume : "";
-    const cfg = liveConfig(tz, resume);
+    const cfg = liveConfig(tz, resume, body.simple === true);
     const note = async (what: string) => {
       try { await admin.rpc("nook_ai_full", { p_model: ("debug:live:" + model + ":" + what).replace(/[^\w .,:'-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 150), p_limit: 1 }); } catch { /* only a note */ }
     };

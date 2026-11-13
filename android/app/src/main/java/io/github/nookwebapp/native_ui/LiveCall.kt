@@ -41,6 +41,8 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
     private var ws: WebSocket? = null
     private var modelIdx = 0
     private var modelName = ""
+    // the plain configuration (no list of languages for the captions), tried when a connection was refused before it started
+    private var simple = false
     @Volatile private var spoke = false
     private var models = 1
     private var resume: String? = null
@@ -87,7 +89,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
 
     private suspend fun connect() {
         if (stopped) return
-        val r = Sb.fn("zenith", JSONObject().put("action", "live").put("model", modelIdx).put("tz", java.util.TimeZone.getDefault().id).put("resume", resume ?: ""), timeoutS = 20)
+        val r = Sb.fn("zenith", JSONObject().put("action", "live").put("model", modelIdx).put("tz", java.util.TimeZone.getDefault().id).put("resume", resume ?: "").put("simple", simple), timeoutS = 20)
         if (stopped) return
         models = r.body.optInt("models", models)
         modelName = r.body.optString("model")
@@ -117,7 +119,10 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
         if (stopped || w !== ws) return
         Log.w("nook", "live closed $code $why")
         if (!open) {
-            if (modelIdx < models - 1) { modelIdx++; app.scope.launch(Dispatchers.IO) { connect() } } else fail("The call could not connect. Try again later")
+            // the same model once more with the plain configuration, then the next model
+            if (!simple) { simple = true; app.scope.launch(Dispatchers.IO) { connect() } }
+            else if (modelIdx < models - 1) { modelIdx++; app.scope.launch(Dispatchers.IO) { connect() } }
+            else fail("The call could not connect. Try again later")
             return
         }
         open = false

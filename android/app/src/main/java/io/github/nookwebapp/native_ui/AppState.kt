@@ -191,6 +191,8 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     var call by mutableStateOf<CallSession?>(null)
     // the card of the call is open over the app
     var callCard by mutableStateOf(false)
+    // the chat the call was started from: its log is saved there when the call ends
+    var callChatId: String? = null
     // asks for the microphone and answers whether it was given; set by the activity
     var askMic: ((Boolean) -> Unit) -> Unit = { it(false) }
     fun openCall() { callCard = false; if (panels.none { it is Panel.Call }) panels.add(Panel.Call()) }
@@ -233,11 +235,26 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     fun endCall(animated: Boolean = true) {
         val c = call ?: return
         c.stop()
+        saveCallLog(c)
         ctx?.let { x -> runCatching { x.stopService(android.content.Intent(x, CallService::class.java)) } }
         callCard = false
         if (!animated || c.ending || panels.none { it is Panel.Call }) { call = null; panels.removeAll { it is Panel.Call }; return }
         c.ending = true
         scope.launch { kotlinx.coroutines.delay(520); if (call === c) { call = null; panels.removeAll { it is Panel.Call } } }
+    }
+    // what was said is kept in the chat as a call message (only calls that really connected and had words in them)
+    private fun saveCallLog(c: CallSession) {
+        if (c.ringing || c.connectedAt == null || c.log.none { it.text.isNotBlank() }) { callChatId = null; return }
+        runCatching {
+            val chat = zenChat()
+            val t = System.currentTimeMillis()
+            chat.msgs.add(LMsg(uid(), callLogText(c.seconds, c.log), t, emptyList()))
+            chat.t = maxOf(chat.t, t)
+            persist()
+            on.zenSyncSoon()
+            zenVersion++
+        }
+        callChatId = null
     }
     // the notification gets its timer when the call is picked up
     fun updateCallNote() {

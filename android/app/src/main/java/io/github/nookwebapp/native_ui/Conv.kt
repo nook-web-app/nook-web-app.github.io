@@ -90,7 +90,7 @@ fun ConvScreen(id: String) {
                 }
             }
             // the call with Zenith: only the owner has it
-            if (zOn()) Box(Modifier.width(44.dp)) { IB("phone") { app.startCall() } }
+            if (zOn()) Box(Modifier.width(44.dp)) { IB("phone") { app.callChatId = chat.id; app.startCall() } }
             Box(Modifier.width(44.dp)) {
                 IB("dots") {
                     app.open(listOf(
@@ -255,7 +255,9 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onLong: () -> Unit
         // the text of a "/media" message is only its link (it is what the web app shows), the card is drawn instead
         val url = remember(m.text, m.mcard) { if (m.mcard != null || isMediaCmd(m.text)) null else firstUrl(m.text) }
         if (url != null) Box(Modifier.padding(top = if (m.imgs.isNotEmpty() || m.rpost != null) 4.dp else 0.dp)) { LinkCard(url, chat = true) }
-        if (m.text.isNotEmpty() && m.mcard == null) {
+        val clog = remember(m.text) { callLogOf(m.text) }
+        if (clog != null) Box(Modifier.padding(top = 4.dp)) { CallLogCard(clog.first, clog.second, whenText(m.t)) }
+        else if (m.text.isNotEmpty() && m.mcard == null) {
             val shape = if (left) RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.bubble, Rad.xs) else RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.xs, Rad.bubble)
             Box(
                 Modifier.padding(top = if (m.imgs.isNotEmpty() || url != null || m.rpost != null) 4.dp else 0.dp).bubbleFx(fx, left).widthIn(max = w * 0.82f)

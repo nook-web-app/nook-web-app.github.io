@@ -141,10 +141,17 @@ class CallSession(private val scope: CoroutineScope? = null, private val onLive:
     }
 
     // words of the call: a person's chunks join into one line until a turn ends
+    // every line of the call, for the log that is saved in the chat afterwards
+    val log = ArrayList<Cap>()
+    private var lastSayAt = 0L
     fun say(who: String, text: String, fresh: Boolean) {
+        val now = System.currentTimeMillis()
         val last = lines.lastOrNull()
-        if (!fresh && last != null && last.who == who) last.text = last.text + text
-        else { lines.add(Cap(++ids, who, text.trimStart())); while (lines.size > 6) lines.removeAt(0) }
+        // the same person keeps one line while they talk, a short pause inside it does not cut it in two
+        val join = last != null && last.who == who && (!fresh || now - lastSayAt < 3500)
+        lastSayAt = now
+        if (join) last!!.text = last.text + text
+        else { val cap = Cap(++ids, who, text.trimStart()); lines.add(cap); log.add(cap); while (lines.size > 6) lines.removeAt(0) }
     }
 
     fun toggleMute() { muted = !muted }

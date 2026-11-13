@@ -454,8 +454,7 @@ fun AppState.importZenTexts(): String? {
     if (!zOn()) return null
     val list = ZenTexts.take(c)
     if (list.isEmpty()) return null
-    var chat = store.chats.filter { it.zc || it.msgs.any { m -> m.ai } }.maxByOrNull { it.t } ?: store.chats.maxByOrNull { it.t }
-    if (chat == null) { chat = LChat(uid(), "Zenith", System.currentTimeMillis()); store.chats.add(chat) }
+    val chat = zenChat()
     for (j in list) {
         val id = j.optString("id").ifEmpty { uid() }
         if (chat.msgs.none { it.id == id }) chat.msgs.add(LMsg(id, j.optString("text"), j.optLong("t", System.currentTimeMillis()), emptyList(), ai = true))
@@ -466,4 +465,12 @@ fun AppState.importZenTexts(): String? {
     on.zenSyncSoon()
     zenVersion++
     return chat.id
+}
+
+// the chat Zenith's own messages and call logs go to: the newest one he is in, else the newest chat, else a new one called Zenith
+fun AppState.zenChat(): LChat {
+    store.chats.firstOrNull { it.id == callChatId }?.let { return it }
+    var chat = store.chats.filter { it.zc || it.msgs.any { m -> m.ai } }.maxByOrNull { it.t } ?: store.chats.maxByOrNull { it.t }
+    if (chat == null) { chat = LChat(uid(), "Zenith", System.currentTimeMillis()); store.chats.add(chat) }
+    return chat
 }

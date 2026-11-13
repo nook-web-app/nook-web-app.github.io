@@ -71,6 +71,8 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
     @Volatile private var nudges = 0
     @Volatile private var useOther = false
     private var quietLoop = false
+    @Volatile private var greetAt = 0L
+    @Volatile private var greetDone = false
 
     fun start() { app.scope.launch(Dispatchers.IO) { connect() } }
 
@@ -162,7 +164,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
         sc.optJSONObject("inputTranscription")?.optString("text")?.takeIf { it.isNotEmpty() }?.let { nudges = 0; lastActivity = System.currentTimeMillis(); caption("You", it) }
         sc.optJSONObject("outputTranscription")?.optString("text")?.takeIf { it.isNotEmpty() }?.let { caption("Zenith", it) }
         if (sc.optBoolean("interrupted")) { flush(); ui { s.phase = CallPhase.Listening }; closed = true }
-        if (sc.optBoolean("turnComplete")) { lastActivity = System.currentTimeMillis(); closed = true; ui { if (s.phase == CallPhase.Speaking || s.phase == CallPhase.Thinking) s.phase = CallPhase.Listening } }
+        if (sc.optBoolean("turnComplete")) { greetDone = true; lastActivity = System.currentTimeMillis(); closed = true; ui { if (s.phase == CallPhase.Speaking || s.phase == CallPhase.Thinking) s.phase = CallPhase.Listening } }
     }
 
     private fun ready() {
@@ -212,6 +214,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
         val text = if (why == null) "The call just connected. You speak first: say a quick casual hey, like a friend picking up the phone, nothing more, then wait."
         else "You called your friend and they just picked up. Say a quick casual hey and say why you called: " + (why.ifBlank { "no real reason, you just felt like talking" }) + ". Keep it short, like a real friend would, then wait."
         if (other) useOther = true
+        else greetAt = System.currentTimeMillis()
         sendText(text)
         ui { if (s.phase == CallPhase.Listening) s.phase = CallPhase.Thinking }
     }
@@ -307,6 +310,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
             // echo and noise removal, so he does not hear himself from the speaker
             if (AcousticEchoCanceler.isAvailable()) runCatching { AcousticEchoCanceler.create(r.audioSessionId)?.enabled = true }
             if (NoiseSuppressor.isAvailable()) runCatching { NoiseSuppressor.create(r.audioSessionId)?.enabled = true }
+            if (android.media.audiofx.AutomaticGainControl.isAvailable()) runCatching { android.media.audiofx.AutomaticGainControl.create(r.audioSessionId)?.enabled = true }
             rec = r
 
             val outRate = 24000
@@ -341,11 +345,29 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
 
             micThread = Thread {
                 val buf = ByteArray(3200)
+                // a quiet voice is lifted before it goes to the model (it hears and writes down a soft voice badly): up to 6 times louder, never for silence
+                var gain = 1.0
                 runCatching { r.startRecording() }
                 while (!stopped) {
                     val n = runCatching { r.read(buf, 0, buf.size) }.getOrDefault(-1)
                     if (n <= 0) { if (n < 0) break else continue }
                     if (s.muted || !open) continue
+                    // the first words of the call are his: the microphone waits until he has finished saying hey, so nothing cuts him off
+                    if (!greetDone && greeted && System.currentTimeMillis() - greetAt < 9000) continue
+                    var sum = 0.0
+                    var k = 0
+                    while (k + 1 < n) { val v = ((buf[k + 1].toInt() shl 8) or (buf[k].toInt() and 0xFF)).toShort().toInt(); sum += v.toDouble() * v; k += 2 }
+                    val rms = Math.sqrt(sum / maxOf(1, n / 2))
+                    gain = gain * 0.8 + (if (rms > 220) (2800.0 / rms).coerceIn(1.0, 6.0) else 1.0) * 0.2
+                    if (gain > 1.05) {
+                        k = 0
+                        while (k + 1 < n) {
+                            val v = ((buf[k + 1].toInt() shl 8) or (buf[k].toInt() and 0xFF)).toShort().toInt()
+                            val o = (v * gain).toInt().coerceIn(-32768, 32767)
+                            buf[k] = (o and 0xFF).toByte(); buf[k + 1] = (o shr 8).toByte()
+                            k += 2
+                        }
+                    }
                     // on the speaker the microphone waits while he talks (and a moment after); on the earpiece or a headset he can be interrupted
                     if (s.speaker && System.currentTimeMillis() < playUntil + 450) continue
                     val msg = "{\"realtimeInput\":{\"audio\":{\"data\":\"" + Base64.encodeToString(buf, 0, n, Base64.NO_WRAP) + "\",\"mimeType\":\"audio/pcm;rate=16000\"}}}"

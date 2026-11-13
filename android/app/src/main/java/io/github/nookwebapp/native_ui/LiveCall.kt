@@ -40,6 +40,8 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
     @Volatile private var open = false
     private var ws: WebSocket? = null
     private var modelIdx = 0
+    private var modelName = ""
+    @Volatile private var spoke = false
     private var models = 1
     private var resume: String? = null
     private var drops = 0
@@ -88,6 +90,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
         val r = Sb.fn("zenith", JSONObject().put("action", "live").put("model", modelIdx).put("tz", java.util.TimeZone.getDefault().id).put("resume", resume ?: ""), timeoutS = 20)
         if (stopped) return
         models = r.body.optInt("models", models)
+        modelName = r.body.optString("model")
         val tok = r.body.optString("token")
         val setup = r.body.optJSONObject("setup")
         if (!r.ok || !r.body.optBoolean("ok") || tok.isEmpty() || setup == null) {
@@ -153,10 +156,24 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
         startAudio()
         if (!greeted) {
             greeted = true
-            ws?.send(JSONObject().put("realtimeInput", JSONObject().put("text", "The call just connected. You speak first: say a quick casual hey, like a friend picking up the phone, nothing more, then wait.")).toString())
-            ui { s.phase = CallPhase.Thinking }
+            hello(false)
+            // when nothing was heard after a few seconds the other way of sending a text turn is tried (the models differ in which one they take)
+            app.scope.launch(Dispatchers.IO) {
+                kotlinx.coroutines.delay(4000)
+                if (!stopped && open && !spoke) hello(true)
+            }
         }
         ui { s.phase = CallPhase.Listening; s.live() }
+    }
+
+    // he speaks first. The newer models take a text turn as realtime input, the 2.5 ones as a turn of the conversation; `other` is the second try
+    private fun hello(other: Boolean) {
+        val text = "The call just connected. You speak first: say a quick casual hey, like a friend picking up the phone, nothing more, then wait."
+        val asTurn = modelName.contains("2.5") != other
+        val msg = if (asTurn) JSONObject().put("clientContent", JSONObject().put("turns", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", text))))).put("turnComplete", true))
+        else JSONObject().put("realtimeInput", JSONObject().put("text", text))
+        ws?.send(msg.toString())
+        ui { if (s.phase == CallPhase.Listening) s.phase = CallPhase.Thinking }
     }
 
     // the words of the call, in the captions: chunks of the same person join into one line until a turn ends
@@ -171,6 +188,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
     private fun speak(b64: String) {
         if (b64.isEmpty()) return
         val pcm = runCatching { Base64.decode(b64, Base64.DEFAULT) }.getOrNull() ?: return
+        spoke = true
         out.offer(pcm)
         val now = System.currentTimeMillis()
         playUntil = maxOf(playUntil, now) + pcm.size / 2 * 1000L / 24000

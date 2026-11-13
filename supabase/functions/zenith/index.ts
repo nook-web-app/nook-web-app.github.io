@@ -107,25 +107,37 @@ function liveSetup(model: string, cfg: ReturnType<typeof liveConfig>) {
   const { responseModalities, speechConfig, ...rest } = cfg;
   return { model: "models/" + model, generationConfig: { responseModalities, speechConfig }, ...rest };
 }
-async function liveToken(key: string, model: string, cfg: ReturnType<typeof liveConfig>): Promise<{ token: string } | { status: number; said: string }> {
-  const mint = (config: unknown) => fetch("https://generativelanguage.googleapis.com/v1beta/auth_tokens", {
-    method: "POST",
-    headers: { "x-goog-api-key": key, "content-type": "application/json" },
-    signal: AbortSignal.timeout(15000),
-    body: JSON.stringify({
-      uses: 1,
-      expireTime: new Date(Date.now() + 30 * 60000).toISOString(),
-      newSessionExpireTime: new Date(Date.now() + 90000).toISOString(),
-      liveConnectConstraints: { model: "models/" + model, ...(config ? { config } : {}) },
-    }),
-  });
-  let r = await mint(cfg);
-  // when the service does not accept the configuration inside the token, one that only locks the model is asked for
-  if (r.status === 400) { await r.body?.cancel(); r = await mint(null); }
-  const said = await r.text().catch(() => "");
-  if (!r.ok) return { status: r.status, said };
-  try { const j = JSON.parse(said); if (typeof j.name === "string" && j.name) return { token: j.name }; } catch { /* below */ }
-  return { status: 200, said: "no token in the answer: " + said.slice(0, 80) };
+// the token is asked for in the shapes the service may take (the docs say liveConnectConstraints, the real field is bidiGenerateContentSetup, with
+// or without a setup around the configuration); the last one is a token with no configuration at all, which the phone then fills in itself.
+// A note is written for each answer that was not a token, and for the shape that worked, so a change on Google's side shows in the database
+async function liveToken(key: string, model: string, cfg: ReturnType<typeof liveConfig>, note: (what: string) => Promise<void>): Promise<{ token: string; shape: string } | { status: number; said: string }> {
+  const setup = liveSetup(model, cfg);
+  const tries: [string, Record<string, unknown>][] = [
+    ["nested", { bidiGenerateContentSetup: { setup } }],
+    ["flat", { bidiGenerateContentSetup: setup }],
+    ["plain", {}],
+  ];
+  let last = { status: 0, said: "no try" };
+  for (const [shape, extra] of tries) {
+    const r = await fetch("https://generativelanguage.googleapis.com/v1beta/auth_tokens", {
+      method: "POST",
+      headers: { "x-goog-api-key": key, "content-type": "application/json" },
+      signal: AbortSignal.timeout(15000),
+      body: JSON.stringify({ uses: 1, expireTime: new Date(Date.now() + 30 * 60000).toISOString(), newSessionExpireTime: new Date(Date.now() + 90000).toISOString(), ...extra }),
+    }).catch(() => null);
+    if (!r) { last = { status: 0, said: "no answer" }; continue; }
+    const said = await r.text().catch(() => "");
+    if (r.ok) {
+      try { const j = JSON.parse(said); if (typeof j.name === "string" && j.name) { await note("ok:" + shape); return { token: j.name, shape }; } } catch { /* below */ }
+      last = { status: 200, said: "no token in the answer: " + said.slice(0, 80) };
+    } else last = { status: r.status, said };
+    let why = last.said;
+    try { const j = JSON.parse(last.said); if (j && j.error && typeof j.error.message === "string") why = j.error.message; } catch { /* not json */ }
+    await note(shape + ":" + last.status + ":" + why);
+    // a key that is refused or out of quota is not helped by another shape
+    if (r.status === 401 || r.status === 403 || r.status === 429) break;
+  }
+  return last;
 }
 
 // The messages of the chat go down this list, best model first. Each one has a limit of requests a day (what the free tier gives it); the
@@ -232,9 +244,11 @@ Deno.serve(async (req) => {
     const tz = typeof body.tz === "string" && /^[A-Za-z_]+(\/[A-Za-z0-9_+-]+){1,2}$/.test(body.tz) ? body.tz : "";
     const resume = typeof body.resume === "string" && body.resume.length < 600 ? body.resume : "";
     const cfg = liveConfig(tz, resume);
-    const got = await liveToken(key, model, cfg);
+    const note = async (what: string) => {
+      try { await admin.rpc("nook_ai_full", { p_model: ("debug:live:" + model + ":" + what).replace(/[^\w .,:'-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 150), p_limit: 1 }); } catch { /* only a note */ }
+    };
+    const got = await liveToken(key, model, cfg, note);
     if (!("token" in got)) {
-      try { await admin.rpc("nook_ai_full", { p_model: "debug:live:" + model + ":" + got.status + ":" + got.said.replace(/[^\w .,:'-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 90), p_limit: 1 }); } catch { /* only a note */ }
       // the reason goes to the phone too, so the message it shows says what google answered
       let why = got.said;
       try { const j = JSON.parse(got.said); if (j && j.error && typeof j.error.message === "string") why = j.error.message; } catch { /* not json */ }

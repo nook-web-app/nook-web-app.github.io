@@ -56,6 +56,8 @@ sealed interface Panel {
     data object NewAccount : Panel
     data class LinkedLogin(val x: SavedAcct) : Panel
     data object NewPassword : Panel
+    // the call with Zenith (owner only); still is only used by the screenshot tests, a phase name that freezes the screen
+    data class Call(val still: String? = null) : Panel
     data class Recover(val prefill: String) : Panel
     data class RecoverCode(val prefill: String) : Panel
     data object ChangePassword : Panel

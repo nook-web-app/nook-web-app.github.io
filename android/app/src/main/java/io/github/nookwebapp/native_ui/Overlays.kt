@@ -194,6 +194,7 @@ fun PanelHost(app: AppState) {
                 Box(Modifier.fillMaxSize().background(c.bg).clickable(remember { MutableInteractionSource() }, null) {}.statusBarsPadding().navigationBarsPadding().imePadding()) {
                     when (p) {
                         is Panel.Compose -> ComposePanel(app, p)
+                        is Panel.Call -> CallPanel(app, p)
                         Panel.EditProfile -> EditProfilePanel(app, p)
                         is Panel.ListForm -> ListFormPanel(app, p)
                         is Panel.RenameChat -> RenamePanel(app, p)

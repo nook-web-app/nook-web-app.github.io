@@ -18,10 +18,10 @@ async function geminiKey(): Promise<string> {
   keyCache = { v: typeof data === "string" ? data : "", at: Date.now() };
   return keyCache.v;
 }
-// His posts, replies and likes only use gemini-3.1-flash-lite (the free tier gives it 500 requests a day, 480 are used here). The count is
+// His posts, replies and likes only use gemini-3.1-flash-lite (the free tier gives it 500 requests a day). The count is
 // kept in the database and starts again at midnight Pacific time, when Google's own count does. Other models can be put in the list with
 // the secret ZENITH_POST_MODELS ("model:limit,model:limit"); a model that is used up or fails hands over to the next one.
-const MODELS = parseChain(Deno.env.get("ZENITH_POST_MODELS") || "gemini-3.1-flash-lite:480");
+const MODELS = parseChain(Deno.env.get("ZENITH_POST_MODELS") || "gemini-3.1-flash-lite:500");
 const resting: Record<string, number> = {};
 const noThink = new Set<string>();
 async function generate(_password: string, system: string, history: unknown): Promise<Response> {

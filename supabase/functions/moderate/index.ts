@@ -1,7 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
-import { useModel } from "../_shared/aiquota.ts";
 // Aegis is the name of the moderation AI (it means protection); Zenith is the owner-only AI, they use separate models
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
@@ -135,27 +134,22 @@ const MODELS = (Deno.env.get("MOD_MODELS") || "gemma-4-26b-a4b-it,gemma-4-31b-it
 // case can be named with the secret MOD_FALLBACK, there is none by default.
 const FALLBACK = (Deno.env.get("MOD_FALLBACK") || "").trim();
 const ALL_MODELS = FALLBACK ? [...MODELS, FALLBACK] : MODELS;
-// each model's requests a day are counted in the database too (the free tier gives Gemma 4 14,400; a little less is used)
-const limitOf = (m: string) => (m.startsWith("gemma") ? 14000 : 480);
-const FULL = new Error("model used up for today");
-// the limit of AI calls in every 12 hours (see nook_ai_take); a check that finds it used up stays pending and waits for the next 12 hours.
-// A real day needs far fewer: a post costs one call for its words and one for each picture
-const CAP_12H = Number(Deno.env.get("MOD_CAP_12H")) || 600;
-const CAPPED = new Error("12 hour limit of AI checks used up");
-let granted = 0;
+// Each model may be asked for 2,500 checks in every 12 hours (5,000 a day, so 10,000 a day for the two Gemma models together; the free tier
+// gives each of them 14,400 a day). The count is kept in the database (nook_ai_take) and the 12 hours are the two halves of a Pacific time
+// day, so the second half ends exactly when Google's own daily count starts again. A model that is used up rests and the next one takes
+// the check; when both are used up the check stays pending (the AI counts as down, so nothing is approved or taken down for it).
+// The number can be changed with the secret MOD_CAP_12H.
+const CAP_12H = Number(Deno.env.get("MOD_CAP_12H")) || 2500;
+const FULL = new Error("model used up for these 12 hours");
+const granted: Record<string, number> = {};
 async function takeCall(model: string): Promise<void> {
-  if (granted > 0) granted--;
-  else {
-    const { data, error } = await admin.rpc("nook_ai_take", { p_name: "moderate", p_max: CAP_12H, p_want: 5 });
-    // the function is not installed yet (or the database did not answer): checks go on without the limit instead of stopping
-    if (!error) {
-      const n = typeof data === "number" ? data : 0;
-      if (n <= 0) throw CAPPED;
-      granted += n - 1;
-    }
-  }
-  // the model's own count for today (it starts again at midnight Pacific time); a model that is used up rests and the next one takes the check
-  if (!(await useModel(admin, model, limitOf(model)))) { busyUntil[model] = Date.now() + 600000; throw FULL; }
+  if ((granted[model] || 0) > 0) { granted[model]--; return; }
+  const { data, error } = await admin.rpc("nook_ai_take", { p_name: "mod:" + model, p_max: CAP_12H, p_want: 5 });
+  // the function is not installed yet (or the database did not answer): checks go on without the limit instead of stopping
+  if (error) return;
+  const n = typeof data === "number" ? data : 0;
+  if (n <= 0) { busyUntil[model] = Date.now() + 600000; throw FULL; }
+  granted[model] = (granted[model] || 0) + n - 1;
 }
 const CALL_MS = 30000;
 // checks take turns between the models; one that answered "busy" rests for a short while, and when every model is resting
@@ -208,10 +202,8 @@ async function ask(parts: unknown[], system = SYSTEM): Promise<Verdict> {
           r = await call(!gemma);
           if (r.status === 400 && !gemma) r = await call(false);
         } catch (e) {
-          // the limit of this 12 hours is used up: the check stays pending (the AI counts as down, so nothing is approved or taken down for it)
-          if (e === CAPPED) { C().lastNote = "the limit of AI checks for these 12 hours is used up"; C().aiDown = true; return null; }
-          // this model is used up for today: the next one takes the check
-          if (e === FULL) { C().lastNote = model + " is used up for today"; r = null; continue; }
+          // this model is used up for these 12 hours: the next one takes the check
+          if (e === FULL) { C().lastNote = model + " is used up for these 12 hours"; r = null; continue; }
           // too slow or unreachable: the model rests and the next one takes the check
           C().lastNote = "fetch failed " + String((e as Error).message || e);
           busyUntil[model] = Date.now() + REST_MS;

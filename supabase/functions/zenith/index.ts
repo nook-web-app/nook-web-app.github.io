@@ -132,7 +132,7 @@ async function liveToken(key: string, model: string, cfg: ReturnType<typeof live
       method: "POST",
       headers: { "x-goog-api-key": key, "content-type": "application/json" },
       signal: AbortSignal.timeout(15000),
-      body: JSON.stringify({ uses: 1, expireTime: new Date(Date.now() + 30 * 60000).toISOString(), newSessionExpireTime: new Date(Date.now() + 90000).toISOString(), ...extra }),
+      body: JSON.stringify({ uses: 1, expireTime: new Date(Date.now() + 30 * 60000).toISOString(), newSessionExpireTime: new Date(Date.now() + 600000).toISOString(), ...extra }),
     }).catch(() => null);
     if (!r) { last = { status: 0, said: "no answer" }; continue; }
     const said = await r.text().catch(() => "");

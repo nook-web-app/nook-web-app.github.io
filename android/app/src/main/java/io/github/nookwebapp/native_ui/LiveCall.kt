@@ -31,11 +31,13 @@ import java.util.concurrent.TimeUnit
 // reaches the phone) and the configuration (his voice, his instructions, the search tool); the microphone goes out as 16 kHz sound, his voice
 // comes back as 24 kHz sound. The models are tried in order, a drop in the middle (the 15 minute limit of a connection) is picked up again with
 // the saved handle of the conversation, and a search he asks for is done by the server (Tavily) and handed back.
-class LiveEngine(private val app: AppState, private val s: CallSession) {
+class LiveEngine(private val app: AppState, private val s: CallSession, hold: Boolean = false) {
     private val main = Handler(Looper.getMainLooper())
     private fun ui(f: () -> Unit) { main.post(f) }
 
     @Volatile private var stopped = false
+    // a call that is ringing: the connection is made and he has said hello (the sound waits in the queue), the microphone and the speaker start at Answer
+    @Volatile private var holding = hold
     // true from the moment the model said it is ready until the connection ends
     @Volatile private var open = false
     private var ws: WebSocket? = null
@@ -89,7 +91,9 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
 
     private suspend fun connect() {
         if (stopped) return
-        val r = Sb.fn("zenith", JSONObject().put("action", "live").put("model", modelIdx).put("tz", java.util.TimeZone.getDefault().id).put("resume", resume ?: "").put("simple", simple), timeoutS = 20)
+        // a token and configuration that were fetched ahead of time (when the chat was opened, or when the phone started to ring) save the first step
+        val warm = if (resume == null && modelIdx == 0 && !simple) CallWarm.take() else null
+        val r = if (warm != null) Fn(true, 200, warm) else Sb.fn("zenith", JSONObject().put("action", "live").put("model", modelIdx).put("tz", java.util.TimeZone.getDefault().id).put("resume", resume ?: "").put("simple", simple), timeoutS = 20)
         if (stopped) return
         models = r.body.optInt("models", models)
         modelName = r.body.optString("model")
@@ -158,7 +162,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
 
     private fun ready() {
         open = true
-        startAudio()
+        if (!holding) startAudio()
         if (!greeted) {
             greeted = true
             hello(false)
@@ -168,7 +172,19 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
                 if (!stopped && open && !spoke) hello(true)
             }
         }
-        ui { s.phase = CallPhase.Listening; s.live() }
+        if (!holding) ui { s.phase = CallPhase.Listening; s.live() }
+    }
+
+    // Answer: the call that was prepared while it rang goes live, and what he already said is played at once
+    fun answer() {
+        if (!holding) return
+        holding = false
+        // the sound that is waiting in the queue takes time to play: the microphone waits for it on the speaker
+        playUntil = System.currentTimeMillis() + out.sumOf { it.size } / 2 * 1000L / 24000
+        if (open) {
+            startAudio()
+            ui { s.phase = if (spoke) CallPhase.Speaking else CallPhase.Listening; s.live() }
+        }
     }
 
     // he speaks first. The newer models take a text turn as realtime input, the 2.5 ones as a turn of the conversation; `other` is the second try
@@ -199,7 +215,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
         out.offer(pcm)
         val now = System.currentTimeMillis()
         playUntil = maxOf(playUntil, now) + pcm.size / 2 * 1000L / 24000
-        ui { if (s.phase != CallPhase.Speaking) s.phase = CallPhase.Speaking }
+        if (!holding) ui { if (s.phase != CallPhase.Speaking) s.phase = CallPhase.Speaking }
     }
 
     private fun flush() {

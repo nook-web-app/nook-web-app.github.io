@@ -58,4 +58,11 @@ class CallShots {
             }
         }
     }
+
+    @Test fun ring() {
+        val app = fixtureApp(true, Route.Home) { store.zen.put("pfp", pfp()) }
+        paparazzi.snapshot("67-call-ring") {
+            CompositionLocalProvider(LocalApp provides app, LocalNook provides DarkColors) { RingScreen(true, {}, {}, still = true) }
+        }
+    }
 }

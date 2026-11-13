@@ -38,6 +38,8 @@
         <receiver android:name=".UpdateReceiver" android:exported="false" />
         <service android:name=".KeepService" android:exported="false" android:foregroundServiceType="dataSync" />
         <service android:name=".CallService" android:exported="false" android:foregroundServiceType="microphone" />
+        <!-- the ring screen of a call from Zenith, over the lock screen -->
+        <activity android:name=".IncomingCallActivity" android:exported="false" android:launchMode="singleTask" android:excludeFromRecents="true" android:taskAffinity="" android:showWhenLocked="true" android:turnScreenOn="true" android:configChanges="orientation|screenSize|keyboardHidden" />
         <!-- the card of a call, over whatever is on the screen -->
         <activity android:name=".CallCardActivity" android:exported="false" android:theme="@style/Theme.Nook.Card" android:launchMode="singleTask" android:excludeFromRecents="true" android:taskAffinity="" android:configChanges="orientation|screenSize|keyboardHidden" />
         <receiver android:name=".CallReceiver" android:exported="false" />

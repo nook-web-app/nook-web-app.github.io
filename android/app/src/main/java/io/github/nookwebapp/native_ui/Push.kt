@@ -64,7 +64,20 @@ class PushService : FirebaseMessagingService() {
     override fun onMessageReceived(m: RemoteMessage) {
         val d = m.data
         // Zenith is calling: it rings, also when the app is open
-        if (d["type"] == "call") { IncomingCall.show(applicationContext, d["reason"].orEmpty()); return }
+        if (d["type"] == "call") {
+            val ctx = applicationContext
+            val reason = d["reason"].orEmpty()
+            IncomingCall.show(ctx, reason)
+            val app = AppState.current
+            if (app != null) {
+                // the call is made ready right away; the ring screen opens by itself when the app is in front
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    app.prewarmCall(reason)
+                    if (app.foreground) runCatching { ctx.startActivity(android.content.Intent(ctx, IncomingCallActivity::class.java).putExtra("reason", reason).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                }
+            } else kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch { runCatching { Push.loadSession(ctx); CallWarm.prefetch() } }
+            return
+        }
         val id = d["id"].orEmpty()
         if (id.isNotEmpty() && id in Notify.seen(applicationContext)) return
         if (AppState.current?.foreground == true) return

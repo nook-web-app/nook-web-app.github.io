@@ -116,6 +116,8 @@ class CallSession(private val scope: CoroutineScope? = null, private val onLive:
     var muted by mutableStateOf(false)
     var speaker by mutableStateOf(true)
     var captions by mutableStateOf(true)
+    // the phone is ringing: the call is already being made ready, nothing is played or recorded until Answer
+    var ringing by mutableStateOf(false)
     // End was pressed: the screen plays its goodbye before it goes
     var ending by mutableStateOf(false)
     val lines = mutableStateListOf<Cap>()
@@ -125,7 +127,10 @@ class CallSession(private val scope: CoroutineScope? = null, private val onLive:
     private var timer: Job? = null
     private var ids = 0
 
-    fun startLive(app: AppState) { engine = LiveEngine(app, this).also { it.start() } }
+    fun startLive(app: AppState, hold: Boolean = false) { engine = LiveEngine(app, this, hold).also { it.start() } }
+
+    // Answer
+    fun answer() { ringing = false; engine?.answer() }
 
     // the model is ready: the timer starts
     fun live() {
@@ -214,7 +219,7 @@ class CallService : Service() {
 // the End button of the notification
 class CallReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, i: Intent) {
-        if (i.action == "decline") { IncomingCall.clear(ctx); return }
+        if (i.action == "decline") { IncomingCall.clear(ctx); AppState.current?.declineCall(); return }
         val app = AppState.current
         if (app != null) app.endCall() else runCatching { ctx.stopService(Intent(ctx, CallService::class.java)) }
     }
@@ -441,7 +446,7 @@ fun CallHost(app: AppState) {
     val s = app.call ?: return
     val inPanel = app.panels.any { it is Panel.Call }
     val c = DarkColors
-    if (!s.ending && !inPanel) {
+    if (!s.ending && !s.ringing && !inPanel) {
         val density = LocalDensity.current
         val bar = WindowInsets.statusBars.getTop(density)
         val h = 24.dp

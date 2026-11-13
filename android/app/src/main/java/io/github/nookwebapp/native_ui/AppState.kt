@@ -194,15 +194,33 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     // asks for the microphone and answers whether it was given; set by the activity
     var askMic: ((Boolean) -> Unit) -> Unit = { it(false) }
     fun openCall() { callCard = false; if (panels.none { it is Panel.Call }) panels.add(Panel.Call()) }
+    // Zenith is calling: the call is made ready while the phone rings, so Answer is heard at once
+    fun prewarmCall(reason: String) {
+        if (call != null) return
+        val s = CallSession(scope, { updateCallNote() }, reason)
+        s.ringing = true
+        call = s
+        s.startLive(this, hold = true)
+        // the ringing lasts 30 seconds, a moment longer is waited for
+        scope.launch { kotlinx.coroutines.delay(35_000); if (call === s && s.ringing) declineCall() }
+    }
+    fun declineCall() {
+        val c = call ?: return
+        if (!c.ringing) return
+        c.stop(); call = null
+        ctx?.let { IncomingCall.clear(it) }
+    }
     // reason: set when Zenith called (he says why he called); null when the owner called him
     fun startCall(reason: String? = null) {
-        if (call != null) { openCall(); return }
+        val ringing = call?.takeIf { it.ringing }
+        if (call != null && ringing == null) { openCall(); return }
         val c = ctx ?: return
         if (androidx.core.content.ContextCompat.checkSelfPermission(c, android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             askMic { ok -> if (ok) startCall(reason) else say("Allow the microphone to call Zenith") }
             return
         }
-        call = CallSession(scope, { updateCallNote() }, reason).also { it.startLive(this) }
+        if (ringing != null) ringing.answer()
+        else call = CallSession(scope, { updateCallNote() }, reason).also { it.startLive(this) }
         runCatching { androidx.core.content.ContextCompat.startForegroundService(c, android.content.Intent(c, CallService::class.java)) }
         // his picture goes into the notification as soon as it is read
         scope.launch(kotlinx.coroutines.Dispatchers.IO) { CallNote.loadAvatar(this@AppState); updateCallNote() }

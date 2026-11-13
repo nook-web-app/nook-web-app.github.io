@@ -45,6 +45,7 @@ val ICONS: Map<String, Ic> = mapOf(
     "mic" to Ic(listOf(El("M12.0 2.0h0.0a3.0 3.0 0 0 1 3.0 3.0v6.0a3.0 3.0 0 0 1 -3.0 3.0h-0.0a3.0 3.0 0 0 1 -3.0 -3.0v-6.0a3.0 3.0 0 0 1 3.0 -3.0z", 2.0f, false, true), El("M5 11v1a7 7 0 0 0 14 0v-1M12 19v3M8 22h8", 2.0f, false, true)), listOf(), null),
     "micoff" to Ic(listOf(El("M3 3l18 18", 2.0f, false, true), El("M9 9v3a3 3 0 0 0 5.1 2.1M15 9.3V5a3 3 0 0 0-5.9-.6", 2.0f, false, true), El("M17 17A7 7 0 0 1 5 12v-1M19 11v1a7 7 0 0 1-.1 1.2M12 19v3M8 22h8", 2.0f, false, true)), listOf(), null),
     "speaker" to Ic(listOf(El("M11 5L6 9H3v6h3l5 4z", 2.0f, false, true), El("M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13", 2.0f, false, true)), listOf(), null),
+    "speakeroff" to Ic(listOf(El("M11 5L6 9H3v6h3l5 4z", 2.0f, false, true)), listOf(), null),
     "captions" to Ic(listOf(El("M6.0 5.0h12.0a3.0 3.0 0 0 1 3.0 3.0v8.0a3.0 3.0 0 0 1 -3.0 3.0h-12.0a3.0 3.0 0 0 1 -3.0 -3.0v-8.0a3.0 3.0 0 0 1 3.0 -3.0z", 2.0f, false, true), El("M7 11h3M13 11h4M7 15h5M15 15h2", 2.0f, false, true)), listOf(), null),
     "search" to Ic(listOf(El("M4.5 11.0a6.5 6.5 0 1 0 13.0 0a6.5 6.5 0 1 0 -13.0 0z", 2.0f, false, true), El("M16 16l5 5", 2.0f, false, true)), listOf(), null),
 )

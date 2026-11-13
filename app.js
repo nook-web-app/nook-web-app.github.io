@@ -159,6 +159,7 @@ const P = {
   mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11v1a7 7 0 0 0 14 0v-1M12 19v3M8 22h8"/>',
   micoff: '<path d="M3 3l18 18"/><path d="M9 9v3a3 3 0 0 0 5.1 2.1M15 9.3V5a3 3 0 0 0-5.9-.6"/><path d="M17 17A7 7 0 0 1 5 12v-1M19 11v1a7 7 0 0 1-.1 1.2M12 19v3M8 22h8"/>',
   speaker: '<path d="M11 5L6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>',
+  speakeroff: '<path d="M11 5L6 9H3v6h3l5 4z"/>',
   captions: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M7 11h3M13 11h4M7 15h5M15 15h2"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5"/>'
 };

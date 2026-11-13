@@ -73,6 +73,7 @@ fun NookApp(app: AppState) {
                 // a tap on the time and the icons at the very top scrolls the page up
                 val topScope = rememberCoroutineScope()
                 Box(Modifier.fillMaxWidth().windowInsetsTopHeight(WindowInsets.statusBars).tap { topScope.launch { app.listStateFor(app.stack.size).toTop() } })
+                CallHost(app)
                 PanelHost(app)
                 DrawerHost(app)
                 ZCardHost(app)

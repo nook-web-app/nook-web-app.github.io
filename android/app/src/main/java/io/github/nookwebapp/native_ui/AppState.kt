@@ -189,18 +189,33 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     fun closePanel(p: Panel) { panelBackHooks.remove(p); panels.remove(p) }
     // the call with Zenith (owner only): it lives here, so closing the call screen does not end it
     var call by mutableStateOf<CallSession?>(null)
-    fun openCall() { if (panels.none { it is Panel.Call }) panels.add(Panel.Call()) }
+    // the card of the call is open over the app
+    var callCard by mutableStateOf(false)
+    // asks for the microphone and answers whether it was given; set by the activity
+    var askMic: ((Boolean) -> Unit) -> Unit = { it(false) }
+    fun openCall() { callCard = false; if (panels.none { it is Panel.Call }) panels.add(Panel.Call()) }
     fun startCall() {
-        if (call == null) {
-            call = CallSession(scope) { updateCallNote() }.also { it.start() }
-            ctx?.let { c -> runCatching { androidx.core.content.ContextCompat.startForegroundService(c, android.content.Intent(c, CallService::class.java)) } }
+        if (call != null) { openCall(); return }
+        val c = ctx ?: return
+        if (androidx.core.content.ContextCompat.checkSelfPermission(c, android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            askMic { ok -> if (ok) startCall() else say("Allow the microphone to call Zenith") }
+            return
         }
+        call = CallSession(scope) { updateCallNote() }.also { it.startLive(this) }
+        runCatching { androidx.core.content.ContextCompat.startForegroundService(c, android.content.Intent(c, CallService::class.java)) }
+        // his picture goes into the notification as soon as it is read
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) { CallNote.loadAvatar(this@AppState); updateCallNote() }
         openCall()
     }
-    fun endCall() {
-        call?.stop(); call = null
-        panels.removeAll { it is Panel.Call }
-        ctx?.let { c -> runCatching { c.stopService(android.content.Intent(c, CallService::class.java)) } }
+    // End: the sound stops at once, the screen plays its goodbye, then the call is gone
+    fun endCall(animated: Boolean = true) {
+        val c = call ?: return
+        c.stop()
+        ctx?.let { x -> runCatching { x.stopService(android.content.Intent(x, CallService::class.java)) } }
+        callCard = false
+        if (!animated || c.ending || panels.none { it is Panel.Call }) { call = null; panels.removeAll { it is Panel.Call }; return }
+        c.ending = true
+        scope.launch { kotlinx.coroutines.delay(900); if (call === c) { call = null; panels.removeAll { it is Panel.Call } } }
     }
     // the notification gets its timer when the call is picked up
     fun updateCallNote() {

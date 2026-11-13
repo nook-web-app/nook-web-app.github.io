@@ -31,6 +31,10 @@ class MainActivity : ComponentActivity() {
         app.say(if (ok) "Phone notifications are on" else "Notifications are blocked. Allow them in your phone settings.")
     }
 
+    // the microphone, asked when the first call starts
+    private var micAnswer: ((Boolean) -> Unit)? = null
+    private val micPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> micAnswer?.invoke(ok); micAnswer = null }
+
     // Google's fingerprint window answers here
     private var resultWait: kotlinx.coroutines.CompletableDeferred<androidx.activity.result.ActivityResult>? = null
     private val forResult = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r -> resultWait?.complete(r) }
@@ -76,6 +80,7 @@ class MainActivity : ComponentActivity() {
         app.backup = { backup() }
         app.checkUpdate = { manual -> checkUpdate(manual) }
         app.askNotifs = { askNotifs() }
+        app.askMic = { cb -> micAnswer = cb; micPerm.launch(Manifest.permission.RECORD_AUDIO) }
         app.shareFile = { f, type -> send(f, type) }
         app.onSignedIn = {
             if (Notify.on(this)) { Notify.schedule(this); app.scope.launch { runCatching { Push.register(this@MainActivity) } } }
@@ -185,7 +190,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         boot.cancel()
-        if (this::app.isInitialized) { app.scope.cancel(); notesStop(); if (AppState.current === app) AppState.current = null }
+        if (this::app.isInitialized) { app.endCall(false); app.scope.cancel(); notesStop(); if (AppState.current === app) AppState.current = null }
     }
 
     private fun askNotifs() {

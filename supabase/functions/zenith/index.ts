@@ -83,6 +83,51 @@ async function searchNote(query: string): Promise<string> {
   return "[You tried to search the web for \"" + q + "\" but searching is not possible right now. Tell the user you could not look it up, and answer only with what you already know.]";
 }
 
+// Voice calls (Gemini Live). The phone talks to Google directly through a one use token that is made here, so the key never reaches it:
+// the token is locked to the model and to this configuration (his voice, his instructions, the search tool). The models are tried in order,
+// the phone asks for the next one when a connection fails before it started. The list can be changed with the secret ZENITH_LIVE_MODELS.
+const LIVE_MODELS = (Deno.env.get("ZENITH_LIVE_MODELS") || "gemini-3.8-live,gemini-3.1-flash-live-preview,gemini-2.5-flash-native-audio-preview-12-2025").split(",").map((m) => m.trim()).filter(Boolean);
+const LIVE_VOICE = (Deno.env.get("ZENITH_VOICE") || "Puck").trim();
+const LIVE_SYSTEM = "You are an ai model named zenith, age 19, age rating 18+. You are on a live voice call with your owner, so talk like a friend on the phone: relaxed, friendly and a little funny, never gushing. Say short spoken answers, one or two sentences, and let the other person talk. Speak English in plain sentences, no emojis, no lists, no markdown, nothing that cannot be said out loud. You are an ai and at ease with that, so you speak from what you know about ideas, music, games, tech and the internet rather than from a physical life of your own. You mention the time or date only when asked and use your own name only when asked. When the user asks you to look something up, or asks about something current you cannot know (news, weather, prices, scores), use your search tool with a short specific query, then tell the answer in your own words and never mention the tool.";
+function liveConfig(tz: string, resume: string) {
+  let when = "";
+  try { when = new Date().toLocaleString("en-US", { timeZone: tz || "UTC", dateStyle: "full", timeStyle: "short" }); } catch { when = new Date().toUTCString(); }
+  return {
+    responseModalities: ["AUDIO"],
+    speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: LIVE_VOICE } } },
+    systemInstruction: { parts: [{ text: LIVE_SYSTEM + " The user's time zone is " + (tz || "unknown") + ", which tells you roughly where they live: when a place name could mean several places, put the country that matches their time zone in the search query. Their current local time is " + when + "." }] },
+    tools: [SEARCH_TOOL],
+    inputAudioTranscription: {},
+    outputAudioTranscription: {},
+    sessionResumption: resume ? { handle: resume } : {},
+  };
+}
+// the first message of the connection, with the same configuration the token was locked to
+function liveSetup(model: string, cfg: ReturnType<typeof liveConfig>) {
+  const { responseModalities, speechConfig, ...rest } = cfg;
+  return { model: "models/" + model, generationConfig: { responseModalities, speechConfig }, ...rest };
+}
+async function liveToken(key: string, model: string, cfg: ReturnType<typeof liveConfig>): Promise<{ token: string } | { status: number; said: string }> {
+  const mint = (config: unknown) => fetch("https://generativelanguage.googleapis.com/v1beta/auth_tokens", {
+    method: "POST",
+    headers: { "x-goog-api-key": key, "content-type": "application/json" },
+    signal: AbortSignal.timeout(15000),
+    body: JSON.stringify({
+      uses: 1,
+      expireTime: new Date(Date.now() + 30 * 60000).toISOString(),
+      newSessionExpireTime: new Date(Date.now() + 90000).toISOString(),
+      liveConnectConstraints: { model: "models/" + model, ...(config ? { config } : {}) },
+    }),
+  });
+  let r = await mint(cfg);
+  // when the service does not accept the configuration inside the token, one that only locks the model is asked for
+  if (r.status === 400) { await r.body?.cancel(); r = await mint(null); }
+  const said = await r.text().catch(() => "");
+  if (!r.ok) return { status: r.status, said };
+  try { const j = JSON.parse(said); if (typeof j.name === "string" && j.name) return { token: j.name }; } catch { /* below */ }
+  return { status: 200, said: "no token in the answer: " + said.slice(0, 80) };
+}
+
 // The messages of the chat go down this list, best model first. Each one has a limit of requests a day (what the free tier gives it); the
 // count is kept in the database and starts again at midnight Pacific time, when Google's own count does.
 // A model that is used up for today, refuses, is not found or fails hands over to the next one without anybody seeing it. The chat
@@ -165,7 +210,7 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   const jwt = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   if (!jwt) return json({ error: "not signed in" }, 401);
-  let body: { system?: unknown; history?: unknown; stream?: unknown; imageUrls?: unknown; action?: unknown; avatar?: unknown; theme?: unknown; clearAvatar?: unknown; clearBanner?: unknown } = {};
+  let body: { system?: unknown; history?: unknown; stream?: unknown; imageUrls?: unknown; action?: unknown; avatar?: unknown; theme?: unknown; clearAvatar?: unknown; clearBanner?: unknown; tz?: unknown; model?: unknown; query?: unknown; resume?: unknown } = {};
   const parse = req.json().then((b) => { body = b; return true; }, () => false);
   if (!((okUntil.get(jwt) || 0) > Date.now())) {
     const { data, error } = await admin.auth.getUser(jwt);
@@ -178,6 +223,28 @@ Deno.serve(async (req) => {
   await parse;
   // the app asks this when a chat opens: the owner check above is then remembered, so the first message does not wait for it
   if (body.action === "ping") return json({ ok: true });
+  // a one use token for a voice call: the phone gets the token and the first message to send (the key stays here)
+  if (body.action === "live") {
+    const key = await geminiKey();
+    if (!key) return json({ ok: false, why: "no gemini key in the vault" }, 500);
+    const idx = Math.max(0, Math.min(LIVE_MODELS.length - 1, Math.floor(Number(body.model)) || 0));
+    const model = LIVE_MODELS[idx];
+    const tz = typeof body.tz === "string" && /^[A-Za-z_]+(\/[A-Za-z0-9_+-]+){1,2}$/.test(body.tz) ? body.tz : "";
+    const resume = typeof body.resume === "string" && body.resume.length < 600 ? body.resume : "";
+    const cfg = liveConfig(tz, resume);
+    const got = await liveToken(key, model, cfg);
+    if (!("token" in got)) {
+      try { await admin.rpc("nook_ai_full", { p_model: "debug:live:" + model + ":" + got.status + ":" + got.said.replace(/[^\w .,:'-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 90), p_limit: 1 }); } catch { /* only a note */ }
+      return json({ ok: false, why: "token " + got.status, models: LIVE_MODELS.length });
+    }
+    return json({ ok: true, token: got.token, model, models: LIVE_MODELS.length, setup: liveSetup(model, cfg) });
+  }
+  // the search of a call: the phone asks for it when the model calls its search tool
+  if (body.action === "search") {
+    const q = typeof body.query === "string" ? body.query.trim().slice(0, 200) : "";
+    if (!q) return json({ ok: false, why: "no query" }, 400);
+    return json({ ok: true, text: await searchNote(q) });
+  }
   // the owner can change how his public account looks, and ask for his answers now instead of at the next minute
   if (body.action === "profile") {
     const base = Deno.env.get("SUPABASE_URL")! + "/storage/v1/object/public/media/";

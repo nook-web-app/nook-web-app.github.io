@@ -71,6 +71,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
     @Volatile private var nudges = 0
     @Volatile private var useOther = false
     private var quietLoop = false
+    @Volatile private var hanging = false
     @Volatile private var greetAt = 0L
     @Volatile private var greetDone = false
 
@@ -229,6 +230,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
 
     // the words of the call, in the captions: chunks of the same person join into one line until a turn ends
     private fun caption(who: String, text: String) {
+        if (hanging) return
         // a guess in another alphabet (the noise of a microphone read as another language) is not shown
         if (text.any { it.isLetter() && Character.UnicodeScript.of(it.code) != Character.UnicodeScript.LATIN }) return
         val fresh = closed
@@ -237,7 +239,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
     }
 
     private fun speak(b64: String) {
-        if (b64.isEmpty()) return
+        if (b64.isEmpty() || hanging) return
         val pcm = runCatching { Base64.decode(b64, Base64.DEFAULT) }.getOrNull() ?: return
         spoke = true
         lastActivity = System.currentTimeMillis()
@@ -277,7 +279,9 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
     // he hung up: the tool is answered, and the call ends when his goodbye has been played (a goodbye that comes after the tool is waited for too)
     private fun hangUp(id: String, name: String) {
         val resp = JSONObject().put("toolResponse", JSONObject().put("functionResponses", JSONArray().put(
-            JSONObject().put("id", id).put("name", name).put("response", JSONObject().put("result", "ok")))))
+            JSONObject().put("id", id).put("name", name).put("response", JSONObject().put("result", "The call is over. Say nothing more.")))))
+        // whatever the model still says after hanging up is not played or written down (it used to add a stiff line like "this conversation has concluded")
+        hanging = true
         ws?.send(resp.toString())
         app.scope.launch(Dispatchers.IO) {
             val start = System.currentTimeMillis()

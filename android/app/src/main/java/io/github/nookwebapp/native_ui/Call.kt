@@ -150,7 +150,7 @@ class CallSession(private val scope: CoroutineScope? = null, private val onLive:
         // the same person keeps one line while they talk, a short pause inside it does not cut it in two
         val join = last != null && last.who == who && (!fresh || now - lastSayAt < 3500)
         lastSayAt = now
-        if (join) last!!.text = last.text + text
+        if (join) last!!.text = last.text + (if (fresh && last.text.isNotEmpty() && !last.text.last().isWhitespace() && !text.first().isWhitespace()) " " else "") + text
         else { val cap = Cap(++ids, who, text.trimStart()); lines.add(cap); log.add(cap); while (lines.size > 6) lines.removeAt(0) }
     }
 

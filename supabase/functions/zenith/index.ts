@@ -384,7 +384,7 @@ Deno.serve(async (req) => {
     let got = await gemini(key, system + (stream ? HUMAN_HELP : "") + SEARCH_HELP, body.history, stream, true);
     if (got.call) {
       const mins = await planCall(got.call);
-      const note = "(The phone call is arranged: it will ring his phone " + (mins <= 1 ? "in a few seconds" : "in about " + mins + " minutes") + ". Tell him so in your own short style. Do not use any tool now.)";
+      const note = "(The phone call is arranged: it will ring his phone " + (mins <= 1 ? "in a few seconds" : "in about " + mins + " minutes") + ". Answer with only a few words, like ok, sure, or calling you in a sec. Do not say what the call will be about or add anything else unless he asked. Do not use any tool now.)";
       if (last && Array.isArray(last.parts)) last.parts.push({ text: note });
       got = await gemini(key, system + (stream ? HUMAN_HELP : ""), body.history, stream, false);
     }

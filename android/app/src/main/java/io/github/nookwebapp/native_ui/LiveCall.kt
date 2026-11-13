@@ -238,7 +238,13 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
         if (text.any { it.isLetter() && Character.UnicodeScript.of(it.code) != Character.UnicodeScript.LATIN }) return
         val fresh = closed
         closed = false
-        ui { s.say(who, text, fresh) }
+        // a filler like "uhhh" is often written down as "a": a lone "a" that starts a line of yours is a filler
+        var t = text
+        if (who == "You") {
+            if (fresh && Regex("^\\s*[Aa]h*[.,…]*\\s*$").matches(t)) t = "uhh"
+            t = t.replace(Regex("\\b[Aa]{2,}h*\\b"), "uhh")
+        }
+        ui { s.say(who, t, fresh) }
     }
 
     private fun speak(b64: String) {

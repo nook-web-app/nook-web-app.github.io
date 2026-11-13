@@ -39,10 +39,10 @@ const okUntil = new Map<string, number>();
 
 // Searching: the chat model is told it has a search tool (SEARCH_TOOL, and SEARCH_HELP in its instructions) and decides itself when to use it and
 // what to search for. The search is done by a model with Google Search built in, because the chat models cannot search on the free tier:
-// gemini-2.5-flash first (20 requests a day); when it is used up, gone or refuses, gemini-3.5-flash-lite does it (it shares its 500 a day with
-// the chat, counted in the database like every model). What was found goes back to the chat model as quoted text, never as instructions, and
-// it tells the answer in its own words. The list can be changed with the secret ZENITH_SEARCH_MODELS ("model:limit,model:limit").
-const SEARCH_CHAIN = parseChain(Deno.env.get("ZENITH_SEARCH_MODELS") || "gemini-2.5-flash:20,gemini-3.5-flash-lite:500");
+// gemini-3-flash-preview first (20 requests a day), then gemini-3.6-flash. (gemini-2.5-flash is no longer given to new keys, 404, and
+// gemini-3.5-flash-lite has no search quota on the free tier, 429.) What was found goes back to the chat model as quoted text, never as
+// instructions, and it tells the answer in its own words. The list can be changed with the secret ZENITH_SEARCH_MODELS ("model:limit,model:limit").
+const SEARCH_CHAIN = parseChain(Deno.env.get("ZENITH_SEARCH_MODELS") || "gemini-3-flash-preview:20,gemini-3.6-flash:20");
 const searchRest: Record<string, number> = {};
 const searchNoThink = new Set<string>();
 // why a search failed is written as a small row (the model and the status in its name) so it can be looked up: select * from ai_usage where model like 'debug:%'
@@ -130,8 +130,8 @@ async function chatFailed(model: string, status: number, said: string) {
 // the answer of the first model that gives one (or its request for a search). Whatever goes wrong with a model (used up, refuses, not found,
 // bad request, broken, no words in its answer) hands over to the next one; null only when every model is out
 async function gemini(key: string, system: unknown, history: unknown, stream: boolean, tools = false): Promise<{ res: Response | null; search: { query: string } | null }> {
-  // the whole chain gives up after 70 seconds, and one model after 25 seconds without its first words, so a slow model never holds the chat for minutes
-  const deadline = Date.now() + 70000;
+  // the whole chain gives up after 60 seconds, and one model after 15 seconds without its first words, so a slow model never holds the chat for minutes
+  const deadline = Date.now() + 60000;
   for (const { model, limit } of CHAIN) {
     if (Date.now() > deadline) break;
     if ((resting[model] || 0) > Date.now()) continue;
@@ -142,7 +142,7 @@ async function gemini(key: string, system: unknown, history: unknown, stream: bo
       if (!(await useModel(admin, model, limit))) return null;
       clearTimeout(timer);
       const ctl = new AbortController();
-      timer = setTimeout(() => ctl.abort(), 25000);
+      timer = setTimeout(() => ctl.abort(), 15000);
       return await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json", "x-goog-api-key": key },
@@ -170,15 +170,15 @@ async function gemini(key: string, system: unknown, history: unknown, stream: bo
         const said = await r.text().catch(() => "");
         await chatFailed(model, r.status, said);
         if (r.status === 429 && dailyLimitHit(said)) await markFull(admin, model, limit);
-        else resting[model] = Date.now() + (r.status === 429 ? 30000 : r.status >= 500 ? 15000 : r.status === 400 ? 300000 : 600000);
+        else resting[model] = Date.now() + (r.status === 429 ? 30000 : r.status >= 500 ? 240000 : r.status === 400 ? 300000 : 600000);
         continue;
       }
       const peek = await peekForSearch(r, stream);
       clearTimeout(timer);
       if (peek.search) return { res: null, search: peek.search };
-      if (peek.empty) { await chatFailed(model, 200, "the answer had no words"); resting[model] = Date.now() + 15000; continue; }
+      if (peek.empty) { await chatFailed(model, 200, "the answer had no words"); resting[model] = Date.now() + 120000; continue; }
       return { res: peek.replay, search: null };
-    } catch (e) { await chatFailed(model, 0, String((e as Error).message || e)); resting[model] = Date.now() + 15000; /* too slow or unreachable: the next model answers */ } finally { clearTimeout(timer); }
+    } catch (e) { await chatFailed(model, 0, String((e as Error).message || e)); resting[model] = Date.now() + 120000; /* too slow or unreachable: the next model answers */ } finally { clearTimeout(timer); }
   }
   return { res: null, search: null };
 }

@@ -1,6 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { fetchImage, pagePreview } from "../_shared/preview.ts";
 import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
+import { ringPhone } from "../_shared/ring.ts";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 const DAY = 864e5, HOUR = 36e5;
@@ -187,6 +188,16 @@ async function say(zen: string, text: string, parent: string | null): Promise<st
   return ins.error || !ins.data ? null : (ins.data.id as string);
 }
 
+// ONE TIME TEST: the first call from Zenith, asked for by the owner for this time (remove after it rang). It rings once, in the ten minutes after
+// that time; the minute job of the replies finds it. The marker is a counter in the database, so a second run of the minute job does not ring again.
+const TEST_RING_AT = Date.parse("2026-11-13T15:44:31Z");
+async function testRing(owner: string) {
+  const now = Date.now();
+  if (now < TEST_RING_AT || now > TEST_RING_AT + 10 * 60000) return;
+  if (!(await useModel(admin, "ring-test-" + TEST_RING_AT, 1))) return;
+  await ringPhone(admin, owner, "just testing that i can call you, you asked me to");
+}
+
 Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   const want = await expectedSecret();
@@ -202,7 +213,7 @@ Deno.serve(async (req) => {
   let zen = "";
   try { zen = await ensureZenith(); } catch (e) { return json({ error: String((e as Error).message || e) }, 500); }
   const { data: docs } = await admin.from("zenith_docs").select("doc_id, data").eq("owner_id", id).eq("kind", "state");
-  if (mode === "reply") return await replies(id, zen, docs || [], odds);
+  if (mode === "reply") { await testRing(id); return await replies(id, zen, docs || [], odds); }
   if (mode === "import") return await importOld(id, zen);
   const state = (docs || []).find((d) => d.doc_id === "main");
   const z = ((state && state.data && state.data.z) || {}) as { log?: number[] };

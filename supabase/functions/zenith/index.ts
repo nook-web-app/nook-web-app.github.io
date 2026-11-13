@@ -41,7 +41,7 @@ const okUntil = new Map<string, number>();
 // A model that is used up for today, refuses, is not found or fails hands over to the next one without anybody seeing it. The chat
 // only gets an error when every model is out. The list can be changed with the secret ZENITH_CHAT_MODELS ("model:limit,model:limit").
 // gemini-3.7-flash is left out on purpose: it is deprecated and has no free quota.
-const CHAIN = parseChain(Deno.env.get("ZENITH_CHAT_MODELS") || "gemini-4-hydrogen:19,gemini-3.8-flash:19,gemini-3-flash-preview:19,gemini-3.6-flash:19");
+const CHAIN = parseChain(Deno.env.get("ZENITH_CHAT_MODELS") || "gemini-4-hydrogen:19,gemini-3.8-flash:19,gemini-3-flash-preview:19,gemini-3.6-flash:19,gemini-3.5-flash-lite:480");
 // a model that said "too many requests" for the minute rests for half a minute; one that did not accept a thinking level is asked without it from then on
 const resting: Record<string, number> = {};
 const noThink = new Set<string>();

@@ -23,7 +23,10 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-      - run: supabase db push
+      # a problem with the migrations must not keep the functions from being deployed: it is reported at the end of the job instead
+      - id: dbpush
+        continue-on-error: true
+        run: supabase db push
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
@@ -32,14 +35,22 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
           BEFORE: ${{ github.event.before }}
+          EVENT: ${{ github.event_name }}
         run: |
           base="$BEFORE"
           if [ -z "$base" ] || echo "$base" | grep -qE '^0+$' || ! git cat-file -e "$base" 2>/dev/null; then base=HEAD~1; fi
           list=$(git diff --name-only "$base" HEAD -- supabase/functions | cut -d/ -f3 | sort -u)
           # shared code is not a function of its own: the functions that import it are deployed again
-          if echo "$list" | grep -qx '_shared'; then list=$(printf '%s\n%s\n' "$list" "preview focus zenith-tick" | tr ' ' '\n' | grep -vx '_shared' | sort -u); fi
+          if echo "$list" | grep -qx '_shared'; then list=$(printf '%s\n%s\n' "$list" "$(grep -l '_shared/' supabase/functions/*/index.ts | cut -d/ -f3)" | grep -vx '_shared' | sort -u); fi
           # a config.toml change (for example verify_jwt) redeploys every function
           if [ -n "$(git diff --name-only "$base" HEAD -- supabase/config.toml)" ]; then list=$(ls supabase/functions | grep -vx '_shared'); fi
+          # a run started by hand deploys every function
+          if [ "$EVENT" = "workflow_dispatch" ]; then list=$(ls supabase/functions | grep -vx '_shared'); fi
           for f in $list; do
             if [ -d "supabase/functions/$f" ]; then supabase functions deploy "$f" --project-ref "$PROJECT_REF" --use-api; fi
           done
+      - name: Report a problem with the migrations
+        if: steps.dbpush.outcome == 'failure'
+        run: |
+          echo "supabase db push failed (see its step above); the functions were deployed anyway"
+          exit 1

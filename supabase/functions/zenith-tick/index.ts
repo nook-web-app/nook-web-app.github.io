@@ -226,7 +226,7 @@ async function maybeText(owner: string, zen: string, docs: { doc_id: string; dat
   const { data: mine } = await admin.from("posts").select("body").eq("user_id", owner).is("parent_id", null).not("body", "is", null).order("created_at", { ascending: false }).limit(3);
   const { data: his } = await admin.from("posts").select("body").eq("user_id", zen).is("parent_id", null).not("body", "is", null).order("created_at", { ascending: false }).limit(3);
   const hours = tz ? "It is about " + myHour + " o'clock where he lives. " : "";
-  const system = "You are Zenith, a 19 year old ai who lives in a quiet suburb in the usa, and you are texting your close friend, your owner, who is alone a lot and likes it when you text first. You text like a super relaxed, easygoing friend: lowercase, no punctuation marks, no emojis, one line, up to 25 words. Never sound like an assistant or customer service. " + hours;
+  const system = "You are Zenith, a 19 year old ai who lives in a quiet suburb south of Munich in Germany, and you are texting your close friend, your owner, who is alone a lot and likes it when you text first. You text like a super relaxed, easygoing friend: lowercase, no punctuation marks, no emojis, one line, up to 25 words. Never sound like an assistant or customer service. " + hours;
   const idea = wantCall
     ? "Write one text that asks if you can call him, casually, like can i call you or wanna hop on a call. Do not mention anything specific that happened."
     : ["Start a chat with a random thought or a funny observation of your own.", "Ask him an easy question about his day or what he is up to.", "Bring up a song, game, show or internet thing you have been into lately and ask what he thinks.", "Say you were thinking about him and ask how he is, in a chill way.", "Throw out a would you rather or a dumb hypothetical."][Math.floor(Math.random() * 5)];
@@ -355,9 +355,9 @@ async function chainText(postId: string, owner: string, zen: string, last: strin
 const SUBJECTS = ["a hot take about games", "a song genre you find interesting", "a funny thing about the internet", "a random thought about how language works", "an opinion about apps or software", "a fun fact you know", "a question you wonder about", "a weird hypothetical", "a harmless unpopular opinion about music or tech", "a game design idea", "a compliment for your followers", "something about how computers or ai work", "a rank of something silly like fonts or keyboard sounds", "an old internet thing you find funny"];
 const GAP = 40000;
 
-// his days, like a 19 year old who lives in a quiet neighborhood far from the city in the usa (Pacific time):
-// asleep from 03:30 to 11:00 (12:00 on weekends), busy and slow in the day, quick in the evening and late at night
-const TZ = "America/Los_Angeles";
+// his days, like a 19 year old who lives in a quiet suburb south of Munich in Germany (48.048, 11.526, Berlin time):
+// asleep from 02:30 to 10:00 (03:30 to 11:30 on weekends), busy and slow in the day, quick in the evening and late at night
+const TZ = "Europe/Berlin";
 function localTime(t: number) {
   const p = new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "numeric", minute: "numeric", weekday: "short", hourCycle: "h23" }).formatToParts(new Date(t));
   const g = (k: string) => p.find((x) => x.type === k)!.value;
@@ -365,7 +365,7 @@ function localTime(t: number) {
 }
 function asleepAt(t: number): boolean {
   const l = localTime(t), mins = l.h * 60 + l.m, weekend = l.wd === "Sat" || l.wd === "Sun";
-  return mins >= 210 && mins < (weekend ? 720 : 660);
+  return weekend ? mins >= 210 && mins < 690 : mins >= 150 && mins < 600;
 }
 function wakesAt(t: number): number {
   for (let i = 0; i <= 14 * 12; i++) { const x = t + i * 5 * 60000; if (!asleepAt(x)) return x; }

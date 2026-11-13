@@ -190,7 +190,7 @@ async function say(zen: string, text: string, parent: string | null): Promise<st
 
 // ONE TIME TEST: a call from Zenith to the owner, asked for by the owner for this time (to be removed). It rings once, in the ten minutes after that
 // time, when the minute job of the replies finds it; the marker is a counter in the database, so it does not ring twice.
-const TEST_RING_AT = Date.parse("2026-11-13T17:15:00Z");
+const TEST_RING_AT = Date.parse("2026-11-13T17:22:00Z");
 // a reason for a call: mostly he just says hi; now and then one of the owner's recent posts on Nook that he finds interesting
 // (what it says and shows is read first, so he never makes anything up)
 async function callReason(owner: string, _zen: string): Promise<string> {

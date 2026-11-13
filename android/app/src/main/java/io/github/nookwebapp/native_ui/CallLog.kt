@@ -80,3 +80,17 @@ fun CallLogCard(seconds: Int, lines: List<CallLine>, whenText: String, onLong: (
 }
 
 private fun Modifier.fillMaxWidth() = this.then(Modifier.fillMaxWidth())
+
+// the end of the chat the call belongs to (and the lines of an earlier call), so he is not starting from nothing
+fun callContext(app: AppState): String {
+    val chat = app.store.chats.firstOrNull { it.id == app.callChatId } ?: app.store.chats.filter { it.zc || it.msgs.any { m -> m.ai } }.maxByOrNull { it.t } ?: return ""
+    val out = ArrayList<String>()
+    for (m in chat.msgs.takeLast(16)) {
+        val log = callLogOf(m.text)
+        if (log != null) { out.add("(an earlier call, the end of it:)"); log.second.takeLast(8).forEach { out.add((if (it.mine) "Him: " else "You: ") + it.text.take(160)) } }
+        else if (m.text.isNotBlank()) out.add((if (m.ai) "You: " else "Him: ") + m.text.replace(Regex("\\s+"), " ").take(160))
+    }
+    var txt = out.joinToString("\n")
+    if (txt.length > 1800) txt = txt.takeLast(1800)
+    return txt
+}

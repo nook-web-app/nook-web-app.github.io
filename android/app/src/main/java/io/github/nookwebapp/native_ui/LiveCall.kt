@@ -212,8 +212,11 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
     // he speaks first. The newer models take a text turn as realtime input, the 2.5 ones as a turn of the conversation; `other` is the second try
     private fun hello(other: Boolean) {
         val why = s.reason
-        val text = if (why == null) "The call just connected. You speak first: say a quick casual hey, like a friend picking up the phone, nothing more, then wait."
+        val base = if (why == null) "The call just connected. You speak first: say a quick casual hey, like a friend picking up the phone, nothing more, then wait."
         else "You called your friend and they just picked up. Say a quick casual hey and say why you called: " + (why.ifBlank { "no real reason, you just felt like talking" }) + ". Keep it short, like a real friend would, then wait."
+        // the end of the chat (and of earlier calls) goes along, so he is not starting from nothing
+        val background = runCatching { callContext(app) }.getOrDefault("")
+        val text = base + if (background.isBlank()) "" else "\n\nBackground for you only, never recite it and never mention it: the end of your recent text chat with him and earlier calls, to use naturally when it fits:\n" + background
         if (other) useOther = true
         else greetAt = System.currentTimeMillis()
         sendText(text)

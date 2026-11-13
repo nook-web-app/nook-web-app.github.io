@@ -127,9 +127,24 @@ function readVerdict(j: any): Verdict {
 }
 
 // moderation only uses Gemma 4 (high daily limit); the 31B one takes over when the 26B one is out of tokens for the minute or the day. Zenith has its own models so they never share this quota
-const MODELS = ["gemma-4-26b-a4b-it", "gemma-4-31b-it"];
+// the lists can be changed without a new deploy: the edge secrets MOD_MODELS (comma separated) and MOD_FALLBACK
+const MODELS = (Deno.env.get("MOD_MODELS") || "gemma-4-26b-a4b-it,gemma-4-31b-it").split(",").map((m) => m.trim()).filter(Boolean);
 // Gemma 4 has no thinking level (asking for one is an error that doubled every check), and it can take a long time to answer; when both are busy or too slow the check goes to this faster model
-const FALLBACK = "gemini-3.1-flash-lite";
+const FALLBACK = (Deno.env.get("MOD_FALLBACK") || "gemini-3.1-flash-lite").trim();
+// the limit of AI calls in every 12 hours (see nook_ai_take); a check that finds it used up stays pending and waits for the next 12 hours.
+// A real day needs far fewer: a post costs one call for its words and one for each picture
+const CAP_12H = Number(Deno.env.get("MOD_CAP_12H")) || 600;
+const CAPPED = new Error("12 hour limit of AI checks used up");
+let granted = 0;
+async function takeCall(): Promise<void> {
+  if (granted > 0) { granted--; return; }
+  const { data, error } = await admin.rpc("nook_ai_take", { p_name: "moderate", p_max: CAP_12H, p_want: 5 });
+  // the function is not installed yet (or the database did not answer): checks go on without the limit instead of stopping
+  if (error) return;
+  const n = typeof data === "number" ? data : 0;
+  if (n <= 0) throw CAPPED;
+  granted += n - 1;
+}
 const CALL_MS = 30000;
 // checks take turns between the models; one that answered "busy" rests for a short while, and when every model is resting
 // the check waits for the first one to be free (or stays queued for the next sweep when that takes too long)
@@ -171,16 +186,18 @@ async function ask(parts: unknown[], system = SYSTEM): Promise<Verdict> {
       }
       for (const model of free) {
         const gemma = model.startsWith("gemma");
-        const call = (think: boolean) => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
+        const call = async (think: boolean) => { await takeCall(); return fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
           method: "POST",
           headers: { "content-type": "application/json", "x-goog-api-key": key },
           signal: AbortSignal.timeout(CALL_MS),
           body: JSON.stringify({ systemInstruction: { parts: [{ text: system + " Reply with the verdict only. When it is SAFE, reply with the single word SAFE and nothing else: no reason, no analysis, no bullet points. For any other verdict give the two lines." }] }, contents: [{ role: "user", parts }], generationConfig: { temperature: 0, maxOutputTokens: 2000, ...(think ? { thinkingConfig: { thinkingLevel: "minimal" } } : {}) } }),
-        });
+        }); };
         try {
           r = await call(!gemma);
           if (r.status === 400 && !gemma) r = await call(false);
         } catch (e) {
+          // the limit of this 12 hours is used up: the check stays pending (the AI counts as down, so nothing is approved or taken down for it)
+          if (e === CAPPED) { C().lastNote = "the limit of AI checks for these 12 hours is used up"; C().aiDown = true; return null; }
           // too slow or unreachable: the model rests and the next one takes the check
           C().lastNote = "fetch failed " + String((e as Error).message || e);
           busyUntil[model] = Date.now() + REST_MS;
@@ -189,6 +206,8 @@ async function ask(parts: unknown[], system = SYSTEM): Promise<Verdict> {
         }
         // a model whose quota is used up or that is overloaded rests and the next one takes the check
         if (r.status === 429 || r.status >= 500) { busyUntil[model] = Date.now() + (r.status === 429 ? REST_MS : 5000); continue; }
+        // a name the service does not know (a model that was renamed or removed) rests for an hour and the next model takes the check
+        if (r.status === 404) { busyUntil[model] = Date.now() + 3600000; C().lastNote = "model " + model + " not found"; r = null; continue; }
         // an answer that cannot be read as a verdict (Gemma sometimes writes its reasoning and runs out of room) goes to the next model
         if (r.ok) {
           const j = await r.json();

@@ -186,3 +186,18 @@ fun RingScreen(app: Boolean, onAnswer: () -> Unit, onDecline: () -> Unit, still:
         }
     }
 }
+
+// the ring screen over whatever is open: needs "display over other apps". A tiny invisible window is shown first,
+// because newer Android only lets an app open a screen from the background while it has a window on the screen
+fun openRingOver(ctx: android.content.Context, reason: String) {
+    if (!android.provider.Settings.canDrawOverlays(ctx)) return
+    android.os.Handler(android.os.Looper.getMainLooper()).post {
+        val wm = ctx.getSystemService(android.content.Context.WINDOW_SERVICE) as android.view.WindowManager
+        val v = android.view.View(ctx)
+        val lp = android.view.WindowManager.LayoutParams(1, 1, android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE, android.graphics.PixelFormat.TRANSLUCENT)
+        runCatching { wm.addView(v, lp) }
+        runCatching { ctx.startActivity(android.content.Intent(ctx, IncomingCallActivity::class.java).putExtra("reason", reason).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ runCatching { wm.removeView(v) } }, 4000)
+    }
+}

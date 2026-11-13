@@ -190,12 +190,23 @@ async function say(zen: string, text: string, parent: string | null): Promise<st
 
 // ONE TIME TEST: a call from Zenith to the owner, asked for by the owner for this time (to be removed). It rings once, in the ten minutes after that
 // time, when the minute job of the replies finds it; the marker is a counter in the database, so it does not ring twice.
-const TEST_RING_AT = Date.parse("2026-11-13T16:30:20Z");
-async function testRing(owner: string) {
+const TEST_RING_AT = Date.parse("2026-11-13T16:46:00Z");
+// a reason for a call taken from what is really on his profile: one of his own recent posts or one of the owner's
+async function callReason(owner: string, zen: string): Promise<string> {
+  try {
+    const get = async (u: string) => ((await admin.from("posts").select("body").eq("user_id", u).is("parent_id", null).not("body", "is", null).order("created_at", { ascending: false }).limit(8)).data || []).map((r) => String(r.body || "").replace(/\s+/g, " ").trim().slice(0, 110)).filter((t) => t.length > 8);
+    const [mine, his] = await Promise.all([get(zen), get(owner)]);
+    const pool = [...mine.map((t) => ["m", t]), ...his.map((t) => ["h", t])];
+    if (!pool.length) return "";
+    const [who, t] = pool[Math.floor(Math.random() * pool.length)];
+    return who === "m" ? "you called because of your own post: \"" + t + "\", bring it up like a friend would" : "you called because of his post: \"" + t + "\", bring it up like a friend would";
+  } catch { return ""; }
+}
+async function testRing(owner: string, zen: string) {
   const now = Date.now();
   if (now < TEST_RING_AT || now > TEST_RING_AT + 10 * 60000) return;
   if (!(await useModel(admin, "ring-test-" + TEST_RING_AT, 1))) return;
-  await ringPhone(admin, owner, "come up with your own small random reason, like something that popped in your head");
+  await ringPhone(admin, owner, (await callReason(owner, zen)) || "come up with your own small random reason, like something that popped in your head");
 }
 
 Deno.serve(async (req) => {
@@ -213,7 +224,7 @@ Deno.serve(async (req) => {
   let zen = "";
   try { zen = await ensureZenith(); } catch (e) { return json({ error: String((e as Error).message || e) }, 500); }
   const { data: docs } = await admin.from("zenith_docs").select("doc_id, data").eq("owner_id", id).eq("kind", "state");
-  if (mode === "reply") { await testRing(id); return await replies(id, zen, docs || [], odds); }
+  if (mode === "reply") { await testRing(id, zen); return await replies(id, zen, docs || [], odds); }
   if (mode === "import") return await importOld(id, zen);
   const state = (docs || []).find((d) => d.doc_id === "main");
   const z = ((state && state.data && state.data.z) || {}) as { log?: number[] };
@@ -225,6 +236,7 @@ Deno.serve(async (req) => {
   const { count } = await admin.from("posts").select("id", { count: "exact", head: true }).eq("user_id", zen).is("parent_id", null).gt("created_at", since30);
   const band = 5 * Math.pow(0.93, count || 0);
   const roll = Math.random() * 100;
+  if (!dry && !force && asleepAt(now)) return json({ skipped: "asleep" });
   if (!dry && !force && roll < 100 - band) return json({ skipped: "roll " + roll.toFixed(2) + " needs " + (100 - band).toFixed(2) });
 
   // his last posts are shown to him so he does not circle around the same joke, and a random subject is suggested so each post starts somewhere new
@@ -278,6 +290,37 @@ async function chainText(postId: string, owner: string, zen: string, last: strin
 
 const SUBJECTS = ["a hot take about games", "a song genre you find interesting", "a funny thing about the internet", "a random thought about how language works", "an opinion about apps or software", "a fun fact you know", "a question you wonder about", "a weird hypothetical", "a harmless unpopular opinion about music or tech", "a game design idea", "a compliment for your followers", "something about how computers or ai work", "a rank of something silly like fonts or keyboard sounds", "an old internet thing you find funny"];
 const GAP = 40000;
+
+// his days, like a 19 year old who lives in a quiet neighborhood far from the city in the usa (Pacific time):
+// asleep from 03:30 to 11:00 (12:00 on weekends), busy and slow in the day, quick in the evening and late at night
+const TZ = "America/Los_Angeles";
+function localTime(t: number) {
+  const p = new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "numeric", minute: "numeric", weekday: "short", hourCycle: "h23" }).formatToParts(new Date(t));
+  const g = (k: string) => p.find((x) => x.type === k)!.value;
+  return { h: Number(g("hour")), m: Number(g("minute")), wd: g("weekday") };
+}
+function asleepAt(t: number): boolean {
+  const l = localTime(t), mins = l.h * 60 + l.m, weekend = l.wd === "Sat" || l.wd === "Sun";
+  return mins >= 210 && mins < (weekend ? 720 : 660);
+}
+function wakesAt(t: number): number {
+  for (let i = 0; i <= 14 * 12; i++) { const x = t + i * 5 * 60000; if (!asleepAt(x)) return x; }
+  return t;
+}
+function unit(s: string): number { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return ((h >>> 0) % 10000) / 10000; }
+// the moment he gets around to answering a post: never at once, and later when he sleeps or is out; the same post always gives the same moment
+function answerDue(id: string, created: number, thread: boolean): number {
+  const r = unit(id), r2 = unit(id + "x"), r3 = unit(id + "y");
+  const afterWake = (t: number) => wakesAt(t) + (3 + r * 40) * 60000;
+  if (asleepAt(created)) return afterWake(created);
+  const l = localTime(created), hour = l.h + l.m / 60;
+  const [lo, hi] = hour < 3.5 || hour >= 21 ? [1.5, 12] : hour >= 17 ? [2, 20] : [6, 60];
+  let delay = lo + r * (hi - lo);
+  if (r2 < 0.18) delay += 40 + r3 * 100;
+  if (thread) delay = Math.max(1, delay * 0.4);
+  const due = created + delay * 60000;
+  return asleepAt(due) ? afterWake(due) : due;
+}
 let lastImport = 0;
 // the app answers nothing itself any more: this runs every minute (and when the owner nudges it) and handles three things
 // deno-lint-ignore no-explicit-any
@@ -285,7 +328,7 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
   const state = docs.find((d) => d.doc_id === "state" || d.doc_id === "main");
   const since = Number(state && state.data && state.data.z && state.data.z.since) || 0;
   const now = Date.now();
-  const from = new Date(Math.max(since, now - 6 * HOUR, ROLLOUT)).toISOString();
+  const from = new Date(Math.max(since, now - 16 * HOUR, ROLLOUT)).toISOString();
   const old = new Date(now - 8000).toISOString();
   // his older answers inside long threads become public a step at a time, as the owner's replies above them get posted
   // the import is a one time job, so it runs at most every 5 minutes, not every minute
@@ -317,6 +360,7 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
     if (doneMine.has(p.id)) { await mark(p.id, "reply"); continue; }
     const chain = await chainText(p.id, owner, zen, String(p.body));
     if (p.parent_id && !chain.zenIn) { await mark(p.id, "skip"); continue; }
+    if (now < answerDue(p.id, Date.parse(p.created_at), !!p.parent_id)) continue;
     if (!(await claim(p.id))) continue;
     budget--;
     let lk = { note: "", pics: [] as unknown[] };
@@ -339,6 +383,7 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
   }
 
   // 3: other people's posts: now and then (one in five) he likes one, and one in five he answers; nobody can ask him anything
+  if (asleepAt(now)) return json({ ok: true, ...out, asleep: true });
   const pub = new Date(Math.max(since, now - 2 * HOUR, ROLLOUT)).toISOString();
   const others = await cand(admin.from("posts").select("id, user_id, body, parent_id, media_url, created_at").neq("user_id", owner).neq("user_id", zen).eq("mod_status", "safe").eq("text_pending", false).gt("created_at", pub).lt("created_at", old).order("created_at", { ascending: true }).limit(12));
   const seenOthP = seenOf(others.map((p) => p.id));

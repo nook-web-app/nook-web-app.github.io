@@ -91,7 +91,7 @@ Deno.serve(async (req) => {
     if (!/^[0-9a-f-]{36}$/i.test(uid)) return json({ error: "bad id" }, 400);
     const { data: toks } = await admin.from("fcm_tokens").select("token").eq("user_id", uid);
     if (!toks || !toks.length) return json({ sent: 0 });
-    const r = await sendFcm(toks, { type: "call", title: "Zenith", body: "Zenith is calling", reason: String(body.call.reason || "").slice(0, 200), id: crypto.randomUUID() }, "30s");
+    const r = await sendFcm(toks, { type: "call", title: "Zenith", body: "Zenith is calling", reason: String(body.call.reason || "").slice(0, 400), id: crypto.randomUUID() }, "30s");
     if (r.dead.length) await admin.from("fcm_tokens").delete().in("token", r.dead);
     return json({ sent: r.sent });
   }

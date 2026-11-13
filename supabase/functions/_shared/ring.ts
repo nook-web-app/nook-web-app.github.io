@@ -8,7 +8,7 @@ export async function ringPhone(admin: SupabaseClient, owner: string, reason: st
     const r = await fetch(Deno.env.get("SUPABASE_URL")! + "/functions/v1/send-push", {
       method: "POST",
       headers: { "content-type": "application/json", "x-purge-secret": secret },
-      body: JSON.stringify({ call: { user_id: owner, reason: reason.slice(0, 200) } }),
+      body: JSON.stringify({ call: { user_id: owner, reason: reason.slice(0, 400) } }),
       signal: AbortSignal.timeout(20000),
     });
     const j = await r.json().catch(() => ({}));

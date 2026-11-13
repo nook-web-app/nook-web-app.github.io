@@ -155,6 +155,17 @@ class MainActivity : ComponentActivity() {
             app.on.feedTries = 0
             app.on.loadFeed()
             app.scope.launch { app.on.checkBan(); app.on.checkModNotices() }
+            // Zenith's call can only fill the screen over other apps when this is allowed: asked at most once a day
+            window.decorView.postDelayed({
+                runCatching {
+                    val pr = getSharedPreferences("callperm", MODE_PRIVATE)
+                    if (Sb.isOwner() && !android.provider.Settings.canDrawOverlays(this) && System.currentTimeMillis() - pr.getLong("asked", 0) > 86_400_000L) {
+                        pr.edit().putLong("asked", System.currentTimeMillis()).apply()
+                        android.widget.Toast.makeText(this, "Allow Nook to show over other apps so Zenith's calls fill the screen", android.widget.Toast.LENGTH_LONG).show()
+                        startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:" + packageName)))
+                    }
+                }
+            }, 1500)
             app.scope.launch {
                 app.on.deviceCheck(); app.on.checkEmailChange()
                 app.on.refreshBadge(true); app.on.notesSync()

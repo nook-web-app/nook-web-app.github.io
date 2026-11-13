@@ -22,7 +22,7 @@ val ZSYS_REPLY_PUB = ZSYS_REPLY.replace(ZSYS, ZPUB)
 fun zOn() = Sb.isOwner()
 
 private fun zNow(sys: String) = sys + " Never use line breaks. Write everything as one paragraph. Current local time: " +
-    java.text.SimpleDateFormat("EEEE, MMMM d, yyyy 'at' h:mm a", java.util.Locale.US).format(java.util.Date()) + ". Only use it when the time or date is really needed, never bring it up on your own."
+    java.text.SimpleDateFormat("EEEE, MMMM d, yyyy 'at' h:mm a", java.util.Locale.US).format(java.util.Date()) + ". Only use it when the time or date is really needed, never bring it up on your own. The user's time zone is " + java.util.TimeZone.getDefault().id + ", which tells you roughly where they live: use it when a place name could mean several places, and never bring it up on your own."
 
 private fun partsText(j: JSONObject?): String = j?.optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")?.objs()
     ?.filter { !it.optBoolean("thought") }?.joinToString("") { it.optString("text") } ?: ""

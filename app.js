@@ -2488,7 +2488,7 @@ async function zFetch(body) {
   const tok = data && data.session ? data.session.access_token : null;
   return fetch(SB_URL + "/functions/v1/zenith", { method: "POST", headers: { "content-type": "application/json", apikey: SB_KEY, ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: JSON.stringify(body) , signal: AbortSignal.timeout ? AbortSignal.timeout(body.stream ? 90000 : 25000) : undefined });
 }
-const zNow = s => s + " Never use line breaks. Write everything as one paragraph. Current local time: " + new Date().toLocaleString([], { dateStyle: "full", timeStyle: "short" }) + ". Only use it when the time or date is really needed, never bring it up on your own.";
+const zNow = s => s + " Never use line breaks. Write everything as one paragraph. Current local time: " + new Date().toLocaleString([], { dateStyle: "full", timeStyle: "short" }) + ". Only use it when the time or date is really needed, never bring it up on your own. The user's time zone is " + Intl.DateTimeFormat().resolvedOptions().timeZone + ", which tells you roughly where they live: use it when a place name could mean several places, and never bring it up on your own.";
 async function zStream(history, onText) {
   const r = await zFetch({ system: zNow(ZSYS), history, stream: true });
   if (!r.ok) throw new Error(await r.text());

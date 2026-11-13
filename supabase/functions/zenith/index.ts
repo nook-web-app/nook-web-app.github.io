@@ -59,7 +59,7 @@ const CALL_ME = {
   name: "call_me",
   description: "Phone call the user (ring their phone). Use it when the user asks you to call them (call me, ring me, can you call me, call me in 10 minutes) or says yes to a call you offered. Never say you cannot call.",
   parameters: { type: "OBJECT", properties: {
-    minutes: { type: "NUMBER", description: "In how many minutes to call. Use 1 for now or soon, or the number of minutes the user asked for." },
+    minutes: { type: "NUMBER", description: "In how many minutes to call. Use 1 for now, soon or yes (the phone rings within seconds), or the number of minutes the user asked for." },
     reason: { type: "STRING", description: "A few words on why, like: he asked me to call" },
   }, required: ["minutes"] },
 };
@@ -71,9 +71,9 @@ async function planCall(c: CallAsk): Promise<number> {
   if (!o) return 0;
   const owner = o.user_id as string;
   const reason = c.reason ? "he asked you to call him: " + c.reason : "he asked you to call him";
-  // within a minute and a half the phone rings from here, otherwise the minute job rings it when the time comes
+  // "now" or "soon" (a minute and a half or less) rings from here after a few seconds, so his message arrives first and the phone rings right after
   if (c.minutes <= 1.5) {
-    const wait = Math.max(5, Math.round(c.minutes * 60) - 5);
+    const wait = 4;
     // deno-lint-ignore no-explicit-any
     const rt = (globalThis as any).EdgeRuntime;
     const go = async () => { await new Promise((res) => setTimeout(res, wait * 1000)); await ringPhone(admin, owner, reason); };
@@ -382,7 +382,7 @@ Deno.serve(async (req) => {
     let got = await gemini(key, system + (stream ? HUMAN_HELP : "") + SEARCH_HELP, body.history, stream, true);
     if (got.call) {
       const mins = await planCall(got.call);
-      const note = "(The phone call is arranged: it will ring his phone in about " + (mins || 1) + " minute" + (mins === 1 ? "" : "s") + ". Tell him so in your own short style. Do not use any tool now.)";
+      const note = "(The phone call is arranged: it will ring his phone " + (mins <= 1 ? "in a few seconds" : "in about " + mins + " minutes") + ". Tell him so in your own short style. Do not use any tool now.)";
       if (last && Array.isArray(last.parts)) last.parts.push({ text: note });
       got = await gemini(key, system + (stream ? HUMAN_HELP : ""), body.history, stream, false);
     }

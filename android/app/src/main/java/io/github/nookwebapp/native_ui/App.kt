@@ -93,6 +93,10 @@ fun NookApp(app: AppState) {
                 ToastHost(app)
                 ClaudeFxLayer(app)
                 // Zenith is calling: the ring screen is part of the app, so Answer turns it into the call without anything opening
+                // the keyboard goes away when a call comes in or starts
+                val kb = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+                val fm = androidx.compose.ui.platform.LocalFocusManager.current
+                LaunchedEffect(app.call != null) { if (app.call != null) { kb?.hide(); fm.clearFocus() } }
                 val ringS = app.call?.takeIf { it.ringing }
                 if (ringS != null) {
                     val rc = androidx.compose.ui.platform.LocalContext.current

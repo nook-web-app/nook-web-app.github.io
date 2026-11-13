@@ -152,6 +152,7 @@ class MainActivity : ComponentActivity() {
         app.foreground = true
         // the kept connections are only dropped after a real break (a short trip to a picker keeps them warm)
         if (!was && System.currentTimeMillis() - bgAt > 60_000) Sb.dropConnections()
+        if (app.signedIn) runCatching { app.importZenTexts() }
         if (!was && app.signedIn) {
             // the feed no longer waits for the ban and notice checks: they run side by side
             app.on.feedTries = 0
@@ -227,6 +228,7 @@ class MainActivity : ComponentActivity() {
                 app.prewarmCall(i.getStringExtra("reason") ?: "")
                 return@let
             }
+            if (v == "ztext") { (app.importZenTexts() ?: app.store.chats.filter { it.zc }.maxByOrNull { it.t }?.id)?.let { app.go(Route.Conv(it)) }; return@let }
             if (v == "notifs") app.go(Route.Notifs) else if (v == "call") app.openCall() else if (v == "answer") { IncomingCall.clear(this); app.startCall(i.getStringExtra("reason") ?: "") } else if (v.startsWith("zen:")) app.go(Route.Conv(v.substring(4))) else if (v.startsWith("dm:") && Regex("^[0-9a-f-]{36}$", RegexOption.IGNORE_CASE).matches(v.substring(3))) app.on.openDm(v.substring(3))
             else if (v.startsWith("post:") && Regex("^[0-9a-f-]{36}$", RegexOption.IGNORE_CASE).matches(v.substring(5))) app.on.openNotePost(v.substring(5))
             else if (v.startsWith("user:") && Regex("^[0-9a-f-]{36}$", RegexOption.IGNORE_CASE).matches(v.substring(5))) app.go(Route.User(v.substring(5)))

@@ -433,3 +433,37 @@ fun Online.saveZen(pfp: String?, banner: String?, blurred: Boolean) {
     app.persist(); app.zenVersion++
     app.scope.launch { zenPushProfile(clearA, clearB); zenSync() }
 }
+
+// Zenith texts first: the message comes in by push, waits in a small file until the app is up, and is put in his chat (the newest one he is in,
+// or a new one called Zenith). Returns the id of that chat, or null when nothing was waiting.
+object ZenTexts {
+    private fun prefs(c: android.content.Context) = c.getSharedPreferences("ztexts", 0)
+    fun add(c: android.content.Context, id: String, text: String) {
+        val a = runCatching { JSONArray(prefs(c).getString("list", "[]")) }.getOrDefault(JSONArray())
+        a.put(JSONObject().put("id", id).put("text", text).put("t", System.currentTimeMillis()))
+        prefs(c).edit().putString("list", a.toString()).apply()
+    }
+    fun take(c: android.content.Context): List<JSONObject> {
+        val a = runCatching { JSONArray(prefs(c).getString("list", "[]")) }.getOrDefault(JSONArray())
+        if (a.length() > 0) prefs(c).edit().putString("list", "[]").apply()
+        return (0 until a.length()).mapNotNull { a.optJSONObject(it) }
+    }
+}
+fun AppState.importZenTexts(): String? {
+    val c = ctx ?: return null
+    if (!zOn()) return null
+    val list = ZenTexts.take(c)
+    if (list.isEmpty()) return null
+    var chat = store.chats.filter { it.zc || it.msgs.any { m -> m.ai } }.maxByOrNull { it.t } ?: store.chats.maxByOrNull { it.t }
+    if (chat == null) { chat = LChat(uid(), "Zenith", System.currentTimeMillis()); store.chats.add(chat) }
+    for (j in list) {
+        val id = j.optString("id").ifEmpty { uid() }
+        if (chat.msgs.none { it.id == id }) chat.msgs.add(LMsg(id, j.optString("text"), j.optLong("t", System.currentTimeMillis()), emptyList(), ai = true))
+        chat.t = maxOf(chat.t, j.optLong("t", System.currentTimeMillis()))
+    }
+    chat.zc = true
+    persist()
+    on.zenSyncSoon()
+    zenVersion++
+    return chat.id
+}

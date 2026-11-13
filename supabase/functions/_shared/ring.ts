@@ -34,3 +34,19 @@ export async function warnPhone(admin: SupabaseClient, owner: string): Promise<v
     });
   } catch { /* only a heads up */ }
 }
+
+// a text from Zenith that starts a chat: the phone puts it in the chat and shows it as a notification
+export async function textPhone(admin: SupabaseClient, owner: string, text: string): Promise<boolean> {
+  try {
+    const { data: secret } = await admin.rpc("nook_purge_secret");
+    if (typeof secret !== "string" || !secret) return false;
+    const r = await fetch(Deno.env.get("SUPABASE_URL")! + "/functions/v1/send-push", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-purge-secret": secret },
+      body: JSON.stringify({ ztext: { user_id: owner, text: text.slice(0, 300) } }),
+      signal: AbortSignal.timeout(20000),
+    });
+    const j = await r.json().catch(() => ({}));
+    return r.ok && Number(j.sent) > 0;
+  } catch { return false; }
+}

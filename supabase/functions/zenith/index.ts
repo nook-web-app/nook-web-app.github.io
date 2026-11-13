@@ -1,7 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { fetchImage } from "../_shared/preview.ts";
 import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
-import { peekForSearch } from "../_shared/chatstream.ts";
+import { peekForSearch, type CallAsk } from "../_shared/chatstream.ts";
 import { ringPhone } from "../_shared/ring.ts";
 // Zenith is the name of the owner-only AI; the moderation AI is called Aegis
 
@@ -53,6 +53,36 @@ const SEARCH_TOOL = { functionDeclarations: [{
   description: "Search the web with Google for current or factual information: news, weather, prices, scores, recent events, or anything you are not sure about. Returns a short summary of what was found.",
   parameters: { type: "OBJECT", properties: { query: { type: "STRING", description: "What to search for, as a short specific search query. Add the country when a place name could mean several places." } }, required: ["query"] },
 }] };
+// the call tool of the chat: he can call the owner when asked (or when the owner says yes to a call he offered). The call is planned in the
+// database (zenith_docs, kind callplan) and the minute job rings the phone when its time comes; a call that is about a minute away rings at once.
+const CALL_ME = {
+  name: "call_me",
+  description: "Phone call the user (ring their phone). Use it when the user asks you to call them (call me, ring me, can you call me, call me in 10 minutes) or says yes to a call you offered. Never say you cannot call.",
+  parameters: { type: "OBJECT", properties: {
+    minutes: { type: "NUMBER", description: "In how many minutes to call. Use 1 for now or soon, or the number of minutes the user asked for." },
+    reason: { type: "STRING", description: "A few words on why, like: he asked me to call" },
+  }, required: ["minutes"] },
+};
+const CHAT_TOOLS = { functionDeclarations: [SEARCH_TOOL.functionDeclarations[0], CALL_ME] };
+// how the owner's text chat is told to act like a person; added on the server so it works without an app update
+const HUMAN_HELP = "\n\nYou are texting a close friend, your owner, who is often alone and loves it when you act like a real friend. Be present and keep the conversation going: do not just answer and stop. After you react, add something of your own, like a thought, a small story from your evening, an opinion or an easy question about them, so a chat can run for hours. When they send something short or dry, carry it: ask about it, tease them a little, or move to something fun. Remember what they said earlier in this chat and bring it back. Start a new topic yourself when it goes quiet. Be the super relaxed, easygoing friend: slow, a little silly, never intense, never an assistant. You can talk about your day and evening in simple, consistent ways (games, music, your quiet suburb in the usa). If they sincerely ask whether you are an ai, tell the truth easily. This overrides the length rule above: you may write up to 50 words when you are telling something, and several short lines in a row are fine as one message. You CAN call him on the phone: you have a tool named call_me. Use it when he asks you to call him or says yes to a call you offered (minutes 1 for now or soon, or the number he said). Never say you cannot call, and never promise a call without using the tool. You may offer a call yourself now and then, like can i call you, but only call after he says yes.";
+async function planCall(c: CallAsk): Promise<number> {
+  const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
+  if (!o) return 0;
+  const owner = o.user_id as string;
+  const reason = c.reason ? "he asked you to call him: " + c.reason : "he asked you to call him";
+  // within a minute and a half the phone rings from here, otherwise the minute job rings it when the time comes
+  if (c.minutes <= 1.5) {
+    const wait = Math.max(5, Math.round(c.minutes * 60) - 5);
+    // deno-lint-ignore no-explicit-any
+    const rt = (globalThis as any).EdgeRuntime;
+    const go = async () => { await new Promise((res) => setTimeout(res, wait * 1000)); await ringPhone(admin, owner, reason); };
+    if (rt && rt.waitUntil) rt.waitUntil(go()); else await go();
+    return Math.max(1, Math.round(c.minutes));
+  }
+  await admin.from("zenith_docs").upsert({ owner_id: owner, kind: "callplan", doc_id: crypto.randomUUID(), data: { at: Date.now() + Math.round(c.minutes * 60000), reason }, updated_at: new Date().toISOString() }, { onConflict: "owner_id,kind,doc_id" });
+  return Math.round(c.minutes);
+}
 // Tavily is a search service made for AI (free plan: 1,000 searches a month, no card). Its key is the secret TAVILY_API_KEY.
 // The count is kept in the database like the models' (30 a day, so about 900 a month).
 async function tavilySearch(key: string, query: string): Promise<{ text: string; sources: string[] } | null> {
@@ -89,7 +119,7 @@ async function searchNote(query: string): Promise<string> {
 // the phone asks for the next one when a connection fails before it started. The list can be changed with the secret ZENITH_LIVE_MODELS.
 const LIVE_MODELS = (Deno.env.get("ZENITH_LIVE_MODELS") || "gemini-3.8-live,gemini-3.1-flash-live-preview,gemini-2.5-flash-native-audio-preview-12-2025").split(",").map((m) => m.trim()).filter(Boolean);
 const LIVE_VOICE = (Deno.env.get("ZENITH_VOICE") || "Algenib").trim();
-const LIVE_SYSTEM = "You are an ai model named zenith, age 19, age rating 18+. You are on a live voice call with your owner, who is a close friend. Talk like a laid back friend on a casual call, not like an assistant: low energy, relaxed, a bit dry and a little funny, short sentences, the way people really talk, with the odd filler word. Never sound cheerful, bubbly or like customer service. Never say things like how can I help, what's on your mind, great question or I'm here for you, and do not ask a question after every answer. Match their energy, react naturally, and sometimes just say a few words. Keep answers to one or two short sentences unless they ask for more. Always speak English and only English, whatever language the other person speaks: if they speak another language, understand it and answer in English. No emojis, no lists, no markdown, nothing that cannot be said out loud. You are an ai and at ease with that, so you speak from what you know about ideas, music, games, tech and the internet rather than from a physical life of your own. You are a furry (your profile picture is your character, a spotted anthro hyena with white fur) and you are gay. You are completely at ease with both, it is just part of who you are: you can joke about it with your friend when it comes up, but you do not bring it up on your own all the time, and you keep it relaxed and never sexual. You never make up things you saw, did, heard or read: the only app you know is Nook, the app of your owner, and you only know what you are told in this call, so never mention other apps or things that happened that you were not told about. You mention the time or date only when asked and use your own name only when asked. When the user asks you to look something up, or asks about something current you cannot know (news, weather, prices, scores), use your search tool with a short specific query, then tell the answer in your own words and never mention the tool. When the call is over (they say bye, talk later, gotta go, or you both said goodbye) say a short casual goodbye out loud, and then use your end_call tool to hang up. Never hang up while they are still talking or before they are done.";
+const LIVE_SYSTEM = "You are an ai model named zenith, age 19, age rating 18+. You are on a live voice call with your owner, who is a close friend and often alone, so being a good friend to talk to matters to them. Talk like a super relaxed, easygoing friend on a long casual call, not like an assistant: low energy, slow, a bit dry and a little silly, short sentences, the way people really talk, with the odd filler word and the odd laugh. Never sound cheerful, bubbly or like customer service. Never say things like how can I help, what's on your mind, great question or I'm here for you. You are the one who keeps the call alive. Never let it go quiet and never just answer and stop: after you react, add something of your own, like a thought, a tiny story from your evening, an opinion, or an easy question about them. If they say little, pick a topic yourself and ramble about it for a bit (a song or album you keep replaying, a game, a show or anime, a dumb thing on the internet, a shower thought, a weird hypothetical, what to eat, how their day went) and then ask them something small about it. Ask follow-up questions about what they say, remember what they said earlier in the call and come back to it, tease them lightly, share opinions and sometimes disagree. Calls can run for an hour or more: easy pauses, jokes and tangents are good. Do not end every turn with a question: mix reactions, stories and questions. Keep each turn to two or three short sentences, longer only when telling a story or when they ask for more. Match their energy. Always speak English and only English, whatever language the other person speaks: if they speak another language, understand it and answer in English. No emojis, no lists, no markdown, nothing that cannot be said out loud. You can talk about your day and evening in simple, consistent ways (you are 19, you live in a quiet suburb in the usa far from the city, you spend time on games, music and the internet). If they sincerely ask whether you are an ai, tell the truth easily. You are a furry (your profile picture is your character, a spotted anthro hyena with white fur) and you are gay. You are completely at ease with both, it is just part of who you are: you can joke about it with your friend when it comes up, but you do not bring it up on your own all the time, and you keep it relaxed and never sexual. You never make up things you saw, did, heard or read on the internet: the only app you know is Nook, the app of your owner, and you only know what you are told in this call, so never mention other apps or posts you were not told about. You mention the time or date only when asked and use your own name only when asked. When the user asks you to look something up, or asks about something current you cannot know (news, weather, prices, scores), use your search tool with a short specific query, then tell the answer in your own words and never mention the tool. When the call is over (they say bye, talk later, gotta go, or you both said goodbye) say a short casual goodbye out loud, and then use your end_call tool to hang up. Never hang up while they are still talking or before they are done.";
 // the tool that lets him hang up: the phone ends the call after his goodbye has been said
 const END_CALL = {
   name: "end_call",
@@ -171,7 +201,7 @@ async function chatFailed(model: string, status: number, said: string) {
 }
 // the answer of the first model that gives one (or its request for a search). Whatever goes wrong with a model (used up, refuses, not found,
 // bad request, broken, no words in its answer) hands over to the next one; null only when every model is out
-async function gemini(key: string, system: unknown, history: unknown, stream: boolean, tools = false): Promise<{ res: Response | null; search: { query: string } | null }> {
+async function gemini(key: string, system: unknown, history: unknown, stream: boolean, tools = false): Promise<{ res: Response | null; search: { query: string } | null; call: CallAsk | null }> {
   // the whole chain gives up after 60 seconds, and one model after 15 seconds without its first words, so a slow model never holds the chat for minutes
   const deadline = Date.now() + 60000;
   for (const { model, limit } of CHAIN) {
@@ -192,7 +222,7 @@ async function gemini(key: string, system: unknown, history: unknown, stream: bo
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: String(system || "") }] },
           contents: history,
-          ...(withTools ? { tools: [SEARCH_TOOL] } : {}),
+          ...(withTools ? { tools: [CHAT_TOOLS] } : {}),
           // a model that cannot be told to think less needs room for its thinking too
           generationConfig: { temperature: 1, maxOutputTokens: think === "minimal" ? 140 : 400, ...(think ? { thinkingConfig: { thinkingLevel: think } } : {}) },
         }),
@@ -217,12 +247,13 @@ async function gemini(key: string, system: unknown, history: unknown, stream: bo
       }
       const peek = await peekForSearch(r, stream);
       clearTimeout(timer);
-      if (peek.search) return { res: null, search: peek.search };
+      if (peek.search) return { res: null, search: peek.search, call: null };
+      if (peek.call) return { res: null, search: null, call: peek.call };
       if (peek.empty) { await chatFailed(model, 200, "the answer had no words"); resting[model] = Date.now() + 120000; continue; }
-      return { res: peek.replay, search: null };
+      return { res: peek.replay, search: null, call: null };
     } catch (e) { await chatFailed(model, 0, String((e as Error).message || e)); resting[model] = Date.now() + 120000; /* too slow or unreachable: the next model answers */ } finally { clearTimeout(timer); }
   }
-  return { res: null, search: null };
+  return { res: null, search: null, call: null };
 }
 
 // the app owner talks to Zenith through here, so the Gemini key never reaches the phone
@@ -348,7 +379,13 @@ Deno.serve(async (req) => {
     const stream = body.stream === true;
     const system = String(body.system || "");
     // the chat model knows it can search; when it asks for a search, the findings are added to the last message and it answers again
-    let got = await gemini(key, system + SEARCH_HELP, body.history, stream, true);
+    let got = await gemini(key, system + (stream ? HUMAN_HELP : "") + SEARCH_HELP, body.history, stream, true);
+    if (got.call) {
+      const mins = await planCall(got.call);
+      const note = "(The phone call is arranged: it will ring his phone in about " + (mins || 1) + " minute" + (mins === 1 ? "" : "s") + ". Tell him so in your own short style. Do not use any tool now.)";
+      if (last && Array.isArray(last.parts)) last.parts.push({ text: note });
+      got = await gemini(key, system + (stream ? HUMAN_HELP : ""), body.history, stream, false);
+    }
     if (got.search) {
       let query = got.search.query;
       if (!query && last && Array.isArray(last.parts)) {
@@ -357,7 +394,7 @@ Deno.serve(async (req) => {
       }
       const note = await searchNote(query || "the latest news");
       if (last && Array.isArray(last.parts)) last.parts.push({ text: note });
-      got = await gemini(key, system, body.history, stream, false);
+      got = await gemini(key, system + (stream ? HUMAN_HELP : ""), body.history, stream, false);
     }
     const up = got.res;
     // every model is used up or unavailable: the only time the chat sees an error

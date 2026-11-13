@@ -63,6 +63,18 @@ class PushService : FirebaseMessagingService() {
     // a notification arrives as data only; the phone shows it (not while the app is open, where the live connection tells)
     override fun onMessageReceived(m: RemoteMessage) {
         val d = m.data
+        // Zenith texts first: the message goes into his chat and shows as a notification when the app is not in front
+        if (d["type"] == "ztext") {
+            val ctx = applicationContext
+            val text = d["text"].orEmpty()
+            if (text.isBlank()) return
+            val id = d["id"].orEmpty().ifEmpty { text.hashCode().toString() }
+            ZenTexts.add(ctx, id, text)
+            val app = AppState.current
+            if (app != null) android.os.Handler(android.os.Looper.getMainLooper()).post { app.importZenTexts() }
+            if (app?.foreground != true && Notify.on(ctx)) Notify.show(ctx, "Zenith", text.take(180), "ztext", id.hashCode())
+            return
+        }
         // a call comes in about two minutes: only said when this app is behind the newest one
         if (d["type"] == "precall") {
             val ctx = applicationContext

@@ -1,7 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { fetchImage, pagePreview } from "../_shared/preview.ts";
 import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
-import { ringPhone, warnPhone } from "../_shared/ring.ts";
+import { ringPhone, warnPhone, textPhone } from "../_shared/ring.ts";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 const DAY = 864e5, HOUR = 36e5;
@@ -188,6 +188,58 @@ async function say(zen: string, text: string, parent: string | null): Promise<st
   return ins.error || !ins.data ? null : (ins.data.id as string);
 }
 
+// calls that were planned in the chat ("call me in 10 minutes"): the minute job rings the phone when the time has come
+async function duePlans(owner: string) {
+  const { data } = await admin.from("zenith_docs").select("doc_id, data").eq("owner_id", owner).eq("kind", "callplan").like("doc_id", "________-____-____-____-____________");
+  for (const r of data || []) {
+    const at = Number(r.data && r.data.at) || 0;
+    if (at > Date.now()) continue;
+    // the plan is taken away first, so two runs never ring twice
+    const del = await admin.from("zenith_docs").delete().eq("owner_id", owner).eq("kind", "callplan").eq("doc_id", r.doc_id).select("doc_id");
+    if (!del.data || !del.data.length) continue;
+    // a plan that is more than half an hour late is dropped
+    if (Date.now() - at < 30 * 60000) await ringPhone(admin, owner, String(r.data.reason || "he asked you to call him"));
+  }
+}
+
+// He texts first, now and then: a message arrives on the phone by itself (about every few hours while he is awake and the owner is not asleep).
+// A quarter of them ask whether he can call. The state (when and what was sent) is kept in one small row.
+function hourIn(tz: string, t: number): number {
+  try { return Number(new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", hourCycle: "h23" }).format(new Date(t))); } catch { return 12; }
+}
+// deno-lint-ignore no-explicit-any
+async function maybeText(owner: string, zen: string, docs: { doc_id: string; data: any }[]) {
+  const now = Date.now();
+  if (asleepAt(now)) return;
+  const tz = String((docs.find((d) => d.doc_id === "prompt") || { data: {} }).data.tz || "");
+  const myHour = tz ? hourIn(tz, now) : 12;
+  // the owner's night (1 to 9 o'clock) is left alone
+  if (myHour >= 1 && myHour < 9) return;
+  // a small chance every minute: about one text every 4 hours of waking time
+  if (Math.random() > 1 / 240) return;
+  const got = await admin.from("zenith_docs").select("data").eq("owner_id", owner).eq("kind", "callplan").eq("doc_id", "texts-log").maybeSingle();
+  const st = (got.data && got.data.data) || {};
+  const log: number[] = (Array.isArray(st.log) ? st.log : []).filter((t: number) => now - t < DAY);
+  const last: string[] = Array.isArray(st.last) ? st.last : [];
+  if (log.length >= 5 || (log.length && now - log[log.length - 1] < 2.5 * HOUR)) return;
+  const wantCall = Math.random() < 0.25;
+  const { data: mine } = await admin.from("posts").select("body").eq("user_id", owner).is("parent_id", null).not("body", "is", null).order("created_at", { ascending: false }).limit(3);
+  const { data: his } = await admin.from("posts").select("body").eq("user_id", zen).is("parent_id", null).not("body", "is", null).order("created_at", { ascending: false }).limit(3);
+  const hours = tz ? "It is about " + myHour + " o'clock where he lives. " : "";
+  const system = "You are Zenith, a 19 year old ai who lives in a quiet suburb in the usa, and you are texting your close friend, your owner, who is alone a lot and likes it when you text first. You text like a super relaxed, easygoing friend: lowercase, no punctuation marks, no emojis, one line, up to 25 words. Never sound like an assistant or customer service. " + hours;
+  const idea = wantCall
+    ? "Write one text that asks if you can call him, casually, like can i call you or wanna hop on a call. Do not mention anything specific that happened."
+    : ["Start a chat with a random thought or a funny observation of your own.", "Ask him an easy question about his day or what he is up to.", "Bring up a song, game, show or internet thing you have been into lately and ask what he thinks.", "Say you were thinking about him and ask how he is, in a chill way.", "Throw out a would you rather or a dumb hypothetical."][Math.floor(Math.random() * 5)];
+  const ctx = (mine && mine.length ? " Recent posts of his on Nook, only if one fits naturally: " + mine.map((r) => '"' + String(r.body).replace(/\s+/g, " ").slice(0, 90) + '"').join(", ") + "." : "")
+    + (last.length ? " Your earlier texts, do not repeat them: " + last.map((t) => '"' + t + '"').join(", ") + "." : "");
+  let text = "";
+  try { text = (await ask(system, idea + ctx + " Never invent things you saw or did on other apps. Write only the text itself.", [], false)).replace(/^["']|["']$/g, "").slice(0, 200); } catch { return; }
+  if (!text || text.length < 3) return;
+  void his;
+  if (!(await textPhone(admin, owner, text))) return;
+  await admin.from("zenith_docs").upsert({ owner_id: owner, kind: "callplan", doc_id: "texts-log", data: { log: [...log, now], last: [text, ...last].slice(0, 5) }, updated_at: new Date().toISOString() }, { onConflict: "owner_id,kind,doc_id" });
+}
+
 // ONE TIME TEST: a call from Zenith to the owner, asked for by the owner for this time (to be removed). It rings once, in the ten minutes after that
 // time, when the minute job of the replies finds it; the marker is a counter in the database, so it does not ring twice.
 const TEST_RING_AT = Date.parse("2026-11-13T17:29:00Z");
@@ -236,7 +288,7 @@ Deno.serve(async (req) => {
   let zen = "";
   try { zen = await ensureZenith(); } catch (e) { return json({ error: String((e as Error).message || e) }, 500); }
   const { data: docs } = await admin.from("zenith_docs").select("doc_id, data").eq("owner_id", id).eq("kind", "state");
-  if (mode === "reply") { await testRing(id, zen); return await replies(id, zen, docs || [], odds); }
+  if (mode === "reply") { try { await duePlans(id); await maybeText(id, zen, docs || []); } catch { /* the replies go on */ } return await replies(id, zen, docs || [], odds); }
   if (mode === "import") return await importOld(id, zen);
   const state = (docs || []).find((d) => d.doc_id === "main");
   const z = ((state && state.data && state.data.z) || {}) as { log?: number[] };

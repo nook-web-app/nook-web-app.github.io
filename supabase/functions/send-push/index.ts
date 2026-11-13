@@ -82,7 +82,7 @@ Deno.serve(async (req) => {
   if (!secretCache || !same(secretCache, got)) return json({ error: "forbidden" }, 403);
   if (!(await setup())) return json({ error: "push keys missing" }, 500);
 
-  let body: { notification_id?: string; call?: { user_id?: string; reason?: string }; precall?: { user_id?: string } };
+  let body: { notification_id?: string; call?: { user_id?: string; reason?: string }; precall?: { user_id?: string }; ztext?: { user_id?: string; text?: string } };
   try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
   if (!body || typeof body !== "object") return json({ error: "bad json" }, 400);
   // Zenith calls: a push that makes the phone ring for 30 seconds (it is useless after that, so it is not kept)
@@ -92,6 +92,17 @@ Deno.serve(async (req) => {
     const { data: toks } = await admin.from("fcm_tokens").select("token").eq("user_id", uid);
     if (!toks || !toks.length) return json({ sent: 0 });
     const r = await sendFcm(toks, { type: "call", title: "Zenith", body: "Zenith is calling", reason: String(body.call.reason || "").slice(0, 400), id: crypto.randomUUID() }, "30s");
+    if (r.dead.length) await admin.from("fcm_tokens").delete().in("token", r.dead);
+    return json({ sent: r.sent });
+  }
+  // Zenith texts first: the phone adds it to the chat and shows it
+  if (body.ztext && typeof body.ztext === "object") {
+    const uid = String(body.ztext.user_id || "");
+    const text = String(body.ztext.text || "").trim().slice(0, 300);
+    if (!/^[0-9a-f-]{36}$/i.test(uid) || !text) return json({ error: "bad request" }, 400);
+    const { data: toks } = await admin.from("fcm_tokens").select("token").eq("user_id", uid);
+    if (!toks || !toks.length) return json({ sent: 0 });
+    const r = await sendFcm(toks, { type: "ztext", title: "Zenith", body: text, text, id: crypto.randomUUID() }, "86400s");
     if (r.dead.length) await admin.from("fcm_tokens").delete().in("token", r.dead);
     return json({ sent: r.sent });
   }

@@ -66,6 +66,11 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
     // when the sound that was handed to the speaker will have been played: while it plays the microphone is not sent (on the speaker his own voice
     // would come back through it, be taken for the person talking, and stop him every two seconds)
     @Volatile private var playUntil = 0L
+    // a quiet call is kept alive: after a while of nobody speaking he brings something up himself (twice in a row at most, so a person who left is not talked at)
+    @Volatile private var lastActivity = System.currentTimeMillis()
+    @Volatile private var nudges = 0
+    @Volatile private var useOther = false
+    private var quietLoop = false
 
     fun start() { app.scope.launch(Dispatchers.IO) { connect() } }
 
@@ -154,10 +159,10 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
                 if (d.optString("mimeType").startsWith("audio/")) speak(d.optString("data"))
             }
         }
-        sc.optJSONObject("inputTranscription")?.optString("text")?.takeIf { it.isNotEmpty() }?.let { caption("You", it) }
+        sc.optJSONObject("inputTranscription")?.optString("text")?.takeIf { it.isNotEmpty() }?.let { nudges = 0; lastActivity = System.currentTimeMillis(); caption("You", it) }
         sc.optJSONObject("outputTranscription")?.optString("text")?.takeIf { it.isNotEmpty() }?.let { caption("Zenith", it) }
         if (sc.optBoolean("interrupted")) { flush(); ui { s.phase = CallPhase.Listening }; closed = true }
-        if (sc.optBoolean("turnComplete")) { closed = true; ui { if (s.phase == CallPhase.Speaking || s.phase == CallPhase.Thinking) s.phase = CallPhase.Listening } }
+        if (sc.optBoolean("turnComplete")) { lastActivity = System.currentTimeMillis(); closed = true; ui { if (s.phase == CallPhase.Speaking || s.phase == CallPhase.Thinking) s.phase = CallPhase.Listening } }
     }
 
     private fun ready() {
@@ -173,6 +178,20 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
             }
         }
         if (!holding) ui { s.phase = CallPhase.Listening; s.live() }
+        if (!quietLoop) {
+            quietLoop = true
+            app.scope.launch(Dispatchers.IO) {
+                while (!stopped) {
+                    kotlinx.coroutines.delay(2500)
+                    val now = System.currentTimeMillis()
+                    if (open && !holding && !s.muted && nudges < 2 && now - lastActivity > 16_000 && now > playUntil + 2000) {
+                        nudges++
+                        lastActivity = now
+                        sendText("(The call has gone quiet for a while. Say something to keep it going like a relaxed friend would: bring up a topic of your own or ask them something small. Do not mention this note.)")
+                    }
+                }
+            }
+        }
     }
 
     // Answer: the call that was prepared while it rang goes live, and what he already said is played at once
@@ -192,11 +211,17 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
         val why = s.reason
         val text = if (why == null) "The call just connected. You speak first: say a quick casual hey, like a friend picking up the phone, nothing more, then wait."
         else "You called your friend and they just picked up. Say a quick casual hey and say why you called: " + (why.ifBlank { "no real reason, you just felt like talking" }) + ". Keep it short, like a real friend would, then wait."
-        val asTurn = modelName.contains("2.5") != other
+        if (other) useOther = true
+        sendText(text)
+        ui { if (s.phase == CallPhase.Listening) s.phase = CallPhase.Thinking }
+    }
+
+    // a text turn for the model: the newer models take it as realtime input, the 2.5 ones as a turn of the conversation
+    private fun sendText(text: String) {
+        val asTurn = modelName.contains("2.5") != useOther
         val msg = if (asTurn) JSONObject().put("clientContent", JSONObject().put("turns", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", text))))).put("turnComplete", true))
         else JSONObject().put("realtimeInput", JSONObject().put("text", text))
         ws?.send(msg.toString())
-        ui { if (s.phase == CallPhase.Listening) s.phase = CallPhase.Thinking }
     }
 
     // the words of the call, in the captions: chunks of the same person join into one line until a turn ends
@@ -212,6 +237,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
         if (b64.isEmpty()) return
         val pcm = runCatching { Base64.decode(b64, Base64.DEFAULT) }.getOrNull() ?: return
         spoke = true
+        lastActivity = System.currentTimeMillis()
         out.offer(pcm)
         val now = System.currentTimeMillis()
         playUntil = maxOf(playUntil, now) + pcm.size / 2 * 1000L / 24000

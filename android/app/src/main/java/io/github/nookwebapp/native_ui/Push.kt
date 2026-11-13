@@ -63,6 +63,8 @@ class PushService : FirebaseMessagingService() {
     // a notification arrives as data only; the phone shows it (not while the app is open, where the live connection tells)
     override fun onMessageReceived(m: RemoteMessage) {
         val d = m.data
+        // Zenith is calling: it rings, also when the app is open
+        if (d["type"] == "call") { IncomingCall.show(applicationContext, d["reason"].orEmpty()); return }
         val id = d["id"].orEmpty()
         if (id.isNotEmpty() && id in Notify.seen(applicationContext)) return
         if (AppState.current?.foreground == true) return

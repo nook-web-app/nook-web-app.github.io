@@ -173,7 +173,9 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
 
     // he speaks first. The newer models take a text turn as realtime input, the 2.5 ones as a turn of the conversation; `other` is the second try
     private fun hello(other: Boolean) {
-        val text = "The call just connected. You speak first: say a quick casual hey, like a friend picking up the phone, nothing more, then wait."
+        val why = s.reason
+        val text = if (why == null) "The call just connected. You speak first: say a quick casual hey, like a friend picking up the phone, nothing more, then wait."
+        else "You called your friend and they just picked up. Say a quick casual hey and say why you called: " + (why.ifBlank { "no real reason, you just felt like talking" }) + ". Keep it short, like a real friend would, then wait."
         val asTurn = modelName.contains("2.5") != other
         val msg = if (asTurn) JSONObject().put("clientContent", JSONObject().put("turns", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", text))))).put("turnComplete", true))
         else JSONObject().put("realtimeInput", JSONObject().put("text", text))
@@ -213,6 +215,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
         for (i in 0 until calls.length()) {
             val fc = calls.optJSONObject(i) ?: continue
             val id = fc.optString("id"); val name = fc.optString("name")
+            if (name == "end_call") { hangUp(id, name); continue }
             val q = fc.optJSONObject("args")?.optString("query").orEmpty()
             ui { s.phase = CallPhase.Searching }
             app.scope.launch(Dispatchers.IO) {
@@ -223,6 +226,23 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
                 if (!stopped) ws?.send(resp.toString())
                 ui { if (s.phase == CallPhase.Searching) s.phase = CallPhase.Thinking }
             }
+        }
+    }
+
+    // he hung up: the tool is answered, and the call ends when his goodbye has been played (a goodbye that comes after the tool is waited for too)
+    private fun hangUp(id: String, name: String) {
+        val resp = JSONObject().put("toolResponse", JSONObject().put("functionResponses", JSONArray().put(
+            JSONObject().put("id", id).put("name", name).put("response", JSONObject().put("result", "ok")))))
+        ws?.send(resp.toString())
+        app.scope.launch(Dispatchers.IO) {
+            val start = System.currentTimeMillis()
+            // at least a moment for a goodbye that is still coming, at most ten seconds, and never while sound is still playing
+            while (!stopped && System.currentTimeMillis() - start < 10_000) {
+                kotlinx.coroutines.delay(200)
+                val now = System.currentTimeMillis()
+                if (now - start > 1500 && now > playUntil + 600) break
+            }
+            if (!stopped) ui { app.endCall() }
         }
     }
 

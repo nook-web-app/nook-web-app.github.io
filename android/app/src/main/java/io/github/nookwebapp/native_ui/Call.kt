@@ -110,7 +110,7 @@ enum class CallPhase(val label: String) {
 // a line of the captions; its words grow while it is being said
 class Cap(val id: Int, val who: String, text: String) { var text by mutableStateOf(text) }
 
-class CallSession(private val scope: CoroutineScope? = null, private val onLive: () -> Unit = {}) {
+class CallSession(private val scope: CoroutineScope? = null, private val onLive: () -> Unit = {}, val reason: String? = null) {
     var phase by mutableStateOf(CallPhase.Connecting)
     var seconds by mutableIntStateOf(0)
     var muted by mutableStateOf(false)
@@ -214,6 +214,7 @@ class CallService : Service() {
 // the End button of the notification
 class CallReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, i: Intent) {
+        if (i.action == "decline") { IncomingCall.clear(ctx); return }
         val app = AppState.current
         if (app != null) app.endCall() else runCatching { ctx.stopService(Intent(ctx, CallService::class.java)) }
     }

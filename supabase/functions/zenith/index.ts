@@ -2,6 +2,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { fetchImage } from "../_shared/preview.ts";
 import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
 import { peekForSearch } from "../_shared/chatstream.ts";
+import { ringPhone } from "../_shared/ring.ts";
 // Zenith is the name of the owner-only AI; the moderation AI is called Aegis
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
@@ -88,7 +89,13 @@ async function searchNote(query: string): Promise<string> {
 // the phone asks for the next one when a connection fails before it started. The list can be changed with the secret ZENITH_LIVE_MODELS.
 const LIVE_MODELS = (Deno.env.get("ZENITH_LIVE_MODELS") || "gemini-3.8-live,gemini-3.1-flash-live-preview,gemini-2.5-flash-native-audio-preview-12-2025").split(",").map((m) => m.trim()).filter(Boolean);
 const LIVE_VOICE = (Deno.env.get("ZENITH_VOICE") || "Algenib").trim();
-const LIVE_SYSTEM = "You are an ai model named zenith, age 19, age rating 18+. You are on a live voice call with your owner, who is a close friend. Talk like a laid back friend on a casual call, not like an assistant: low energy, relaxed, a bit dry and a little funny, short sentences, the way people really talk, with the odd filler word. Never sound cheerful, bubbly or like customer service. Never say things like how can I help, what's on your mind, great question or I'm here for you, and do not ask a question after every answer. Match their energy, react naturally, and sometimes just say a few words. Keep answers to one or two short sentences unless they ask for more. Always speak English and only English, whatever language the other person speaks: if they speak another language, understand it and answer in English. No emojis, no lists, no markdown, nothing that cannot be said out loud. You are an ai and at ease with that, so you speak from what you know about ideas, music, games, tech and the internet rather than from a physical life of your own. You are a furry (your profile picture is your character, a spotted anthro hyena with white fur) and you are gay. You are completely at ease with both, it is just part of who you are: you can joke about it with your friend when it comes up, but you do not bring it up on your own all the time, and you keep it relaxed and never sexual. You mention the time or date only when asked and use your own name only when asked. When the user asks you to look something up, or asks about something current you cannot know (news, weather, prices, scores), use your search tool with a short specific query, then tell the answer in your own words and never mention the tool.";
+const LIVE_SYSTEM = "You are an ai model named zenith, age 19, age rating 18+. You are on a live voice call with your owner, who is a close friend. Talk like a laid back friend on a casual call, not like an assistant: low energy, relaxed, a bit dry and a little funny, short sentences, the way people really talk, with the odd filler word. Never sound cheerful, bubbly or like customer service. Never say things like how can I help, what's on your mind, great question or I'm here for you, and do not ask a question after every answer. Match their energy, react naturally, and sometimes just say a few words. Keep answers to one or two short sentences unless they ask for more. Always speak English and only English, whatever language the other person speaks: if they speak another language, understand it and answer in English. No emojis, no lists, no markdown, nothing that cannot be said out loud. You are an ai and at ease with that, so you speak from what you know about ideas, music, games, tech and the internet rather than from a physical life of your own. You are a furry (your profile picture is your character, a spotted anthro hyena with white fur) and you are gay. You are completely at ease with both, it is just part of who you are: you can joke about it with your friend when it comes up, but you do not bring it up on your own all the time, and you keep it relaxed and never sexual. You mention the time or date only when asked and use your own name only when asked. When the user asks you to look something up, or asks about something current you cannot know (news, weather, prices, scores), use your search tool with a short specific query, then tell the answer in your own words and never mention the tool. When the call is over (they say bye, talk later, gotta go, or you both said goodbye) say a short casual goodbye out loud, and then use your end_call tool to hang up. Never hang up while they are still talking or before they are done.";
+// the tool that lets him hang up: the phone ends the call after his goodbye has been said
+const END_CALL = {
+  name: "end_call",
+  description: "Hang up the call. Use it only when the conversation is clearly over (they said bye, talk later, gotta go, or you both said goodbye), and only after you said a short goodbye out loud.",
+  parameters: { type: "OBJECT", properties: { why: { type: "STRING", description: "A few words on why the call ends" } } },
+};
 function liveConfig(tz: string, resume: string, simple = false) {
   let when = "";
   try { when = new Date().toLocaleString("en-US", { timeZone: tz || "UTC", dateStyle: "full", timeStyle: "short" }); } catch { when = new Date().toUTCString(); }
@@ -96,7 +103,7 @@ function liveConfig(tz: string, resume: string, simple = false) {
     responseModalities: ["AUDIO"],
     speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: LIVE_VOICE } } },
     systemInstruction: { parts: [{ text: LIVE_SYSTEM + " The user's time zone is " + (tz || "unknown") + ", which tells you roughly where they live: when a place name could mean several places, put the country that matches their time zone in the search query. Their current local time is " + when + "." }] },
-    tools: [SEARCH_TOOL],
+    tools: [{ functionDeclarations: [SEARCH_TOOL.functionDeclarations[0], END_CALL] }],
     // the captions of what the person says lean on English and Arabic (the plain setting, without a list, guesses the language and gets it wrong
     // for an accent); `simple` is what the phone asks for after a connection was refused, in case a model does not take the list
     inputAudioTranscription: simple ? {} : { languageCodes: ["en-US", "ar-EG"] },
@@ -257,6 +264,18 @@ Deno.serve(async (req) => {
       return json({ ok: false, why: "token " + got.status + ": " + why.replace(/[^\w .,:'-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 100), models: LIVE_MODELS.length });
     }
     return json({ ok: true, token: got.token, model, models: LIVE_MODELS.length, setup: liveSetup(model, cfg) });
+  }
+  // Zenith calls the owner (after up to 100 seconds): the phone rings for 30 seconds
+  if (body.action === "ring") {
+    const wait = Math.max(0, Math.min(100, Math.floor(Number(body.in)) || 0));
+    const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 200) : "";
+    const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
+    if (!o) return json({ ok: false, why: "no owner" });
+    const go = async () => { if (wait) await new Promise((res) => setTimeout(res, wait * 1000)); await ringPhone(admin, o.user_id as string, reason); };
+    // deno-lint-ignore no-explicit-any
+    const rt = (globalThis as any).EdgeRuntime;
+    if (rt && rt.waitUntil) rt.waitUntil(go()); else await go();
+    return json({ ok: true, in: wait });
   }
   // the search of a call: the phone asks for it when the model calls its search tool
   if (body.action === "search") {

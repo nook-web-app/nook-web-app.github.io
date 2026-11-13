@@ -54,7 +54,7 @@ async function fcmToken(): Promise<string | null> {
   return fcmTok.t;
 }
 // the phone builds the notification itself from this data (the words of a chat message are never sent)
-async function sendFcm(tokens: { token: string }[], data: Record<string, string>): Promise<{ sent: number; dead: string[] }> {
+async function sendFcm(tokens: { token: string }[], data: Record<string, string>, ttl = "3600s"): Promise<{ sent: number; dead: string[] }> {
   const at = await fcmToken();
   if (!at || !fcmSa) return { sent: 0, dead: [] };
   let sent = 0;
@@ -63,7 +63,7 @@ async function sendFcm(tokens: { token: string }[], data: Record<string, string>
     try {
       const r = await fetch("https://fcm.googleapis.com/v1/projects/" + fcmSa!.project_id + "/messages:send", {
         method: "POST", headers: { authorization: "Bearer " + at, "content-type": "application/json" },
-        body: JSON.stringify({ message: { token: t.token, data, android: { priority: "HIGH", ttl: "3600s" } } }),
+        body: JSON.stringify({ message: { token: t.token, data, android: { priority: "HIGH", ttl } } }),
       });
       if (r.ok) sent++;
       else if (r.status === 404 || r.status === 400) { const j = await r.json().catch(() => ({})); const st = JSON.stringify(j); if (/UNREGISTERED|INVALID_ARGUMENT|NOT_FOUND/.test(st)) dead.push(t.token); }
@@ -82,9 +82,19 @@ Deno.serve(async (req) => {
   if (!secretCache || !same(secretCache, got)) return json({ error: "forbidden" }, 403);
   if (!(await setup())) return json({ error: "push keys missing" }, 500);
 
-  let body: { notification_id?: string };
+  let body: { notification_id?: string; call?: { user_id?: string; reason?: string } };
   try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
   if (!body || typeof body !== "object") return json({ error: "bad json" }, 400);
+  // Zenith calls: a push that makes the phone ring for 30 seconds (it is useless after that, so it is not kept)
+  if (body.call && typeof body.call === "object") {
+    const uid = String(body.call.user_id || "");
+    if (!/^[0-9a-f-]{36}$/i.test(uid)) return json({ error: "bad id" }, 400);
+    const { data: toks } = await admin.from("fcm_tokens").select("token").eq("user_id", uid);
+    if (!toks || !toks.length) return json({ sent: 0 });
+    const r = await sendFcm(toks, { type: "call", title: "Zenith", body: "Zenith is calling", reason: String(body.call.reason || "").slice(0, 200), id: crypto.randomUUID() }, "30s");
+    if (r.dead.length) await admin.from("fcm_tokens").delete().in("token", r.dead);
+    return json({ sent: r.sent });
+  }
   const id = String(body.notification_id || "");
   if (!/^[0-9a-f-]{36}$/i.test(id)) return json({ error: "bad id" }, 400);
 

@@ -73,6 +73,11 @@ fun NookApp(app: AppState) {
                 // a tap on the time and the icons at the very top scrolls the page up
                 val topScope = rememberCoroutineScope()
                 Box(Modifier.fillMaxWidth().windowInsetsTopHeight(WindowInsets.statusBars).tap { topScope.launch { app.listStateFor(app.stack.size).toTop() } })
+                if (answerCover.value) {
+                    Box(Modifier.fillMaxSize().background(DarkColors.bg))
+                    val up = app.panels.any { it is Panel.Call }
+                    LaunchedEffect(up) { if (up) kotlinx.coroutines.delay(450) else kotlinx.coroutines.delay(4000); answerCover.value = false }
+                }
                 CallHost(app)
                 PanelHost(app)
                 DrawerHost(app)

@@ -130,6 +130,7 @@ class IncomingCallActivity : ComponentActivity() {
         val reason = intent.getStringExtra("reason").orEmpty()
         val answer = {
             IncomingCall.clear(this)
+            answerCover.value = true
             startActivity(Intent(this, MainActivity::class.java).putExtra("open", "answer").putExtra("reason", reason).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP))
             finish()
         }
@@ -201,3 +202,6 @@ fun openRingOver(ctx: android.content.Context, reason: String) {
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ runCatching { wm.removeView(v) } }, 4000)
     }
 }
+
+// shown from the moment Answer is pressed until the call screen is up, so the home page never shows in between
+val answerCover = androidx.compose.runtime.mutableStateOf(false)

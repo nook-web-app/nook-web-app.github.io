@@ -82,7 +82,7 @@ Deno.serve(async (req) => {
   if (!secretCache || !same(secretCache, got)) return json({ error: "forbidden" }, 403);
   if (!(await setup())) return json({ error: "push keys missing" }, 500);
 
-  let body: { notification_id?: string; call?: { user_id?: string; reason?: string } };
+  let body: { notification_id?: string; call?: { user_id?: string; reason?: string }; precall?: { user_id?: string } };
   try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
   if (!body || typeof body !== "object") return json({ error: "bad json" }, 400);
   // Zenith calls: a push that makes the phone ring for 30 seconds (it is useless after that, so it is not kept)
@@ -92,6 +92,16 @@ Deno.serve(async (req) => {
     const { data: toks } = await admin.from("fcm_tokens").select("token").eq("user_id", uid);
     if (!toks || !toks.length) return json({ sent: 0 });
     const r = await sendFcm(toks, { type: "call", title: "Zenith", body: "Zenith is calling", reason: String(body.call.reason || "").slice(0, 400), id: crypto.randomUUID() }, "30s");
+    if (r.dead.length) await admin.from("fcm_tokens").delete().in("token", r.dead);
+    return json({ sent: r.sent });
+  }
+  // a call is coming in about two minutes: the phone checks for an update itself and only then shows something
+  if (body.precall && typeof body.precall === "object") {
+    const uid = String(body.precall.user_id || "");
+    if (!/^[0-9a-f-]{36}$/i.test(uid)) return json({ error: "bad id" }, 400);
+    const { data: toks } = await admin.from("fcm_tokens").select("token").eq("user_id", uid);
+    if (!toks || !toks.length) return json({ sent: 0 });
+    const r = await sendFcm(toks, { type: "precall", title: "Zenith will call soon", body: "Zenith calls in about 2 minutes. Open Nook now if it asks to update.", id: crypto.randomUUID() }, "120s");
     if (r.dead.length) await admin.from("fcm_tokens").delete().in("token", r.dead);
     return json({ sent: r.sent });
   }

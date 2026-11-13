@@ -20,3 +20,17 @@ export async function ringPhone(admin: SupabaseClient, owner: string, reason: st
     return false;
   }
 }
+
+// a heads up some minutes before a call: the phone looks for an app update and only says something when there is one
+export async function warnPhone(admin: SupabaseClient, owner: string): Promise<void> {
+  try {
+    const { data: secret } = await admin.rpc("nook_purge_secret");
+    if (typeof secret !== "string" || !secret) return;
+    await fetch(Deno.env.get("SUPABASE_URL")! + "/functions/v1/send-push", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-purge-secret": secret },
+      body: JSON.stringify({ precall: { user_id: owner } }),
+      signal: AbortSignal.timeout(20000),
+    });
+  } catch { /* only a heads up */ }
+}

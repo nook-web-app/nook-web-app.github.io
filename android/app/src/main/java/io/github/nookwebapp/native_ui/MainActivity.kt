@@ -41,6 +41,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (intent?.getStringExtra("open") == "answer") answerCover.value = true
         enableEdgeToEdge()
         Photos.cacheDir = cacheDir
         Notify.channel(this)
@@ -139,6 +140,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         // before the app is built, boot picks the intent up
         setIntent(intent)
+        if (intent.getStringExtra("open") == "answer") answerCover.value = true
         if (this::app.isInitialized) app.scope.launch { take(intent) }
     }
 

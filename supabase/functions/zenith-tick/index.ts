@@ -1,7 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { fetchImage, pagePreview } from "../_shared/preview.ts";
 import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
-import { ringPhone } from "../_shared/ring.ts";
+import { ringPhone, warnPhone } from "../_shared/ring.ts";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 const DAY = 864e5, HOUR = 36e5;
@@ -190,20 +190,32 @@ async function say(zen: string, text: string, parent: string | null): Promise<st
 
 // ONE TIME TEST: a call from Zenith to the owner, asked for by the owner for this time (to be removed). It rings once, in the ten minutes after that
 // time, when the minute job of the replies finds it; the marker is a counter in the database, so it does not ring twice.
-const TEST_RING_AT = Date.parse("2026-11-13T16:46:00Z");
-// a reason for a call taken from what is really on his profile: one of his own recent posts or one of the owner's
-async function callReason(owner: string, zen: string): Promise<string> {
+const TEST_RING_AT = Date.parse("2026-11-13T17:15:00Z");
+// a reason for a call: mostly he just says hi; now and then one of the owner's recent posts on Nook that he finds interesting
+// (what it says and shows is read first, so he never makes anything up)
+async function callReason(owner: string, _zen: string): Promise<string> {
+  const HI = "you are just calling to say hi like a friend, nothing specific. Do not mention any post, app or event, and do not make anything up";
+  if (Math.random() < 0.7) return HI;
   try {
-    const get = async (u: string) => ((await admin.from("posts").select("body").eq("user_id", u).is("parent_id", null).not("body", "is", null).order("created_at", { ascending: false }).limit(8)).data || []).map((r) => String(r.body || "").replace(/\s+/g, " ").trim().slice(0, 110)).filter((t) => t.length > 8);
-    const [mine, his] = await Promise.all([get(zen), get(owner)]);
-    const pool = [...mine.map((t) => ["m", t]), ...his.map((t) => ["h", t])];
-    if (!pool.length) return "";
-    const [who, t] = pool[Math.floor(Math.random() * pool.length)];
-    return who === "m" ? "you called because of your own post: \"" + t + "\", bring it up like a friend would" : "you called because of his post: \"" + t + "\", bring it up like a friend would";
-  } catch { return ""; }
+    const rows = ((await admin.from("posts").select("id, body, media_url").eq("user_id", owner).is("parent_id", null).eq("mod_status", "safe").gt("created_at", new Date(Date.now() - 3 * DAY).toISOString()).order("created_at", { ascending: false }).limit(6)).data || []) as { id: string; body: string | null; media_url: string | null }[];
+    rows.sort(() => Math.random() - 0.5);
+    for (const p of rows.slice(0, 3)) {
+      const text = String(p.body || "").replace(/\s+/g, " ").trim();
+      if (!text && !p.media_url) continue;
+      const md = await mediaInfo(p.media_url).catch(() => null);
+      const v = await ask("You are Zenith, deciding whether this post by your friend is interesting enough to call him about. If it is random, low effort or boring, answer only NO. If it is interesting, answer YES: followed by one short sentence saying exactly what it says or shows, using only what you can read or see. Never guess.", "Caption: " + (text.slice(0, 500) || "(no text)") + (md ? md.note : ""), md ? md.pics : [], true);
+      if (/^yes/i.test(v)) {
+        const what = v.replace(/^yes:?\s*/i, "").slice(0, 170);
+        return ("you are calling because of his post on Nook" + (text ? ", captioned \"" + text.slice(0, 90) + "\"" : "") + ". What it is: " + what + ". Bring it up in your own words, talk only about this post, and never mention other apps or make anything up").slice(0, 400);
+      }
+    }
+  } catch { /* fall back to a plain hello */ }
+  return HI;
 }
 async function testRing(owner: string, zen: string) {
   const now = Date.now();
+  // two and a half minutes before: the phone checks by itself whether the app needs an update, and says so if it does
+  if (now >= TEST_RING_AT - 150000 && now < TEST_RING_AT && (await useModel(admin, "ring-warn-" + TEST_RING_AT, 1))) await warnPhone(admin, owner);
   if (now < TEST_RING_AT || now > TEST_RING_AT + 10 * 60000) return;
   if (!(await useModel(admin, "ring-test-" + TEST_RING_AT, 1))) return;
   await ringPhone(admin, owner, (await callReason(owner, zen)) || "come up with your own small random reason, like something that popped in your head");

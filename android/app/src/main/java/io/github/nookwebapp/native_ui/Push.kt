@@ -63,6 +63,14 @@ class PushService : FirebaseMessagingService() {
     // a notification arrives as data only; the phone shows it (not while the app is open, where the live connection tells)
     override fun onMessageReceived(m: RemoteMessage) {
         val d = m.data
+        // a call comes in about two minutes: only said when this app is behind the newest one
+        if (d["type"] == "precall") {
+            val ctx = applicationContext
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                if (Updater.latest(ctx).getOrNull() != null) runCatching { Notify.show(ctx, "Update Nook now", "Zenith calls in about 2 minutes. Open Nook to update first.", "update") }
+            }
+            return
+        }
         // Zenith is calling: it rings, also when the app is open
         if (d["type"] == "call") {
             val ctx = applicationContext

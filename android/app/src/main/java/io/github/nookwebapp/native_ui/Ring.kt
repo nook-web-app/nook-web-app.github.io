@@ -122,6 +122,26 @@ object CallWarm {
 // the ring screen: the whole screen, the app's colours, his picture, Answer and Decline. It is what a tap on the ringing notification opens, and
 // what opens by itself when the phone is locked (or the app is open).
 class IncomingCallActivity : ComponentActivity() {
+    private var tone: android.media.Ringtone? = null
+    private fun startRinging() {
+        runCatching {
+            tone = RingtoneManager.getRingtone(this, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))?.apply {
+                audioAttributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()
+                if (Build.VERSION.SDK_INT >= 28) isLooping = true
+                play()
+            }
+        }
+        runCatching {
+            val v = getSystemService(android.os.Vibrator::class.java)
+            if (v != null && v.hasVibrator()) v.vibrate(android.os.VibrationEffect.createWaveform(longArrayOf(0, 700, 500, 700, 500), 0))
+        }
+    }
+    private fun stopRinging() {
+        runCatching { tone?.stop() }; tone = null
+        runCatching { getSystemService(android.os.Vibrator::class.java)?.cancel() }
+    }
+    override fun onStop() { stopRinging(); super.onStop() }
+    override fun onDestroy() { stopRinging(); super.onDestroy() }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // on top of the lock screen, and the screen turns on
@@ -135,6 +155,10 @@ class IncomingCallActivity : ComponentActivity() {
             finish()
         }
         val decline = { IncomingCall.clear(this); AppState.current?.declineCall(); finish() }
+        // the screen is up, so it rings itself and the notification goes (two things on the screen at once looked wrong)
+        IncomingCall.clear(this)
+        startRinging()
+        window.decorView.postDelayed({ if (!isFinishing) finish() }, 30_000)
         setContent {
             val app = AppState.current
             CompositionLocalProvider(LocalNook provides DarkColors) {

@@ -288,14 +288,27 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
             val t = AudioTrack.Builder()
                 .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
                 .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(outRate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
-                .setBufferSizeInBytes(maxOf(minOut, outRate / 2)).setTransferMode(AudioTrack.MODE_STREAM).build()
+                .setBufferSizeInBytes(maxOf(minOut, outRate * 2)).setTransferMode(AudioTrack.MODE_STREAM).build()
             track = t
 
             playThread = Thread {
                 runCatching { t.play() }
+                // a short head start before each stretch of speech is played, so the small gaps of the network never reach the ear
+                var idle = true
                 while (!stopped) {
-                    val b = runCatching { out.poll(200, TimeUnit.MILLISECONDS) }.getOrNull() ?: continue
-                    runCatching { t.write(b, 0, b.size) }
+                    val b = runCatching { out.poll(200, TimeUnit.MILLISECONDS) }.getOrNull()
+                    if (b == null) { idle = true; continue }
+                    if (idle) {
+                        idle = false
+                        val first = ArrayList<ByteArray>(); first.add(b)
+                        var bytes = b.size
+                        val until = System.currentTimeMillis() + 350
+                        while (bytes < 17_000 && System.currentTimeMillis() < until && !stopped) {
+                            val n = runCatching { out.poll(60, TimeUnit.MILLISECONDS) }.getOrNull() ?: continue
+                            first.add(n); bytes += n.size
+                        }
+                        for (x in first) runCatching { t.write(x, 0, x.size) }
+                    } else runCatching { t.write(b, 0, b.size) }
                 }
                 runCatching { t.stop() }; runCatching { t.release() }
             }.apply { name = "nook-call-out"; isDaemon = true; start() }

@@ -1,5 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { fetchImage } from "../_shared/preview.ts";
+import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
 // Zenith is the name of the owner-only AI; the moderation AI is called Aegis
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
@@ -17,8 +18,6 @@ async function geminiKey(): Promise<string> {
   keyCache = { v: typeof data === "string" ? data : "", at: Date.now() };
   return keyCache.v;
 }
-const MODEL = Deno.env.get("ZENITH_MODEL") || "gemini-3.5-flash-lite";
-
 // link preview pictures are fetched here, so the phone never has to download them; https only, no addresses inside a network, small pictures only
 const PIC_TYPES = ["image/jpeg", "image/png", "image/webp"];
 async function fetchPic(u: string): Promise<{ inline_data: { mime_type: string; data: string } } | null> {
@@ -37,28 +36,52 @@ function json(body: unknown, status = 200): Response {
 // an owner check that was already done for this login is remembered for a few minutes, so a message does not wait for it again
 const okUntil = new Map<string, number>();
 
-// the answer comes straight from Gemini; when a model has no quota left (429) or is overloaded the next one in the list answers
-const MODELS = [MODEL, "gemini-3.1-flash-lite"];
-async function gemini(key: string, system: unknown, history: unknown, stream: boolean): Promise<Response> {
-  let last: Response | null = null;
-  for (const model of MODELS) {
+// The messages of the chat go down this list, best model first. Each one has a limit of requests a day (the free tier gives these 20,
+// so 19 leaves one spare); the count is kept in the database and starts again at midnight Pacific time, when Google's own count does.
+// A model that is used up for today, refuses, is not found or fails hands over to the next one without anybody seeing it. The chat
+// only gets an error when every model is out. The list can be changed with the secret ZENITH_CHAT_MODELS ("model:limit,model:limit").
+// gemini-3.7-flash is left out on purpose: it is deprecated and has no free quota.
+const CHAIN = parseChain(Deno.env.get("ZENITH_CHAT_MODELS") || "gemini-4-hydrogen:19,gemini-3.8-flash:19,gemini-3-flash-preview:19,gemini-3.6-flash:19");
+// a model that said "too many requests" for the minute rests for half a minute; one that did not accept a thinking level is asked without it from then on
+const resting: Record<string, number> = {};
+const noThink = new Set<string>();
+async function gemini(key: string, system: unknown, history: unknown, stream: boolean): Promise<Response | null> {
+  for (const { model, limit } of CHAIN) {
+    if ((resting[model] || 0) > Date.now()) continue;
     const url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + (stream ? ":streamGenerateContent?alt=sse" : ":generateContent");
-    const call = (think: boolean) => fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": key },
-      signal: AbortSignal.timeout(50000),
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: String(system || "") }] },
-        contents: history,
-        generationConfig: { temperature: 1, maxOutputTokens: 140, ...(think ? { thinkingConfig: { thinkingLevel: "minimal" } } : {}) },
-      }),
-    });
-    let r = await call(true);
-    if (r.status === 400) r = await call(false);
-    if (r.status === 429 || r.status >= 500) { last = r; continue; }
-    return r;
+    // null when the model is used up for today; a model that does not answer in 15 seconds is given up on (the answer itself may take longer)
+    const call = async (think: boolean): Promise<Response | null> => {
+      if (!(await useModel(admin, model, limit))) return null;
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 15000);
+      try {
+        return await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-goog-api-key": key },
+          signal: ctl.signal,
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: String(system || "") }] },
+            contents: history,
+            generationConfig: { temperature: 1, maxOutputTokens: 140, ...(think ? { thinkingConfig: { thinkingLevel: "minimal" } } : {}) },
+          }),
+        });
+      } finally { clearTimeout(timer); }
+    };
+    try {
+      let r = await call(!noThink.has(model));
+      if (!r) continue;
+      if (r.status === 400 && !noThink.has(model)) { noThink.add(model); r = await call(false); if (!r) continue; }
+      if (r.status === 429) {
+        const said = await r.text().catch(() => "");
+        if (dailyLimitHit(said)) await markFull(admin, model, limit); else resting[model] = Date.now() + 30000;
+        continue;
+      }
+      // not found, not allowed (no free quota for it) or broken on their side: the next model answers
+      if (r.status === 404 || r.status === 403 || r.status >= 500) { try { await r.body?.cancel(); } catch { /* ignore */ } resting[model] = Date.now() + (r.status >= 500 ? 15000 : 600000); continue; }
+      return r;
+    } catch (_e) { resting[model] = Date.now() + 15000; /* too slow or unreachable: the next model answers */ }
   }
-  return last as Response;
+  return null;
 }
 
 // the app owner talks to Zenith through here, so the Gemini key never reaches the phone
@@ -143,6 +166,8 @@ Deno.serve(async (req) => {
       last.parts.push(...pics);
     }
     const up = await gemini(key, body.system, body.history, body.stream === true);
+    // every model is used up or unavailable: the only time the chat sees an error
+    if (!up) return json({ error: "Zenith is resting. Try again later." }, 503);
     return new Response(up.body, { status: up.status, headers: { ...cors, "Content-Type": up.headers.get("content-type") || "application/json" } });
   } catch (_e) {
     return json({ error: "could not reach Zenith" }, 502);

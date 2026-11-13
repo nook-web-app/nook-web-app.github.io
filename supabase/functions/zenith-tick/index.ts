@@ -1,5 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { fetchImage, pagePreview } from "../_shared/preview.ts";
+import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 const DAY = 864e5, HOUR = 36e5;
@@ -17,27 +18,41 @@ async function geminiKey(): Promise<string> {
   keyCache = { v: typeof data === "string" ? data : "", at: Date.now() };
   return keyCache.v;
 }
-const MODEL = Deno.env.get("ZENITH_MODEL") || "gemini-3.5-flash-lite";
-
-// straight to Gemini with the key from the vault; a model without quota hands over to the next one
-const MODELS = [MODEL, "gemini-3.1-flash-lite"];
+// His posts, replies and likes only use gemini-3.1-flash-lite (the free tier gives it 500 requests a day, 480 are used here). The count is
+// kept in the database and starts again at midnight Pacific time, when Google's own count does. Other models can be put in the list with
+// the secret ZENITH_POST_MODELS ("model:limit,model:limit"); a model that is used up or fails hands over to the next one.
+const MODELS = parseChain(Deno.env.get("ZENITH_POST_MODELS") || "gemini-3.1-flash-lite:480");
+const resting: Record<string, number> = {};
+const noThink = new Set<string>();
 async function generate(_password: string, system: string, history: unknown): Promise<Response> {
   const key = await geminiKey();
   if (!key) return new Response("no gemini key in the vault", { status: 500 });
-  let last: Response | null = null;
-  for (const model of MODELS) {
-    const call = (think: boolean) => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": key },
-      signal: AbortSignal.timeout(25000),
-      body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: history, generationConfig: { temperature: 1, maxOutputTokens: 220, ...(think ? { thinkingConfig: { thinkingLevel: "minimal" } } : {}) } }),
-    });
-    let r = await call(true);
-    if (r.status === 400) r = await call(false);
-    if (r.status === 429 || r.status >= 500) { last = r; continue; }
-    return r;
+  for (const { model, limit } of MODELS) {
+    if ((resting[model] || 0) > Date.now()) continue;
+    const call = async (think: boolean): Promise<Response | null> => {
+      if (!(await useModel(admin, model, limit))) return null;
+      return fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": key },
+        signal: AbortSignal.timeout(25000),
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: history, generationConfig: { temperature: 1, maxOutputTokens: 220, ...(think ? { thinkingConfig: { thinkingLevel: "minimal" } } : {}) } }),
+      });
+    };
+    try {
+      let r = await call(!noThink.has(model));
+      if (!r) continue;
+      if (r.status === 400 && !noThink.has(model)) { noThink.add(model); r = await call(false); if (!r) continue; }
+      if (r.status === 429) {
+        const said = await r.text().catch(() => "");
+        if (dailyLimitHit(said)) await markFull(admin, model, limit); else resting[model] = Date.now() + 30000;
+        continue;
+      }
+      if (r.status === 404 || r.status === 403 || r.status >= 500) { try { await r.body?.cancel(); } catch { /* ignore */ } resting[model] = Date.now() + (r.status >= 500 ? 15000 : 600000); continue; }
+      return r;
+    } catch (_e) { resting[model] = Date.now() + 15000; }
   }
-  return last as Response;
+  // every model is used up or unavailable: nothing is written this time
+  return new Response("every model is used up or unavailable", { status: 429 });
 }
 
 // link preview pictures are fetched here, so the phone never has to download them; https only, no addresses inside a network, small pictures only

@@ -12,6 +12,11 @@ export async function ringPhone(admin: SupabaseClient, owner: string, reason: st
       signal: AbortSignal.timeout(20000),
     });
     const j = await r.json().catch(() => ({}));
+    // a note of what happened, so a ring that did not arrive can be looked up: select * from ai_usage where model like 'debug:ring%'
+    try { await admin.rpc("nook_ai_full", { p_model: "debug:ring:" + new Date().toISOString().slice(11, 16) + ":" + r.status + ":sent " + (j.sent ?? "none") + (j.error ? ":" + String(j.error).slice(0, 40) : ""), p_limit: 1 }); } catch { /* only a note */ }
     return r.ok && Number(j.sent) > 0;
-  } catch { return false; }
+  } catch (e) {
+    try { await admin.rpc("nook_ai_full", { p_model: "debug:ring:error:" + String((e as Error).message || e).replace(/[^\w .,:'-]+/g, " ").slice(0, 80), p_limit: 1 }); } catch { /* only a note */ }
+    return false;
+  }
 }

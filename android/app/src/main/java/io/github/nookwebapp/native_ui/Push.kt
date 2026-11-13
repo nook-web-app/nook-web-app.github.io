@@ -75,17 +75,20 @@ class PushService : FirebaseMessagingService() {
         if (d["type"] == "call") {
             val ctx = applicationContext
             val reason = d["reason"].orEmpty()
-            IncomingCall.show(ctx, reason)
             val app = AppState.current
+            // unlocked: the ring screen is part of the app itself, so Answer is seamless; locked: the phone's own full screen call notification
+            val locked = ctx.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true
+            val inPlace = !locked && (app?.foreground == true || android.provider.Settings.canDrawOverlays(ctx))
+            if (!inPlace) IncomingCall.show(ctx, reason)
             if (app != null) {
-                // the call is made ready right away; the ring screen opens by itself when the app is in front
+                // the call is made ready right away
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
                     app.prewarmCall(reason)
-                    if (app.foreground) runCatching { ctx.startActivity(android.content.Intent(ctx, IncomingCallActivity::class.java).putExtra("reason", reason).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) } else openRingOver(ctx, reason)
+                    if (inPlace && !app.foreground) openRingOver(ctx, reason)
                 }
             } else {
                 kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch { runCatching { Push.loadSession(ctx); CallWarm.prefetch() } }
-                openRingOver(ctx, reason)
+                if (inPlace) openRingOver(ctx, reason)
             }
             return
         }

@@ -209,7 +209,10 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
         if (!c.ringing) return
         c.stop(); call = null
         ctx?.let { IncomingCall.clear(it) }
+        leave()
     }
+    // set by the screen when the app was opened only to ring: after a decline it goes back to where the phone was
+    var leave: () -> Unit = {}
     // reason: set when Zenith called (he says why he called); null when the owner called him
     fun startCall(reason: String? = null) {
         val ringing = call?.takeIf { it.ringing }

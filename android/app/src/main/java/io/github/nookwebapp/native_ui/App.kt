@@ -10,6 +10,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.*
@@ -76,7 +77,8 @@ fun NookApp(app: AppState) {
                 if (answerCover.value) {
                     Box(Modifier.fillMaxSize().background(DarkColors.bg))
                     val up = app.panels.any { it is Panel.Call }
-                    LaunchedEffect(up) { if (up) kotlinx.coroutines.delay(450) else kotlinx.coroutines.delay(4000); answerCover.value = false }
+                    val ringUp = app.call?.ringing == true
+                    LaunchedEffect(up || ringUp) { if (up || ringUp) kotlinx.coroutines.delay(450) else kotlinx.coroutines.delay(4000); answerCover.value = false }
                 }
                 CallHost(app)
                 PanelHost(app)
@@ -90,6 +92,17 @@ fun NookApp(app: AppState) {
                 UpdateHost(app)
                 ToastHost(app)
                 ClaudeFxLayer(app)
+                // Zenith is calling: the ring screen is part of the app, so Answer turns it into the call without anything opening
+                val ringS = app.call?.takeIf { it.ringing }
+                if (ringS != null) {
+                    val rc = androidx.compose.ui.platform.LocalContext.current
+                    DisposableEffect(Unit) { Ringer.start(rc); onDispose { Ringer.stop(rc) } }
+                    Box(Modifier.fillMaxSize().clickable(remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, null) {}) {
+                        CompositionLocalProvider(LocalNook provides DarkColors) {
+                            RingScreen(true, { app.leave = {}; IncomingCall.clear(rc); app.startCall(ringS.reason ?: "") }, { app.declineCall() })
+                        }
+                    }
+                }
             }
         }
     }

@@ -122,24 +122,8 @@ object CallWarm {
 // the ring screen: the whole screen, the app's colours, his picture, Answer and Decline. It is what a tap on the ringing notification opens, and
 // what opens by itself when the phone is locked (or the app is open).
 class IncomingCallActivity : ComponentActivity() {
-    private var tone: android.media.Ringtone? = null
-    private fun startRinging() {
-        runCatching {
-            tone = RingtoneManager.getRingtone(this, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))?.apply {
-                audioAttributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()
-                if (Build.VERSION.SDK_INT >= 28) isLooping = true
-                play()
-            }
-        }
-        runCatching {
-            val v = getSystemService(android.os.Vibrator::class.java)
-            if (v != null && v.hasVibrator()) v.vibrate(android.os.VibrationEffect.createWaveform(longArrayOf(0, 700, 500, 700, 500), 0))
-        }
-    }
-    private fun stopRinging() {
-        runCatching { tone?.stop() }; tone = null
-        runCatching { getSystemService(android.os.Vibrator::class.java)?.cancel() }
-    }
+    private fun startRinging() = Ringer.start(this)
+    private fun stopRinging() = Ringer.stop(this)
     override fun onStop() { stopRinging(); super.onStop() }
     override fun onDestroy() { stopRinging(); super.onDestroy() }
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -222,10 +206,33 @@ fun openRingOver(ctx: android.content.Context, reason: String) {
         val lp = android.view.WindowManager.LayoutParams(1, 1, android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE, android.graphics.PixelFormat.TRANSLUCENT)
         runCatching { wm.addView(v, lp) }
-        runCatching { ctx.startActivity(android.content.Intent(ctx, IncomingCallActivity::class.java).putExtra("reason", reason).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        runCatching { ctx.startActivity(android.content.Intent(ctx, MainActivity::class.java).putExtra("open", "ring").putExtra("reason", reason).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP)) }
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ runCatching { wm.removeView(v) } }, 4000)
     }
 }
 
 // shown from the moment Answer is pressed until the call screen is up, so the home page never shows in between
 val answerCover = androidx.compose.runtime.mutableStateOf(false)
+
+// the ring sound and the buzzing, for the ring screen (in the app and on the lock screen)
+object Ringer {
+    private var tone: android.media.Ringtone? = null
+    fun start(ctx: Context) {
+        stop(ctx)
+        runCatching {
+            tone = RingtoneManager.getRingtone(ctx, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))?.apply {
+                audioAttributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()
+                if (Build.VERSION.SDK_INT >= 28) isLooping = true
+                play()
+            }
+        }
+        runCatching {
+            val v = ctx.getSystemService(android.os.Vibrator::class.java)
+            if (v != null && v.hasVibrator()) v.vibrate(android.os.VibrationEffect.createWaveform(longArrayOf(0, 700, 500, 700, 500), 0))
+        }
+    }
+    fun stop(ctx: Context) {
+        runCatching { tone?.stop() }; tone = null
+        runCatching { ctx.getSystemService(android.os.Vibrator::class.java)?.cancel() }
+    }
+}

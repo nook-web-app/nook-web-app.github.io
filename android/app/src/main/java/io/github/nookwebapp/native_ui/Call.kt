@@ -164,7 +164,7 @@ class CallSession(private val scope: CoroutineScope? = null, private val onLive:
 // the notification of a call: a plain ongoing one with a timer, asking for a place in the status bar (the chip that Android 16 and Samsung's
 // One UI show), in the blue of the app's background, with his picture and the End button
 object CallNote {
-    const val CH = "nook_call"
+    const val CH = "nook_call_live"
     const val ID = 8
     @Volatile var avatar: Bitmap? = null
 
@@ -182,7 +182,7 @@ object CallNote {
 
     fun build(ctx: Context, since: Long?): Notification {
         val nm = ctx.getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel(CH) == null) nm.createNotificationChannel(NotificationChannel(CH, "Calls with Zenith", NotificationManager.IMPORTANCE_LOW))
+        if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel(CH) == null) nm.createNotificationChannel(NotificationChannel(CH, "Calls with Zenith", NotificationManager.IMPORTANCE_DEFAULT).apply { setSound(null, null); enableVibration(false); setShowBadge(false) })
         // a tap opens the card of the call, like the one of a music player
         val open = PendingIntent.getActivity(ctx, 21, Intent(ctx, CallCardActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val end = PendingIntent.getBroadcast(ctx, 22, Intent(ctx, CallReceiver::class.java).setAction("end"), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -277,8 +277,12 @@ private fun CallBtn(icon: String, label: String, on: Boolean, enter: Modifier, r
 fun CallPanel(app: AppState, p: Panel.Call) {
     // only the owner has calls; a still picture (the screenshot tests) skips the check
     if (p.still == null && !zOn()) { LaunchedEffect(Unit) { app.closePanel(p) }; return }
-    val s = if (p.still != null) remember(p.still) { CallSession.still(p.still) } else app.call
-    // the call ended (from the notification, say): the screen goes
+    // the call is gone from the app when the screen starts to slide away: the last one is kept so the screen still shows its goodbye while it moves
+    val last = remember { arrayOfNulls<CallSession>(1) }
+    val live = app.call
+    if (live != null) last[0] = live
+    val s = if (p.still != null) remember(p.still) { CallSession.still(p.still) } else live ?: last[0]
+    // no call at all (it ended before the screen was ever drawn): the screen goes
     if (s == null) { LaunchedEffect(Unit) { app.closePanel(p) }; return }
     // the call screen is always dark, whatever the theme of the app is
     CompositionLocalProvider(LocalNook provides DarkColors) { CallBody(app, p, s) }
@@ -310,7 +314,7 @@ private fun CallBody(app: AppState, p: Panel.Call, s: CallSession) {
         when { s.ending -> 0f; s.phase == CallPhase.Speaking -> 1f; s.phase == CallPhase.Listening && !s.muted -> 0.35f; else -> 0.12f }, tween(300), label = "level",
     )
     // the goodbye: the picture shrinks and fades, the buttons slide down and fade
-    val gone by animateFloatAsState(if (s.ending) 1f else 0f, tween(520, easing = FastOutSlowInEasing), label = "gone")
+    val gone by animateFloatAsState(if (s.ending) 1f else 0f, tween(340, easing = FastOutSlowInEasing), label = "gone")
     val status = if (s.ending) "Call ended" else if (s.muted && s.phase == CallPhase.Listening) "Muted" else s.phase.label
 
     // the gradient fills the whole screen, behind the status bar and the navigation bar too
@@ -444,7 +448,7 @@ fun CallHost(app: AppState) {
         val vis = remember { MutableTransitionState(false).also { it.targetState = true } }
         AnimatedVisibility(vis, enter = fadeIn(tween(220)) + scaleIn(tween(260), initialScale = 0.6f, transformOrigin = TransformOrigin(0f, 0.5f))) {
             val pill = RoundedCornerShape(Rad.pill)
-            Row(Modifier.padding(start = 92.dp, top = top).height(h).clip(pill).background(c.bg).border(1.dp, c.accent.copy(alpha = 0.75f), pill).pressTap(pill) { app.callCard = true }.padding(horizontal = 10.dp),
+            Row(Modifier.padding(start = 62.dp, top = top).height(h).clip(pill).background(c.bg).border(1.dp, c.accent.copy(alpha = 0.75f), pill).pressTap(pill) { app.callCard = true }.padding(horizontal = 10.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 NIcon("phone", 13.dp, tint = c.accent)
                 CallClock(s, Fs.xs, Color.White)

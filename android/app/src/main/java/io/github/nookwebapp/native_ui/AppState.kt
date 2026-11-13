@@ -215,7 +215,7 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
         callCard = false
         if (!animated || c.ending || panels.none { it is Panel.Call }) { call = null; panels.removeAll { it is Panel.Call }; return }
         c.ending = true
-        scope.launch { kotlinx.coroutines.delay(900); if (call === c) { call = null; panels.removeAll { it is Panel.Call } } }
+        scope.launch { kotlinx.coroutines.delay(520); if (call === c) { call = null; panels.removeAll { it is Panel.Call } } }
     }
     // the notification gets its timer when the call is picked up
     fun updateCallNote() {

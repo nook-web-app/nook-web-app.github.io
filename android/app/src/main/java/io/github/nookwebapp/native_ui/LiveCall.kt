@@ -57,6 +57,9 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
 
     // a turn of the captions that was finished: the next words of the same person start a new line
     private var closed = true
+    // when the sound that was handed to the speaker will have been played: while it plays the microphone is not sent (on the speaker his own voice
+    // would come back through it, be taken for the person talking, and stop him every two seconds)
+    @Volatile private var playUntil = 0L
 
     fun start() { app.scope.launch(Dispatchers.IO) { connect() } }
 
@@ -150,7 +153,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
         startAudio()
         if (!greeted) {
             greeted = true
-            ws?.send(JSONObject().put("realtimeInput", JSONObject().put("text", "The call just connected. You speak first: say a short, friendly hello like a friend picking up the phone, then wait for the answer.")).toString())
+            ws?.send(JSONObject().put("realtimeInput", JSONObject().put("text", "The call just connected. You speak first: say a quick casual hey, like a friend picking up the phone, nothing more, then wait.")).toString())
             ui { s.phase = CallPhase.Thinking }
         }
         ui { s.phase = CallPhase.Listening; s.live() }
@@ -158,6 +161,8 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
 
     // the words of the call, in the captions: chunks of the same person join into one line until a turn ends
     private fun caption(who: String, text: String) {
+        // a guess in another alphabet (the noise of a microphone read as another language) is not shown
+        if (text.any { it.isLetter() && Character.UnicodeScript.of(it.code) != Character.UnicodeScript.LATIN }) return
         val fresh = closed
         closed = false
         ui { s.say(who, text, fresh) }
@@ -167,11 +172,14 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
         if (b64.isEmpty()) return
         val pcm = runCatching { Base64.decode(b64, Base64.DEFAULT) }.getOrNull() ?: return
         out.offer(pcm)
+        val now = System.currentTimeMillis()
+        playUntil = maxOf(playUntil, now) + pcm.size / 2 * 1000L / 24000
         ui { if (s.phase != CallPhase.Speaking) s.phase = CallPhase.Speaking }
     }
 
     private fun flush() {
         out.clear()
+        playUntil = 0
         val t = track ?: return
         runCatching { t.pause(); t.flush(); t.play() }
     }
@@ -240,6 +248,8 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
                     val n = runCatching { r.read(buf, 0, buf.size) }.getOrDefault(-1)
                     if (n <= 0) { if (n < 0) break else continue }
                     if (s.muted || !open) continue
+                    // on the speaker the microphone waits while he talks (and a moment after); on the earpiece or a headset he can be interrupted
+                    if (s.speaker && System.currentTimeMillis() < playUntil + 450) continue
                     val msg = "{\"realtimeInput\":{\"audio\":{\"data\":\"" + Base64.encodeToString(buf, 0, n, Base64.NO_WRAP) + "\",\"mimeType\":\"audio/pcm;rate=16000\"}}}"
                     ws?.send(msg)
                 }

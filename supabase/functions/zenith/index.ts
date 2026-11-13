@@ -113,11 +113,22 @@ async function searchNote(key: string, query: string): Promise<string> {
 // only gets an error when every model is out. The list can be changed with the secret ZENITH_CHAT_MODELS ("model:limit,model:limit").
 // gemini-3.7-flash is left out on purpose: it is deprecated and has no free quota.
 const CHAIN = parseChain(Deno.env.get("ZENITH_CHAT_MODELS") || "gemini-4-hydrogen:20,gemini-3.8-flash:20,gemini-3.6-flash:20,gemini-3.5-flash-lite:500");
-// a model that said "too many requests" for the minute rests for half a minute; one that did not accept a thinking level is asked without it from then on
+// a model that said "too many requests" for the minute rests for half a minute; one that did not accept a thinking level or a tool is asked without it from then on
 const resting: Record<string, number> = {};
 const noThink = new Set<string>();
 const noTools = new Set<string>();
-async function gemini(key: string, system: unknown, history: unknown, stream: boolean, tools = false): Promise<Response | null> {
+// why a model failed is written as a small row (the model, the status and the start of its message in the name) so it can be looked up:
+// select * from ai_usage where model like 'debug:chat:%'
+async function chatFailed(model: string, status: number, said: string) {
+  let why = said;
+  try { const j = JSON.parse(said); if (j && j.error && typeof j.error.message === "string") why = j.error.message; } catch { /* not json */ }
+  why = why.replace(/[^\w .,:'-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 110);
+  console.error("chat model failed", model, status, said.slice(0, 300));
+  try { await admin.from("ai_usage").upsert({ model: "debug:chat:" + model + ":" + status + ":" + why, day: new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" }), n: 1 }, { onConflict: "model,day" }); } catch { /* only a note */ }
+}
+// the answer of the first model that gives one (or its request for a search). Whatever goes wrong with a model (used up, refuses, not found,
+// bad request, broken, no words in its answer) hands over to the next one; null only when every model is out
+async function gemini(key: string, system: unknown, history: unknown, stream: boolean, tools = false): Promise<{ res: Response | null; search: { query: string } | null }> {
   for (const { model, limit } of CHAIN) {
     if ((resting[model] || 0) > Date.now()) continue;
     const url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + (stream ? ":streamGenerateContent?alt=sse" : ":generateContent");
@@ -148,17 +159,20 @@ async function gemini(key: string, system: unknown, history: unknown, stream: bo
       if (!r) continue;
       if (r.status === 400 && tl) { noTools.add(model); tl = false; r = await call(th, false); if (!r) continue; }
       if (r.status === 400 && th) { noThink.add(model); th = false; r = await call(false, false); if (!r) continue; }
-      if (r.status === 429) {
+      if (!r.ok) {
         const said = await r.text().catch(() => "");
-        if (dailyLimitHit(said)) await markFull(admin, model, limit); else resting[model] = Date.now() + 30000;
+        await chatFailed(model, r.status, said);
+        if (r.status === 429 && dailyLimitHit(said)) await markFull(admin, model, limit);
+        else resting[model] = Date.now() + (r.status === 429 ? 30000 : r.status >= 500 ? 15000 : r.status === 400 ? 300000 : 600000);
         continue;
       }
-      // not found, not allowed (no free quota for it) or broken on their side: the next model answers
-      if (r.status === 404 || r.status === 403 || r.status >= 500) { try { await r.body?.cancel(); } catch { /* ignore */ } resting[model] = Date.now() + (r.status >= 500 ? 15000 : 600000); continue; }
-      return r;
-    } catch (_e) { resting[model] = Date.now() + 15000; /* too slow or unreachable: the next model answers */ }
+      const peek = await peekForSearch(r, stream);
+      if (peek.search) return { res: null, search: peek.search };
+      if (peek.empty) { await chatFailed(model, 200, "the answer had no words"); resting[model] = Date.now() + 15000; continue; }
+      return { res: peek.replay, search: null };
+    } catch (e) { await chatFailed(model, 0, String((e as Error).message || e)); resting[model] = Date.now() + 15000; /* too slow or unreachable: the next model answers */ }
   }
-  return null;
+  return { res: null, search: null };
 }
 
 // the app owner talks to Zenith through here, so the Gemini key never reaches the phone
@@ -245,20 +259,18 @@ Deno.serve(async (req) => {
     const stream = body.stream === true;
     const system = String(body.system || "");
     // the chat model knows it can search; when it asks for a search, the findings are added to the last message and it answers again
-    let up = await gemini(key, system + SEARCH_HELP, body.history, stream, true);
-    if (up && up.ok) {
-      const peek = await peekForSearch(up, stream);
-      if (peek.search) {
-        let query = peek.search.query;
-        if (!query && last && Array.isArray(last.parts)) {
-          const first = last.parts.find((p) => p && typeof (p as { text?: unknown }).text === "string") as { text: string } | undefined;
-          query = first ? first.text.replace(/@zenith/gi, "").trim().slice(0, 200) : "";
-        }
-        const note = await searchNote(key, query || "the latest news");
-        if (last && Array.isArray(last.parts)) last.parts.push({ text: note });
-        up = await gemini(key, system, body.history, stream, false);
-      } else up = peek.replay;
+    let got = await gemini(key, system + SEARCH_HELP, body.history, stream, true);
+    if (got.search) {
+      let query = got.search.query;
+      if (!query && last && Array.isArray(last.parts)) {
+        const first = last.parts.find((p) => p && typeof (p as { text?: unknown }).text === "string") as { text: string } | undefined;
+        query = first ? first.text.replace(/@zenith/gi, "").trim().slice(0, 200) : "";
+      }
+      const note = await searchNote(key, query || "the latest news");
+      if (last && Array.isArray(last.parts)) last.parts.push({ text: note });
+      got = await gemini(key, system, body.history, stream, false);
     }
+    const up = got.res;
     // every model is used up or unavailable: the only time the chat sees an error
     if (!up) return json({ error: "Zenith is resting. Try again later." }, 503);
     return new Response(up.body, { status: up.status, headers: { ...cors, "Content-Type": up.headers.get("content-type") || "application/json" } });

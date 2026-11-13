@@ -32,15 +32,18 @@ function replay(seen: Uint8Array[], reader: ReadableStreamDefaultReader<Uint8Arr
   return new Response(body, { status, headers: { "content-type": type } });
 }
 
-export async function peekForSearch(up: Response, stream: boolean): Promise<{ search: { query: string } | null; replay: Response | null }> {
+// empty: the answer ended without a single written word (for example a thinking model that used all its room for thinking)
+export async function peekForSearch(up: Response, stream: boolean): Promise<{ search: { query: string } | null; replay: Response | null; empty: boolean }> {
   const type = up.headers.get("content-type") || "application/json";
   if (!stream || !type.includes("text/event-stream") || !up.body) {
     const raw = await up.text();
     let j: unknown = null;
     try { j = JSON.parse(raw); } catch { /* not json: handed on as it is */ }
     const hit = findSearch(partsOf(j));
-    if (hit) return { search: hit, replay: null };
-    return { search: null, replay: new Response(raw, { status: up.status, headers: { "content-type": type } }) };
+    if (hit) return { search: hit, replay: null, empty: false };
+    const wrote = partsOf(j).some((p) => typeof p.text === "string" && p.text.trim() !== "" && !p.thought);
+    // an answer that is not json (or an error body) is handed on as it is; only a real answer without words counts as empty
+    return { search: null, replay: new Response(raw, { status: up.status, headers: { "content-type": type } }), empty: up.ok && j !== null && !wrote };
   }
   const reader = up.body.getReader();
   const dec = new TextDecoder();
@@ -60,10 +63,10 @@ export async function peekForSearch(up: Response, stream: boolean): Promise<{ se
       try { j = JSON.parse(data); } catch { continue; }
       const parts = partsOf(j);
       const hit = findSearch(parts);
-      if (hit) { try { await reader.cancel(); } catch { /* ignore */ } return { search: hit, replay: null }; }
+      if (hit) { try { await reader.cancel(); } catch { /* ignore */ } return { search: hit, replay: null, empty: false }; }
       // the first written words: it is a normal reply
-      if (parts.some((p) => typeof p.text === "string" && p.text !== "" && !p.thought)) return { search: null, replay: replay(seen, reader, up.status, type) };
+      if (parts.some((p) => typeof p.text === "string" && p.text !== "" && !p.thought)) return { search: null, replay: replay(seen, reader, up.status, type), empty: false };
     }
   }
-  return { search: null, replay: replay(seen, null, up.status, type) };
+  return { search: null, replay: replay(seen, null, up.status, type), empty: true };
 }

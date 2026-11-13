@@ -43,6 +43,8 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
     private var models = 1
     private var resume: String? = null
     private var drops = 0
+    // he says hello first, once: the person calling is not made to start the talk
+    private var greeted = false
 
     private var rec: AudioRecord? = null
     private var track: AudioTrack? = null
@@ -88,7 +90,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
         if (!r.ok || !r.body.optBoolean("ok") || tok.isEmpty() || setup == null) {
             Log.w("nook", "live token failed " + r.status + " " + r.body.optString("why"))
             // another model; when none is left the call cannot start
-            if (!open && modelIdx < models - 1) { modelIdx++; connect() } else fail(if (r.status == 0) "No connection. Try the call again" else "The call could not start. Try again later")
+            if (!open && modelIdx < models - 1) { modelIdx++; connect() } else fail(if (r.status == 0) "No connection. Try the call again" else "The call could not start" + r.body.optString("why").takeIf { it.isNotEmpty() }?.let { " (" + it.take(120) + ")" }.orEmpty())
             return
         }
         val client = Sb.http.newBuilder().readTimeout(0, TimeUnit.MILLISECONDS).pingInterval(20, TimeUnit.SECONDS).build()
@@ -146,6 +148,11 @@ class LiveEngine(private val app: AppState, private val s: CallSession) {
     private fun ready() {
         open = true
         startAudio()
+        if (!greeted) {
+            greeted = true
+            ws?.send(JSONObject().put("realtimeInput", JSONObject().put("text", "The call just connected. You speak first: say a short, friendly hello like a friend picking up the phone, then wait for the answer.")).toString())
+            ui { s.phase = CallPhase.Thinking }
+        }
         ui { s.phase = CallPhase.Listening; s.live() }
     }
 

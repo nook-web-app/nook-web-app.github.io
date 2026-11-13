@@ -235,7 +235,10 @@ Deno.serve(async (req) => {
     const got = await liveToken(key, model, cfg);
     if (!("token" in got)) {
       try { await admin.rpc("nook_ai_full", { p_model: "debug:live:" + model + ":" + got.status + ":" + got.said.replace(/[^\w .,:'-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 90), p_limit: 1 }); } catch { /* only a note */ }
-      return json({ ok: false, why: "token " + got.status, models: LIVE_MODELS.length });
+      // the reason goes to the phone too, so the message it shows says what google answered
+      let why = got.said;
+      try { const j = JSON.parse(got.said); if (j && j.error && typeof j.error.message === "string") why = j.error.message; } catch { /* not json */ }
+      return json({ ok: false, why: "token " + got.status + ": " + why.replace(/[^\w .,:'-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 100), models: LIVE_MODELS.length });
     }
     return json({ ok: true, token: got.token, model, models: LIVE_MODELS.length, setup: liveSetup(model, cfg) });
   }

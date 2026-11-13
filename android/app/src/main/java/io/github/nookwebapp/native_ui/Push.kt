@@ -73,9 +73,12 @@ class PushService : FirebaseMessagingService() {
                 // the call is made ready right away; the ring screen opens by itself when the app is in front
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
                     app.prewarmCall(reason)
-                    if (app.foreground) runCatching { ctx.startActivity(android.content.Intent(ctx, IncomingCallActivity::class.java).putExtra("reason", reason).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                    if (app.foreground || android.provider.Settings.canDrawOverlays(ctx)) runCatching { ctx.startActivity(android.content.Intent(ctx, IncomingCallActivity::class.java).putExtra("reason", reason).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
                 }
-            } else kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch { runCatching { Push.loadSession(ctx); CallWarm.prefetch() } }
+            } else {
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch { runCatching { Push.loadSession(ctx); CallWarm.prefetch() } }
+                if (android.provider.Settings.canDrawOverlays(ctx)) runCatching { ctx.startActivity(android.content.Intent(ctx, IncomingCallActivity::class.java).putExtra("reason", reason).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            }
             return
         }
         val id = d["id"].orEmpty()

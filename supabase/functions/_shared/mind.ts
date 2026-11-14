@@ -16,7 +16,7 @@ export const DAY = 864e5, HOUR = 36e5;
 export const PAGES = 9, PAGE_MAX = 1800;
 
 export type Reply = { id: string; text: string; ai: boolean };
-export type Entry = { id: string; ai: boolean; text: string; t: number; kind?: string; pro?: boolean; re?: Reply };
+export type Entry = { id: string; ai: boolean; text: string; t: number; kind?: string; pro?: boolean; re?: Reply; liked?: boolean };
 export type MindState = {
   met: number;            // when they first talked
   closeness: number;      // 0 to 100
@@ -103,14 +103,31 @@ export function labelsOf(list: Entry[]): Map<string, number> {
   mine.forEach((e, i) => m.set(e.id, i + 1));
   return m;
 }
-export function pickReply(line: string, list: Entry[]): { text: string; re?: Reply } {
+export function pickReply(line: string, list: Entry[]): { text: string; re?: Reply; like?: string } {
+  // a line with only a heart (and maybe a number) is a like on one of his messages, no text
+  const lk = /^[♥❤️\u2764\ufe0f]+\s*(\d{1,2})?$/u.exec(line.trim());
+  if (lk) {
+    const labels = [...labelsOf(list)];
+    const hit = lk[1] ? labels.find(([, n]) => n === Number(lk[1])) : labels[labels.length - 1];
+    return { text: "", ...(hit ? { like: hit[0] } : {}) };
+  }
   const m = /^@(\d{1,2})\s+([\s\S]+)$/.exec(line.trim());
   if (!m) return { text: line.replace(/^@\d{1,2}\s*$/, "").trim() };
   const id = [...labelsOf(list)].find(([, n]) => n === Number(m[1]));
   const src = id ? list.find((e) => e.id === id[0]) : null;
   return { text: m[2].trim(), ...(src ? { re: { id: src.id, text: src.text.slice(0, 160), ai: false } } : {}) };
 }
-export const REPLY_HELP = "\n\nHis newest messages are numbered like [#3]. When one of your texts answers a specific message of his (not just the last one), start that text with @ and the number, like @3 haha yeah, and it shows as a reply to that message. Do that now and then, when it helps (for example when you answer several messages at once). Never write the [#3] numbers yourself.";
+export const REPLY_HELP = "\n\nHis newest messages are numbered like [#3]. When one of your texts answers a specific message of his (not just the last one), start that text with @ and the number, like @3 haha yeah, and it shows as a reply to that message. Do that now and then, when it helps (for example when you answer several messages at once). Never write the [#3] numbers yourself. You can also like one of his messages without writing anything: send a line with only ♥ and the number, like ♥3 (♥ alone likes his newest message). Do that sometimes when something he said was sweet, funny or made you happy, not for every message.";
+// how fast he types, in characters a second: a 19 year old on a phone types about 4; slower when he is tired (late at night, just woken up)
+// or half asleep, and it wobbles from text to text
+export function typingCps(t: number): number {
+  const l = lifeAt(t), hour = localTime(t).h + localTime(t).m / 60;
+  let cps = 4.2;
+  if (hour >= 1.5 && hour < 6 || hour >= 0 && hour < 1.5) cps *= 0.8;
+  if (!l.asleep && l.m - l.plan.wake >= 0 && l.m - l.plan.wake < 75) cps *= 0.72;
+  if (l.what.indexOf("bus") >= 0 || l.what.indexOf("walk") >= 0) cps *= 0.8;
+  return Math.max(1.6, cps * (0.72 + Math.random() * 0.6));
+}
 export function asContents(list: Entry[], labels?: Map<string, number>): { role: string; parts: { text: string }[] }[] {
   const out: { role: string; parts: { text: string }[] }[] = [];
   let prev = 0;
@@ -119,6 +136,7 @@ export function asContents(list: Entry[], labels?: Map<string, number>): { role:
     if (e.re) text = "(replying to " + (e.re.ai ? "your" : "his") + " message: \"" + e.re.text.slice(0, 120) + "\")\n" + text;
     const lab = labels && labels.get(e.id);
     if (lab) text = "[#" + lab + "] " + text;
+    if (e.liked) text += e.ai ? "\n(he liked this message)" : "\n(you liked this message)";
     if (prev && e.t - prev > 45 * 60000) text = "(" + gap(e.t - prev) + ")\n" + text;
     prev = e.t;
     const role = e.ai ? "model" : "user";

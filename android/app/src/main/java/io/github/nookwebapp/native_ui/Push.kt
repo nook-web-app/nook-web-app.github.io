@@ -76,7 +76,7 @@ class PushService : FirebaseMessagingService() {
             val text = d["text"].orEmpty()
             if (text.isBlank()) return
             val id = d["id"].orEmpty().ifEmpty { text.hashCode().toString() }
-            ZenTexts.add(ctx, id, text, d["re"].orEmpty())
+            ZenTexts.add(ctx, id, text, d["re"].orEmpty(), d["cps"]?.toDoubleOrNull() ?: 0.0)
             val app = AppState.current
             if (app != null) android.os.Handler(android.os.Looper.getMainLooper()).post { app.importZenTextsPolite() }
             if (app?.foreground != true && Notify.on(ctx)) Notify.show(ctx, "Zenith", text.take(180), "ztext", id.hashCode())

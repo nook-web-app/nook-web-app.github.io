@@ -2,7 +2,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { fetchImage, pagePreview } from "../_shared/preview.ts";
 import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
 import { ringPhone, warnPhone, textPhone, signalPhone } from "../_shared/ring.ts";
-import { activity, applyFeelings, asContents, asTranscript, asleepAt, closenessWords, dailyDrift, type Entry, loadNotebook, loadState, logEntries, type MindState, PAGE_MAX, PAGES, persona, pruneLog, recentEntries, saveNotebook, saveState, wakesAt, localTime, lifeAt, labelsOf, pickReply, REPLY_HELP } from "../_shared/mind.ts";
+import { activity, applyFeelings, asContents, asTranscript, asleepAt, closenessWords, dailyDrift, type Entry, loadNotebook, loadState, logEntries, type MindState, PAGE_MAX, PAGES, persona, pruneLog, recentEntries, saveNotebook, saveState, wakesAt, localTime, lifeAt, labelsOf, pickReply, REPLY_HELP, typingCps } from "../_shared/mind.ts";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 const DAY = 864e5, HOUR = 36e5;
@@ -240,8 +240,10 @@ async function sendTexts(owner: string, raw: string, pro: boolean, recent: Entry
   let sent = 0;
   for (const t of texts) {
     const id = crypto.randomUUID();
-    if (sent) await new Promise((res) => setTimeout(res, 1500 + Math.random() * 2500));
-    if (!(await textPhone(admin, owner, t.text.slice(0, 300), id, t.re ? t.re.id : ""))) break;
+    // a person types the next text: as long as it takes at his speed
+    const cps = typingCps(Date.now());
+    if (sent) await new Promise((res) => setTimeout(res, Math.min(14000, 900 + (t.text.length / cps) * 1000 + Math.random() * 1500)));
+    if (!(await textPhone(admin, owner, t.text.slice(0, 300), id, t.re ? t.re.id : "", cps))) break;
     await logEntries(admin, owner, [{ id, ai: true, text: t.text, t: Date.now(), ...(pro ? { pro: true } : {}), ...(t.re ? { re: t.re } : {}) }]);
     sent++;
   }

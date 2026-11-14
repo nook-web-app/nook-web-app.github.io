@@ -2,6 +2,7 @@ package io.github.nookwebapp.native_ui
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -446,9 +447,9 @@ fun Online.saveZen(pfp: String?, banner: String?, blurred: Boolean) {
 // or a new one called Zenith). Returns the id of that chat, or null when nothing was waiting.
 object ZenTexts {
     private fun prefs(c: android.content.Context) = c.getSharedPreferences("ztexts", 0)
-    fun add(c: android.content.Context, id: String, text: String, re: String = "") {
+    fun add(c: android.content.Context, id: String, text: String, re: String = "", cps: Double = 0.0) {
         val a = runCatching { JSONArray(prefs(c).getString("list", "[]")) }.getOrDefault(JSONArray())
-        a.put(JSONObject().put("id", id).put("text", text).put("re", re).put("t", System.currentTimeMillis()))
+        a.put(JSONObject().put("id", id).put("text", text).put("re", re).put("cps", cps).put("t", System.currentTimeMillis()))
         prefs(c).edit().putString("list", a.toString()).apply()
     }
     fun take(c: android.content.Context): List<JSONObject> {
@@ -514,7 +515,55 @@ suspend fun politeWait(): Boolean {
 }
 // the push of one of his texts: when the owner is typing in his chat, it may wait for them to finish
 fun AppState.importZenTextsPolite() {
-    scope.launch { politeWait(); importZenTexts() }
+    scope.launch {
+        politeWait()
+        val c = ctx ?: return@launch
+        if (!zOn()) return@launch
+        zenDeliver(ZenTexts.take(c))
+    }
+}
+
+// his texts arrive one after the other, like a person typing: the dots show for as long as the text takes to type, then the text, then a pause
+// (when the app is not in front they just go in). The ids already in the chat are skipped, so a text can never be in it twice.
+// how long a text takes to type: at his speed (characters a second, from the server: it is slower when he is tired), a short moment to start,
+// and now and then a stall, like someone who stops to think
+fun typeMs(len: Int, cps: Double): Long {
+    val speed = if (cps > 0.5) cps else 2.6 + kotlin.random.Random.nextDouble() * 2.2
+    val stall = if (kotlin.random.Random.nextFloat() < 0.12f) 1500L + (kotlin.random.Random.nextFloat() * 2500).toLong() else 0L
+    return (700L + (len / speed * 1000).toLong() + stall).coerceAtMost(16_000L)
+}
+private val zQueue = kotlinx.coroutines.sync.Mutex()
+suspend fun AppState.zenDeliver(items: List<JSONObject>) {
+    if (items.isEmpty()) return
+    zQueue.withLock {
+        val chat = zenDm()
+        var any = false
+        for ((i, e) in items.withIndex()) {
+            val id = e.optString("id").ifEmpty { uid() }
+            val text = e.optString("text")
+            if (text.isBlank() || chat.msgs.any { it.id == id }) continue
+            val ai = LMsg(id, "", System.currentTimeMillis(), emptyList(), ai = true)
+            if (foreground) {
+                zenTyping[chat.id] = ai; zenVersion++
+                kotlinx.coroutines.delay(typeMs(text.length, e.optDouble("cps", 0.0)))
+                zenTyping.remove(chat.id)
+            }
+            if (chat.msgs.any { it.id == id }) continue
+            ai.text = text; ai.t = maxOf(System.currentTimeMillis(), e.optLong("t"))
+            val re = e.opt("re")
+            ai.reply = if (re is JSONObject) reOf(re) else (re as? String)?.takeIf { it.isNotEmpty() }?.let { rid -> chat.msgs.firstOrNull { it.id == rid }?.let { ReplyRef(it.id, replySnippet(it), it.ai) } }
+            zenNoAnim.add(id)
+            chat.msgs.add(ai); chat.t = maxOf(chat.t, ai.t); any = true
+            persist(); zenVersion++
+            if (foreground && i < items.lastIndex) kotlinx.coroutines.delay(500L + (kotlin.random.Random.nextFloat() * 1300).toLong())
+        }
+        if (any) {
+            chat.zc = true
+            ctx?.getSharedPreferences("zstate", 0)?.edit()?.putLong("pulled", items.maxOf { it.optLong("t", 0L) })?.apply()
+            zSeen = maxOf(zSeen, System.currentTimeMillis()); saveZ()
+            on.zenSyncSoon()
+        }
+    }
 }
 
 // zDm(): a message in his own chat. He answers like a person: when he looks at his phone. The server says "now" (with how long until he saw
@@ -539,27 +588,24 @@ fun Online.zDm(chat: LChat, m: LMsg) {
             "now" -> {
                 val texts = j.optJSONArray("texts")?.strings().orEmpty()
                 val ids = j.optJSONArray("ids")?.strings().orEmpty()
+                // the server has them already: the pull must leave them to this screen
+                app.zFlight.addAll(ids)
                 kotlinx.coroutines.delay(maxOf(0L, sentAt + j.optLong("wait") - System.currentTimeMillis()))
                 app.zSeen = maxOf(app.zSeen, m.t); app.saveZ()
                 // the owner is typing: he waits for them or texts anyway
                 if (politeWait() && chat.msgs.lastOrNull()?.let { !it.ai && it.t > m.t } == true) {
                     // they sent something else meanwhile, so what he had written is old: he does not send it (a new answer comes for the new message)
                     runCatching { Sb.fn("zenith", JSONObject().put("action", "unsend").put("ids", JSONArray(ids))) }
+                    app.zFlight.removeAll(ids.toSet())
                     return@launch
                 }
-                texts.forEachIndexed { i, t ->
-                    val ai = LMsg(ids.getOrNull(i) ?: uid(), "", System.currentTimeMillis(), emptyList(), ai = true)
-                    app.zenTyping[chat.id] = ai; app.zenVersion++
-                    // the time it takes to type it
-                    kotlinx.coroutines.delay((900L + t.length * 95L).coerceAtMost(9000L) + (if (i == 0) 500L else 0L))
-                    app.zenTyping.remove(chat.id)
-                    ai.text = t; ai.t = System.currentTimeMillis()
-                    ai.reply = reOf(j.optJSONArray("re")?.optJSONObject(i))
-                    app.zenNoAnim.add(ai.id)
-                    chat.msgs.add(ai); app.persist(); app.zenVersion++
-                    app.ctx?.let { c -> if (!app.foreground) Notify.show(c, "Zenith", t.take(180), "ztext", ai.id.hashCode()) }
-                    kotlinx.coroutines.delay(350)
-                }
+                // the texts come one after the other, with typing dots (zenDeliver); one that is already in the chat is never added again
+                // the messages he liked
+                val likes = j.optJSONArray("likes")?.strings().orEmpty()
+                if (likes.isNotEmpty()) { chat.msgs.filter { it.id in likes }.forEach { it.liked = true }; app.persist() }
+                val list = texts.mapIndexed { i, t -> JSONObject().put("id", ids.getOrNull(i) ?: uid()).put("text", t).put("cps", j.optDouble("cps", 0.0)).apply { j.optJSONArray("re")?.optJSONObject(i)?.let { put("re", it) } } }
+                try { app.zenDeliver(list) } finally { app.zFlight.removeAll(ids.toSet()) }
+                if (!app.foreground) app.ctx?.let { c -> texts.firstOrNull()?.let { t -> Notify.show(c, "Zenith", t.take(180), "ztext", (ids.firstOrNull() ?: t).hashCode()) } }
                 zenSyncSoon()
             }
         }
@@ -581,18 +627,10 @@ suspend fun Online.zenPullTexts(): Boolean {
     val list = r.body.optJSONArray("entries")?.objs().orEmpty()
     if (list.isEmpty()) return false
     val zc = app.zenDm()
-    var added = false
-    for (e in list) {
-        val id = e.optString("id"); val t = e.optLong("t")
-        if (id.isEmpty() || zc.msgs.any { it.id == id }) continue
-        zc.msgs.add(LMsg(id, e.optString("text"), t, emptyList(), ai = true).also { it.reply = reOf(e.optJSONObject("re")) }); added = true
-        app.zenNoAnim.add(id)
-    }
+    // what the screen is still showing (or about to show) is not added a second time
+    val fresh = list.filter { e -> val id = e.optString("id"); id.isNotEmpty() && id !in app.zFlight && zc.msgs.none { it.id == id } }
     p.edit().putLong("pulled", list.maxOf { it.optLong("t") }).apply()
-    if (added) {
-        zc.msgs.sortBy { it.t }
-        app.zSeen = maxOf(app.zSeen, System.currentTimeMillis()); app.saveZ()
-        app.persist(); zenSyncSoon(); app.zenVersion++
-    }
-    return added
+    if (fresh.isEmpty()) return false
+    app.zenDeliver(fresh)
+    return true
 }

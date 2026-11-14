@@ -129,7 +129,7 @@ fun ConvScreen(id: String) {
             items(chat.msgs.drop(shownFrom), key = { it.id }) { m ->
                 // pulling one of Zenith's messages to the right starts an answer to him
                 val anim = remember(m.id) { if (m.id in had || m.id in app.zenNoAnim) MsgAnim.None else if (m.ai) MsgAnim.In else MsgAnim.Send }
-                FoldAway(m.leaving) { Box(Modifier.padding(bottom = 6.dp).msgIn(anim, !m.ai)) { SwipeReply(m.ai || isZ, { if (isZ) replyHook[0]?.invoke(m) else fill[0]?.invoke("@zenith ") }) { Bubble(m, open == m.id, onTap = { open = if (open == m.id) null else m.id }) {
+                FoldAway(m.leaving) { Box(Modifier.padding(bottom = 6.dp).msgIn(anim, !m.ai)) { SwipeReply(m.ai || isZ, { if (isZ) replyHook[0]?.invoke(m) else fill[0]?.invoke("@zenith ") }) { Bubble(m, open == m.id, onTap = { open = if (open == m.id) null else m.id }, onDouble = if (isZ && m.ai) ({ m.liked = !m.liked; app.persist(); app.scope.launch { runCatching { Sb.fn("zenith", org.json.JSONObject().put("action", "like").put("id", m.id).put("on", m.liked)) } } }) else null) {
                     app.open(listOfNotNull(
                         if (m.text.isNotEmpty()) SheetItem("Copy message", "copy") { app.clipboard(m.text) } else null,
                         SheetItem(if (isZ && m.ai) "Delete for me" else "Delete message", "trash", danger = true) {
@@ -146,7 +146,8 @@ fun ConvScreen(id: String) {
             // Delivered or Seen under the newest message to him
             val lm = chat.msgs.lastOrNull()
             if (isZ && lm != null && !lm.ai && callLogOf(lm.text) == null && typing == null) item(key = "zstatus") {
-                T(if (lm.t <= app.zSeen) "Seen" else if (lm.t <= app.zUndelivered) "Not delivered" else "Delivered", Fs.xs, color = c.muted, align = TextAlign.End, modifier = Modifier.fillMaxWidth().padding(end = 4.dp, bottom = 4.dp))
+                val st = if (lm.t <= app.zSeen) "Seen" else if (lm.t <= app.zUndelivered) "Not delivered" else ""
+                if (st.isNotEmpty()) T(st, Fs.xs, color = c.muted, align = TextAlign.End, modifier = Modifier.fillMaxWidth().padding(end = 4.dp, bottom = 2.dp))
             }
             // his answer while it is still being typed out
             // (the same key as the message it becomes, so the finished message takes the place of the typed one without a jump)
@@ -183,12 +184,9 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>, replyHook: A
         if (!isZ) ZenPopHost(zOn() && zenHint(text)) { setText(text.replace(ZEN_AT, "@zenith ")) }
         // the message being answered (swipe a message to the right to answer it)
         replyTo?.let { rt ->
-            Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp).fillMaxWidth().clip(RoundedCornerShape(Rad.s)).background(c.bg2).padding(start = 10.dp, top = 6.dp, bottom = 6.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.width(3.dp).height(26.dp).clip(CircleShape).background(c.accent))
-                Column(Modifier.weight(1f).padding(start = 8.dp)) {
-                    T(if (rt.ai) "Replying to Zenith" else "Replying to yourself", Fs.xs, FontWeight.SemiBold, c.accent)
-                    T(replySnippet(rt), Fs.sm, color = c.muted, maxLines = 1)
-                }
+            Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp).fillMaxWidth().clip(RoundedCornerShape(Rad.s)).background(c.bg2).padding(start = 10.dp, top = 2.dp, bottom = 2.dp, end = 0.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.width(3.dp).height(18.dp).clip(CircleShape).background(c.accent))
+                T((if (rt.ai) "Zenith: " else "You: ") + replySnippet(rt), Fs.sm, color = c.muted, maxLines = 1, modifier = Modifier.weight(1f).padding(start = 8.dp))
                 IB("close", box = 32.dp) { replyTo = null }
             }
         }
@@ -277,14 +275,14 @@ private fun isMediaCmd(t: String) = MEDIA_CMD.containsMatchIn(t.trim())
 // .mrow: my message on the right in an accent bubble (photos above it), Zenith's on the left (.mrow.ai), and the time
 // under it while it is open
 @Composable
-private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onLong: () -> Unit) {
+private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onDouble: (() -> Unit)? = null, onLong: () -> Unit) {
     val c = LocalNook.current
     val w = LocalConfiguration.current.screenWidthDp.dp - 32.dp
     val left = m.ai
     val fx = rememberBubbleFx()
     val opened by rememberUpdatedState(open)
     val tap = { if (!opened) fx.pop(); onTap() }
-    Column(Modifier.fillMaxWidth().pointerInput(m.id) { detectTapGestures(onTap = { tap() }, onLongPress = { AppState.current?.buzz(); onLong() }) }, horizontalAlignment = if (left) Alignment.Start else Alignment.End) {
+    Column(Modifier.fillMaxWidth().pointerInput(m.id) { detectTapGestures(onTap = { tap() }, onDoubleTap = if (onDouble != null) { _ -> onDouble() } else null, onLongPress = { AppState.current?.buzz(); onLong() }) }, horizontalAlignment = if (left) Alignment.Start else Alignment.End) {
         if (m.imgs.isNotEmpty()) Box(Modifier.width(minOf(w * 0.82f, 320.dp)).clip(RoundedCornerShape(Rad.bubble))) { ImgGrid(m.imgs, whenText(m.t), framed = false) }
         // "/media link": the command stays in view with its link shortened, and the card of the video answers on the left
         m.mcard?.let { card ->
@@ -292,17 +290,7 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onLong: () -> Unit
             if (shown) MediaCmd(card.optString("u"), card.optString("s"), card.optString("q"), tap, onLong, card.optJSONArray("l")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty(), card.optString("f"))
             Box(Modifier.align(Alignment.Start).padding(top = if (shown) 4.dp else 0.dp)) { MediaCard(m, tap, onLong) }
         }
-        // the quote of the message this one answers
-        m.reply?.let { rp ->
-            Row(Modifier.padding(top = 2.dp).widthIn(max = w * 0.82f).height(IntrinsicSize.Min).clip(RoundedCornerShape(Rad.s)).background(c.bg2.copy(alpha = 0.7f)).padding(end = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.width(3.dp).fillMaxHeight().background(c.accent))
-                Column(Modifier.padding(start = 8.dp, top = 5.dp, bottom = 5.dp)) {
-                    T(if (rp.ai) "Zenith" else "You", Fs.xs, FontWeight.SemiBold, c.accent)
-                    T(rp.text, Fs.sm, color = c.muted, maxLines = 2)
-                }
-            }
-        }
-        m.rpost?.let { Box(Modifier.padding(top = if (m.imgs.isNotEmpty() || m.reply != null) 4.dp else 0.dp)) { RCard(it.id, it.u) } }
+        m.rpost?.let { Box(Modifier.padding(top = if (m.imgs.isNotEmpty()) 4.dp else 0.dp)) { RCard(it.id, it.u) } }
         m.zpost?.let { Box(Modifier.padding(top = 4.dp)) { ZCard(it) } }
         // the text of a "/media" message is only its link (it is what the web app shows), the card is drawn instead
         val url = remember(m.text, m.mcard) { if (m.mcard != null || isMediaCmd(m.text)) null else firstUrl(m.text) }
@@ -314,8 +302,24 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onLong: () -> Unit
             Box(
                 Modifier.padding(top = if (m.imgs.isNotEmpty() || url != null || m.rpost != null) 4.dp else 0.dp).bubbleFx(fx, left).widthIn(max = w * 0.82f)
                     .clip(shape).background(if (left) c.bg2 else c.accent).then(if (left) Modifier.border(1.dp, c.line, shape) else Modifier).padding(horizontal = 14.dp, vertical = 9.dp),
-            ) { Tx(m.text, color = if (left) c.fg else c.on, linkColor = if (left) null else Color.White, onTap = tap, onLong = onLong, cut = false) }
+            ) {
+                // the quote of the message this one answers sits inside the bubble, as wide as the bubble
+                Column(Modifier.width(IntrinsicSize.Max)) {
+                    m.reply?.let { rp ->
+                        val ink = if (left) c.fg else Color.White
+                        Row(Modifier.fillMaxWidth().padding(bottom = 6.dp).height(IntrinsicSize.Min).clip(RoundedCornerShape(Rad.s)).background(if (left) c.bg.copy(alpha = 0.55f) else Color.Black.copy(alpha = 0.18f))) {
+                            Box(Modifier.width(3.dp).fillMaxHeight().background(if (left) c.accent else Color.White.copy(alpha = 0.9f)))
+                            Column(Modifier.padding(start = 8.dp, end = 8.dp, top = 3.dp, bottom = 3.dp)) {
+                                T(rp.text, Fs.sm, color = ink.copy(alpha = 0.8f), maxLines = 1)
+                            }
+                        }
+                    }
+                    Tx(m.text, color = if (left) c.fg else c.on, linkColor = if (left) null else Color.White, onTap = tap, onLong = onLong, cut = false)
+                }
+            }
         }
+        // the like of a double tap sits on the corner of the bubble
+        if (m.liked) Box(Modifier.offset(x = if (left) 10.dp else (-10).dp, y = (-9).dp).size(24.dp).clip(CircleShape).background(c.bg).border(1.dp, c.line, CircleShape), contentAlignment = Alignment.Center) { NIcon("heart", 14.dp, Color(0xFFEF4444), fill = true) }
         AnimatedVisibility(open, enter = expandVertically(tween(240)) + fadeIn(tween(200)), exit = shrinkVertically(tween(240)) + fadeOut(tween(200))) {
             T(whenText(m.t), Fs.xs, color = c.muted, align = if (left || m.mcard != null) TextAlign.Start else TextAlign.End, modifier = Modifier.fillMaxWidth().padding(top = 4.dp, end = 2.dp, start = 2.dp))
         }

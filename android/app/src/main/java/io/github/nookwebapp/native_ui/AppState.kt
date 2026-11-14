@@ -130,6 +130,8 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     var updPhase by mutableStateOf("Downloading the update")
     // messages of Zenith that were typed out on the screen: they land in the list without their entrance animation
     val zenNoAnim = HashSet<String>()
+    // texts of his that the server already has but the screen has not shown yet (a pull must not add them a second time)
+    val zFlight: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet<String>())
     var askNotifs: () -> Unit = {}
     var shareFile: (java.io.File, String) -> Unit = { _, _ -> }
     var ctx: android.content.Context? = null

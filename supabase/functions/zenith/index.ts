@@ -3,7 +3,7 @@ import { fetchImage } from "../_shared/preview.ts";
 import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
 import { peekForSearch, type CallAsk } from "../_shared/chatstream.ts";
 import { ringPhone } from "../_shared/ring.ts";
-import { activity, asleepAt, asContents, asTranscript, type Entry, labelsOf, lifeAt, loadNotebook, loadState, logEntries, nextLook, persona, pickReply, recentEntries, REPLY_HELP, saveState } from "../_shared/mind.ts";
+import { activity, asleepAt, asContents, asTranscript, type Entry, labelsOf, lifeAt, loadNotebook, loadState, logEntries, nextLook, persona, pickReply, recentEntries, REPLY_HELP, saveState, typingCps } from "../_shared/mind.ts";
 // Zenith is the name of the owner-only AI; the moderation AI is called Aegis
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
@@ -457,6 +457,16 @@ Deno.serve(async (req) => {
     }
     return json({ ok: true });
   }
+  // the owner double tapped a message of his chat (a like, or taking it back): he sees it in his memory of the chat
+  if (body.action === "like") {
+    const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
+    const id = typeof body.id === "string" && /^[\w-]{6,44}$/.test(body.id) ? body.id : "";
+    if (o && id) {
+      const { data: row } = await admin.from("zenith_docs").select("data").eq("owner_id", o.user_id).eq("kind", "state").eq("doc_id", "ml:" + id).maybeSingle();
+      if (row && row.data) await admin.from("zenith_docs").update({ data: { ...row.data, liked: body.on === true }, updated_at: new Date().toISOString() }).eq("owner_id", o.user_id).eq("kind", "state").eq("doc_id", "ml:" + id);
+    }
+    return json({ ok: true });
+  }
   // a message the owner deletes in his chat is forgotten by him too (his own messages stay in his memory)
   if (body.action === "forget") {
     const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
@@ -534,14 +544,22 @@ Deno.serve(async (req) => {
       text = parts.filter((p: { thought?: boolean }) => !p.thought).map((p: { text?: string }) => p.text || "").join("");
     } catch { /* no answer */ }
     // he decides how many texts he sends (up to 8)
-    const parsed = text.split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 8).map((x) => pickReply(x, recent)).filter((x) => x.text);
+    const all = text.split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 10).map((x) => pickReply(x, recent));
+    const parsed = all.filter((x) => x.text).slice(0, 8);
     const texts = parsed.map((x) => x.text);
+    // likes he gave to his messages: kept in the memory of the chat too
+    const likes = [...new Set(all.map((x) => x.like).filter((x): x is string => !!x))];
+    for (const lid of likes) {
+      const src = recent.find((e) => e.id === lid);
+      if (src) await admin.from("zenith_docs").update({ data: { ai: false, text: src.text, t: src.t, kind: src.kind || "text", liked: true }, updated_at: new Date().toISOString() }).eq("owner_id", owner).eq("kind", "state").eq("doc_id", "ml:" + lid);
+    }
     // no words came back (the model had a bad moment): he tries again in a minute instead of leaving the message unanswered
+    if (!texts.length && likes.length) return json({ mode: "now", wait: Math.max(0, seeAt - now), texts: [], ids: [], likes, cps: typingCps(now), calls });
     if (!texts.length) { st.pending = { seeAt: Date.now() + 60000, since: st.pending ? st.pending.since : now }; await saveState(admin, owner, st); return json({ mode: "later", calls }); }
     const replyId = typeof body.replyId === "string" && /^[\w-]{6,40}$/.test(body.replyId) ? body.replyId : crypto.randomUUID();
     const ids = texts.map((_, i) => (i ? replyId + "-" + (i + 1) : replyId));
     if (texts.length) await logEntries(admin, owner, parsed.map((x, i) => ({ id: ids[i], ai: true, text: x.text, t: Date.now() + i, ...(x.re ? { re: x.re } : {}) })));
-    return json({ mode: "now", wait: Math.max(0, seeAt - now), texts, ids, re: parsed.map((x) => x.re || null), calls });
+    return json({ mode: "now", wait: Math.max(0, seeAt - now), texts, ids, re: parsed.map((x) => x.re || null), likes, cps: typingCps(now), calls });
   }
   // the owner calls him: it rings first, and like a person he may not pick up (asleep, at work, phone away), or decline when he is not
   // comfortable with calls yet. A missed call is something he answers later, by text.

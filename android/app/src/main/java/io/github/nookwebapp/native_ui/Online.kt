@@ -15,6 +15,14 @@ import org.json.JSONObject
 // comment). The state that the pages draw from is Compose state; the work runs in the app's scope on the main thread
 // and every network call hops to a background thread by itself (Sb).
 class Online(val app: AppState) {
+    // photos already uploaded for a post that is not saved yet (post id -> links), used again by the next try
+    private val pendUp = HashMap<String, List<String>>()
+    // posts deleted before they were saved: the photos their earlier tries put up go too
+    fun dropPendUp(items: List<LPost>) {
+        val me = uid ?: return
+        val ps = items.filter { it.remote == null }.flatMap { pendUp.remove(it.id) ?: emptyList() }.mapNotNull { Sb.pathOf(it, "media")?.takeIf { p -> p.startsWith("$me/") } }
+        if (ps.isNotEmpty()) app.scope.launch { Sb.remove("media", ps) }
+    }
     val s get() = app.store
     val uid: String? get() = Sb.user?.id
     var me by mutableStateOf<SbUser?>(null)
@@ -537,7 +545,7 @@ class Online(val app: AppState) {
     // uploadMedia(): the photos of a post go to storage first; one that fails removes the ones already up
     suspend fun uploadMedia(srcs: List<String>): List<String>? {
         val me = uid ?: return null
-        val urls = ArrayList<String>()
+        val urls = ArrayList<String>(); val fresh = ArrayList<String>()
         for ((i, src) in srcs.withIndex()) {
             if (src.startsWith("http")) { urls.add(src); continue }
             val b = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Photos.bytesOf(src) } ?: continue
@@ -546,9 +554,10 @@ class Online(val app: AppState) {
             val path = "$me/${System.currentTimeMillis()}-$i.$ext"
             val e = Sb.upload("media", path, b, type)
             if (e != null) {
-                if (urls.isNotEmpty()) app.scope.launch { Sb.remove("media", urls.mapNotNull { Sb.pathOf(it, "media") }) }
+                if (fresh.isNotEmpty()) app.scope.launch { Sb.remove("media", fresh.toList()) }
                 return null
             }
+            fresh.add(path)
             urls.add(Sb.publicUrl("media", path))
         }
         return urls
@@ -570,7 +579,8 @@ class Online(val app: AppState) {
                 val row = JSONObject().put("user_id", me).put("body", np.text)
                 var urls: List<String>? = null
                 if (np.imgs.isNotEmpty()) {
-                    urls = uploadMedia(np.imgs)
+                    // photos of an earlier try that had no clear answer are used again, not uploaded a second time
+                    urls = pendUp[np.id] ?: uploadMedia(np.imgs)?.also { pendUp[np.id] = it }
                     if (urls == null) { if (!quiet) app.say("Could not upload the photo. It will be sent again when the connection is back"); return@launch }
                     row.put("media_url", JSONArray(urls).toString())
                 }
@@ -583,16 +593,17 @@ class Online(val app: AppState) {
                 // deleted on this phone while it was still uploading: it goes from the server again
                 if (r.ok && gotId != null && s.posts.none { it === np }) {
                     s.pendDel.add(gotId); app.persist()
+                    pendUp.remove(np.id)
                     serverDelete(listOf(LPost("x", "", 0, emptyList(), null, remote = gotId).apply { media = urls ?: emptyList() }))
                     return@launch
                 }
                 if (r.ok && gotId != null) {
-                    np.remote = gotId; np.media = urls ?: emptyList(); app.persist()
+                    pendUp.remove(np.id); np.remote = gotId; np.media = urls ?: emptyList(); app.persist()
                     if (isOwner()) { app.scope.launch { delay(22_000); zenNudge() }; app.scope.launch { delay(50_000); zenNudge() } }
                 } else {
                     val e = r.error
                     // a lost reply (no error code) may still have stored the post, so its photos are kept
-                    if (urls != null && urls.isNotEmpty() && e != null && e.code.isNotEmpty()) app.scope.launch { Sb.remove("media", urls.mapNotNull { Sb.pathOf(it, "media") }) }
+                    if (urls != null && urls.isNotEmpty() && ((e != null && e.code.isNotEmpty()) || s.posts.none { it === np })) { pendUp.remove(np.id); app.scope.launch { Sb.remove("media", urls.mapNotNull { Sb.pathOf(it, "media")?.takeIf { p -> p.startsWith("$me/") } }) } }
                     val lk = Regex("post_locked:(\\d+)").find(e?.message ?: "")
                     if (lk != null) {
                         // posting is paused: this post is dropped instead of being tried again and again
@@ -664,9 +675,12 @@ class Online(val app: AppState) {
         val added = now.filter { it !in origin }
         val up = if (added.isNotEmpty()) uploadMedia(added) else emptyList()
         if (up == null) { app.say("Could not upload the photo. The edit was not saved"); return false }
+        val upPaths = up.mapNotNull { u -> Sb.pathOf(u, "media")?.takeIf { it.startsWith("$uid/") && u !in ed.media } }
         val all = kept + up
         val r = Sb.update(Q("posts").eq("id", ed.remote!!), JSONObject().put("body", text).put("media_url", if (all.isEmpty()) JSONObject.NULL else JSONArray(all).toString()))
         if (!r.ok) {
+            // a refused edit leaves the new photos unused (an answer that never came may still have saved it, so they stay then)
+            if (upPaths.isNotEmpty() && r.error?.code?.isNotEmpty() == true) app.scope.launch { Sb.remove("media", upPaths) }
             app.say(if (r.error?.message?.contains("rate_limited") == true) "Wait a few seconds before editing again. The edit was not saved" else "The edit was not saved. " + plainErr(r.error?.message, "Try again"))
             return false
         }

@@ -418,7 +418,7 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
             listSnap.forEach { (l, ids) -> if (l in store.lists) { l.ids.clear(); l.ids.addAll(ids) } }
             persist()
         }
-        scope.launch { delay(6000); if (!undone) { on.serverDelete(removed) } }
+        scope.launch { delay(6000); if (!undone) { on.dropPendUp(removed); on.serverDelete(removed) } }
     }
 
     // "less like this": the person goes down a lot, the words a little, and the post goes away now

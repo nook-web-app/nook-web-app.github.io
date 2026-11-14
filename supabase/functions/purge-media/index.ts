@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { sweepOrphans } from "../_shared/orphans.ts";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 const BUCKETS = ["media", "dm-media"];
@@ -92,9 +93,10 @@ Deno.serve(async (req) => {
   const got = req.headers.get("x-purge-secret") || "";
   if (!want || !same(want, got)) return json({ error: "forbidden" }, 403);
 
-  let body: { bucket?: string; paths?: unknown; user_id?: string | null; action?: string };
+  let body: { mode?: string; apply?: boolean; force?: boolean; bucket?: string; paths?: unknown; user_id?: string | null; action?: string };
   try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
   if (!body || typeof body !== "object") return json({ error: "bad json" }, 400);
+  if (body.mode === "orphans") return json(await sweepOrphans(admin, { apply: body.apply === true, force: body.force === true }));
   if (body.action === "archive" || body.action === "drop_archive") {
     if (typeof body.user_id !== "string" || !/^[0-9a-f-]{36}$/i.test(body.user_id)) return json({ error: "bad user" }, 400);
     try {

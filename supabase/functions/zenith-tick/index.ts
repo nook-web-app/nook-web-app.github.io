@@ -255,6 +255,8 @@ let zenCloseness = 50;
 // deno-lint-ignore no-explicit-any
 async function mindTick(owner: string, zen: string, docs: { doc_id: string; data: any }[]) {
   const now = Date.now();
+  // once a day: files in storage that nothing uses any more are put in quarantine for 14 days (and the quarantine is emptied)
+  if (await useModel(admin, "sweep-day", 1)) sweepStorage().catch(() => {});
   const st = await loadState(admin, owner);
   const recent = await recentEntries(admin, owner, 60);
   const lastAt = recent.length ? recent[recent.length - 1].t : 0;
@@ -270,6 +272,46 @@ async function mindTick(owner: string, zen: string, docs: { doc_id: string; data
   await describeOne(owner);
   if (await reflect(owner, zen, st, recent)) return;
   await textFirst(owner, zen, st, recent, tz);
+}
+
+// storage: files nothing uses any more are put in quarantine (14 days, then gone) by purge-media, once a day
+async function sweepStorage() {
+  const { data: secret } = await admin.rpc("nook_purge_secret");
+  if (typeof secret !== "string" || !secret) return;
+  const call = async (force: boolean) => {
+    const r = await fetch(Deno.env.get("SUPABASE_URL")! + "/functions/v1/purge-media", { method: "POST", headers: { "content-type": "application/json", "x-purge-secret": secret }, body: JSON.stringify({ mode: "orphans", apply: true, force }), signal: AbortSignal.timeout(140000) });
+    return await r.json().catch(() => ({}));
+  };
+  let j = await call(false);
+  // the first big clean up (the app is small, so most files are leftovers) is allowed once, it only moves them to quarantine
+  if (j && typeof j.aborted === "string" && /more than|50|percent|guard|force/i.test(j.aborted)) {
+    const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
+    if (o) {
+      const st = await loadState(admin, o.user_id as string);
+      // deno-lint-ignore no-explicit-any
+      if (!(st as any).sweptOnce) { j = await call(true); (st as any).sweptOnce = true; await saveState(admin, o.user_id as string, st); }
+    }
+  }
+  const q = j && j.quarantined ? JSON.stringify(j.quarantined) : "";
+  try { await admin.rpc("nook_ai_full", { p_model: ("debug:sweep:" + (j && j.aborted ? "aborted " + j.aborted : "ok " + q) + " would " + (j && j.would_quarantine)).replace(/[^\w .,:'-]+/g, " ").slice(0, 150), p_limit: 1 }); } catch { /* only a note */ }
+}
+
+// what a picture or video of the owner's posts shows is written down once (one post a minute at most), so he knows what the post was about
+async function describeOne(owner: string) {
+  try {
+    const { data: posts } = await admin.from("posts").select("id, body, media_url").eq("user_id", owner).eq("mod_status", "safe").not("media_url", "is", null).gt("created_at", new Date(Date.now() - 6 * DAY).toISOString()).order("created_at", { ascending: false }).limit(6);
+    const rows = (posts || []) as { id: string; body: string | null; media_url: string | null }[];
+    if (!rows.length) return;
+    const { data: have } = await admin.from("zenith_docs").select("doc_id").eq("owner_id", owner).eq("kind", "mind").in("doc_id", rows.map((r) => "pic:" + r.id));
+    const done = new Set((have || []).map((r: { doc_id: string }) => r.doc_id));
+    const p = rows.find((r) => !done.has("pic:" + r.id));
+    if (!p) return;
+    const md = await mediaInfo(p.media_url).catch(() => null);
+    let d = "";
+    if (md && md.pics.length) d = (await ask("Describe what the picture or video shows in one short factual sentence. Say only what you can actually see. If you cannot tell, say so.", "Caption: " + (String(p.body || "").slice(0, 300) || "(none)") + (md.note || ""), md.pics, true)).slice(0, 220);
+    // a row is written even when nothing could be read, so it is not tried again every minute
+    await admin.from("zenith_docs").upsert({ owner_id: owner, kind: "mind", doc_id: "pic:" + p.id, data: { d: d || "(could not be seen)" }, updated_at: new Date().toISOString() }, { onConflict: "owner_id,kind,doc_id" });
+  } catch { /* next minute */ }
 }
 
 // the owner wrote (or called) and he had not looked yet: when the moment comes that he picks up his phone, the phone shows Seen, he types,

@@ -173,6 +173,13 @@ private suspend fun Online.zenChatMedia(d: JSONObject): JSONArray {
     return msgs
 }
 
+// the files of cleared messages go from storage once the server copy no longer points at them
+private val zenTrash = ArrayList<String>()
+fun Online.zenClearChat(c: LChat) {
+    c.msgs.forEach { m -> m.zm?.objs()?.forEach { e -> Sb.pathOf(e.optJSONObject("d")?.optString("url"), "dm-media")?.let { zenTrash.add(it) } } }
+    c.msgs.clear()
+}
+
 fun Online.zenSyncSoon() { if (!zenSyncOn) return; zenSyncJob?.cancel(); zenSyncJob = app.scope.launch { delay(2500); zenSync() } }
 
 suspend fun Online.zenSync() {
@@ -208,6 +215,7 @@ suspend fun Online.zenSync() {
                 if (Sb.delete(Q("zenith_docs").eq("owner_id", me).eq("kind", kind).inList("doc_id", ids)).ok) chunk.forEach { zenSeen.remove(it) }
             }
         }
+        if (zenTrash.isNotEmpty()) { val t = zenTrash.distinct(); zenTrash.clear(); Sb.remove("dm-media", t) }
     } catch (e: Exception) { } finally { zenBusy = false }
 }
 

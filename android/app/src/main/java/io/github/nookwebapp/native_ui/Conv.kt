@@ -105,7 +105,7 @@ fun ConvScreen(id: String) {
                         // a nickname for him, only on this phone
                         SheetItem("Rename chat", "edit") { app.panels.add(Panel.RenameChat(chat)) },
                         // it only goes for the owner: his chat stays (it is always there) and he still remembers it
-                        SheetItem("Delete chat", "close", danger = true) { app.confirm("Delete this chat? It is only deleted for you, he still remembers it.", "Delete") { chat.msgs.clear(); app.persist(); app.on.zenSyncSoon() } },
+                        SheetItem("Delete chat", "close", danger = true) { app.confirm("Delete this chat? It is only deleted for you, he still remembers it.", "Delete") { app.on.zenClearChat(chat); app.persist(); app.on.zenSyncSoon() } },
                     ))
                     else app.open(listOf(
                         SheetItem("Rename chat", "edit") { app.panels.add(Panel.RenameChat(chat)) },

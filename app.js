@@ -305,7 +305,7 @@ const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.sta
 
 // the hint for Zenith's name shows while "@zen..." is typed, not once "@zenith" is complete
 const zenHint = v => { const m = /@\w*$/.exec(v); return !!m && m[0].toLowerCase() !== "@zenith"; };
-const APP_VERSION = "3.49.5";
+const APP_VERSION = "3.49.6";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -1891,6 +1891,7 @@ async function syncEdit(ed, text, origin, now) {
   const all = kept.concat(up);
   const { error } = await sb.from("posts").update({ body: text, media_url: all.length ? JSON.stringify(all) : null }).eq("id", ed.remote);
   if (error) {
+    if (up.length) sb.storage.from("media").remove(up.map(u => storagePath(u, "media")).filter(Boolean)).then(() => {}, () => {});
     toast(/rate_limited/.test(error.message || "") ? "Wait a few seconds before editing again. The edit was not saved" : "The edit was not saved. " + plainErr(error, "Try again"));
     return false;
   }
@@ -2284,6 +2285,20 @@ async function wipeServerExtras() {
     sb.from("nicknames").delete().eq("owner_id", me)
   ];
   for (const r of await Promise.all(steps)) if (r.error) throw r.error;
+  // every file of this account (chat photos, notes, posts, pictures) goes from storage too
+  for (const [bucket, dirs] of [[DM_BUCKET, [me, me + "/notes"]], ["media", [me]]]) {
+    for (const dir of dirs) {
+      try {
+        for (let n = 0; n < 50; n++) {
+          const { data, error } = await sb.storage.from(bucket).list(dir, { limit: 100 });
+          const files = (data || []).filter(f => f && f.id);
+          if (error || !files.length) break;
+          const rm = await sb.storage.from(bucket).remove(files.map(f => dir + "/" + f.name));
+          if (rm.error) break;
+        }
+      } catch (e) {}
+    }
+  }
 }
 const CRCT = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
 function crc32(u8) { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRCT[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
@@ -2712,6 +2727,8 @@ function zenDocs() {
 const zenRowId = key => "zenith:" + (sbUser ? sbUser.id : "") + ":" + key;
 const zenKey = k => { const i = k.indexOf(":"); return { kind: k.slice(0, i), doc_id: k.slice(i + 1) }; };
 // the pictures of a chat with Zenith go up locked with the owner's key, like the notes, and come back with the text
+// storage files of Zenith chats uploaded on this visit, so a chat that is deleted takes its photos with it
+const zenFiles = new Map();
 async function zenChatMedia(d) {
   const k = await sharedKey(sbUser.id);
   const c = S.chats.find(x => x.id === d.id);
@@ -2730,6 +2747,7 @@ async function zenChatMedia(d) {
       lm.zm = media;
     }
     const rest = Object.assign({}, m); delete rest.ph;
+    media.forEach(e => { const pth = notePath(e.d); if (pth) (zenFiles.get("chat:" + d.id) || zenFiles.set("chat:" + d.id, new Set()).get("chat:" + d.id)).add(pth); });
     msgs.push(Object.assign(rest, { media: media.map(e => e.d) }));
   }
   return msgs;
@@ -2774,7 +2792,12 @@ async function zenSync() {
     for (const key of del) {
       const k = zenKey(key);
       const { error } = await sb.from("zenith_docs").delete().eq("owner_id", sbUser.id).eq("kind", k.kind).eq("doc_id", k.doc_id);
-      if (!error) zenSeen.delete(key);
+      if (!error) {
+        zenSeen.delete(key);
+        const fl = zenFiles.get(key);
+        if (fl && fl.size) sb.storage.from(DM_BUCKET).remove([...fl]).then(() => {}, () => {});
+        zenFiles.delete(key);
+      }
     }
   } catch (e) {} finally { zenBusySync = false; }
 }
@@ -3780,7 +3803,7 @@ async function loadFeedNow(pre) {
       bannerUrl(src).then(url => {
         if (!url || S.profile.banner !== src) return;
         S.profile.banner = url; persist();
-        sb.from("accounts").update({ banner: url }).eq("id", sbUser.id).then(() => {});
+        sb.from("accounts").update({ banner: url }).eq("id", sbUser.id).then(({ error }) => { if (error) dropOldFile(url, null); });
       });
     }
     if (changed) { persist(); renderRail(); }
@@ -4253,16 +4276,19 @@ async function bannerUrl(src) {
 }
 async function uploadMedia(srcs) {
   const urls = [];
-  for (let i = 0; i < srcs.length; i++) {
-    const real = await imgReal(srcs[i]);
-    if (!real) continue;
-    const blob = await (await fetch(real)).blob();
-    const ext = (blob.type.split("/")[1] || "bin").replace("jpeg", "jpg");
-    const path = sbUser.id + "/" + Date.now() + "-" + i + "." + ext;
-    const { error } = await sb.storage.from("media").upload(path, blob, { contentType: blob.type });
-    if (error) { if (urls.length) sb.storage.from("media").remove(urls.map(u => storagePath(u, "media")).filter(Boolean)).catch(() => {}); return null; }
-    urls.push(sb.storage.from("media").getPublicUrl(path).data.publicUrl);
-  }
+  const undo = () => { if (urls.length) sb.storage.from("media").remove(urls.map(u => storagePath(u, "media")).filter(Boolean)).then(() => {}, () => {}); };
+  try {
+    for (let i = 0; i < srcs.length; i++) {
+      const real = await imgReal(srcs[i]);
+      if (!real) continue;
+      const blob = await (await fetch(real)).blob();
+      const ext = (blob.type.split("/")[1] || "bin").replace("jpeg", "jpg");
+      const path = sbUser.id + "/" + Date.now() + "-" + i + "." + ext;
+      const { error } = await sb.storage.from("media").upload(path, blob, { contentType: blob.type });
+      if (error) { undo(); return null; }
+      urls.push(sb.storage.from("media").getPublicUrl(path).data.publicUrl);
+    }
+  } catch (e) { undo(); throw e; }
   return urls;
 }
 // posts that could not be saved are sent again by themselves when the connection is back
@@ -4309,7 +4335,9 @@ async function pushPostNow(np, par, hasImgs, quiet) {
   const row = { user_id: sbUser.id, body: np.text || "" };
   let urls = null;
   if (hasImgs) {
-    urls = await uploadMedia(np.imgs);
+    // photos already stored by an earlier try (lost reply) are used again, so a retry leaves no second copy behind
+    urls = np.upUrls || await uploadMedia(np.imgs);
+    if (urls) np.upUrls = urls;
     if (!urls) { if (!quiet) toast("Could not upload the photo. It will be sent again when the connection is back"); return; }
     row.media_url = JSON.stringify(urls);
   }
@@ -4321,10 +4349,10 @@ async function pushPostNow(np, par, hasImgs, quiet) {
   if (error && error.code === "23505") { data = { id: np.rid }; error = null; }
   // deleted on this phone while it was still uploading: it goes from the server again
   if (!error && data && !S.posts.includes(np)) { S.pendDel = (S.pendDel || []).concat(data.id); persist(); serverDelete([{ remote: data.id, media: urls || [] }]); return; }
-  if (!error && data) { np.remote = data.id; np.media = urls || []; persist(); if (isOwner()) { setTimeout(zenNudge, 22000); setTimeout(zenNudge, 50000); } }
+  if (!error && data) { np.remote = data.id; np.media = urls || []; delete np.upUrls; persist(); if (isOwner()) { setTimeout(zenNudge, 22000); setTimeout(zenNudge, 50000); } }
   else {
     // a lost reply (no error code) may still have stored the post, so its photos are kept
-    if (urls && urls.length && error && error.code) sb.storage.from("media").remove(urls.map(u => storagePath(u, "media")).filter(Boolean)).then(() => {}, () => {});
+    if (urls && urls.length && error && error.code) { delete np.upUrls; sb.storage.from("media").remove(urls.map(u => storagePath(u, "media")).filter(Boolean)).then(() => {}, () => {}); }
     // posting is paused: this post is dropped instead of being tried again and again
     const lk = /post_locked:(\d+)/.exec(String((error && error.message) || ""));
     if (lk) {
@@ -4650,13 +4678,13 @@ function editProfile() {
           if (avSrc === was.avatar && pr.avSynced === avSrc) { /* unchanged and already saved */ } else avatarValue(pr.avatar).then(async small => {
             if (small === undefined) { toast("Could not upload profile photo"); return; }
             const oldAv = await oldFileOf(uid0, "avatar");
-            if (sbUser) sb.from("accounts").update({ avatar: small }).eq("id", uid0).then(({ error }) => { if (error) toast("The new picture was not saved. " + plainErr(error, "Try again later")); else { pr.avSynced = avSrc; dropOldFile(oldAv, small); persist(); } loadFeed(); if (sbUser && sbUser.id === uid0) rememberAccount({ username: pr.handle, name: pr.name || pr.handle, avatar: small }).catch(() => {}); });
+            if (sbUser) sb.from("accounts").update({ avatar: small }).eq("id", uid0).then(({ error }) => { if (error) { toast("The new picture was not saved. " + plainErr(error, "Try again later")); dropOldFile(small, oldAv); } else { pr.avSynced = avSrc; dropOldFile(oldAv, small); persist(); } loadFeed(); if (sbUser && sbUser.id === uid0) rememberAccount({ username: pr.handle, name: pr.name || pr.handle, avatar: small }).catch(() => {}); });
           });
           const src = pr.banner;
           if (src === was.banner && pr.bnSynced === src) { /* unchanged and already saved */ } else bannerUrl(src).then(async url => {
             if (url === undefined) { toast("Could not upload banner"); return; }
             const oldBn = await oldFileOf(uid0, "banner");
-            sb.from("accounts").update({ banner: url }).eq("id", uid0).then(({ error }) => { if (error) toast("The new banner was not saved. " + plainErr(error, "Try again later")); else if (pr.banner === src || pr.banner === url) { pr.bnSynced = url || null; dropOldFile(oldBn, url); persist(); } });
+            sb.from("accounts").update({ banner: url }).eq("id", uid0).then(({ error }) => { if (error) { toast("The new banner was not saved. " + plainErr(error, "Try again later")); if (url !== src) dropOldFile(url, oldBn); } else if (pr.banner === src || pr.banner === url) { pr.bnSynced = url || null; dropOldFile(oldBn, url); persist(); } });
             if (url && pr.banner === src && url !== src) { pr.banner = url; persist(); }
           });
         }
@@ -7153,6 +7181,7 @@ async function sendDm(otherId, text, srcs, dims) {
   if (Date.now() - e2eOkAt > 60000) { let ok = true; await ensureE2E().catch(() => { ok = false; }); if (ok) e2eOkAt = Date.now(); }
   const media = [];
   const paths = [];
+  let inserting = false;
   const key = srcs.length ? await sharedKey(otherId) : null;
   if (srcs.length) keyGate(otherId);
   try {
@@ -7168,12 +7197,14 @@ async function sendDm(otherId, text, srcs, dims) {
       media.push({ url: sb.storage.from(DM_BUCKET).getPublicUrl(path).data.publicUrl, type: blob.type || "", w: d.w || null, h: d.h || null, iv: toB64(iv), ...(d.post ? { post: true } : {}) });
     }
     const body = text ? await sealText(otherId, text) : "";
+    inserting = true;
     const { data, error } = await sb.from("messages").insert({ sender_id: sbUser.id, recipient_id: otherId, body, media }).select("id, sender_id, recipient_id, body, media, created_at, read_at").single();
     if (error) throw error;
     inboxStale(); threadRuns.delete(otherId);
     return data;
   } catch (e) {
-    if (paths.length && e && e.code) sb.storage.from(DM_BUCKET).remove(paths).then(() => {}, () => {});
+    // a lost reply to the insert (no error code) may still have stored the message, so its photos stay then
+    if (paths.length && (!inserting || (e && e.code))) sb.storage.from(DM_BUCKET).remove(paths).then(() => {}, () => {});
     throw e;
   }
 }
@@ -9046,24 +9077,26 @@ async function notesPush(ns, key) {
   const gone = Object.keys(ns.pushed).filter(id => ns.pushed[id] !== "gone" && !exist.has(id));
   const stale = [];
   for (let i = 0; i < todo.length; i += 20) {
-    const part = todo.slice(i, i + 20), rows = [], done = [];
+    const part = todo.slice(i, i + 20), rows = [], done = [], fresh = [];
     for (const x of part) {
+      const mine = [];
       try {
         if (x.m) {
           const h = noteImgSig(x.m), have = ns.pm[x.id];
           let media = have && have.h === h ? have.e : null;
-          if (!media) { media = []; for (const s0 of x.m.imgs || []) { const src = await imgReal(s0); if (!/^data:/.test(src || "")) throw new Error("photo not ready"); media.push(await notePicOut(key, src)); } }
+          if (!media) { media = []; for (const s0 of x.m.imgs || []) { const src = await imgReal(s0); if (!/^data:/.test(src || "")) throw new Error("photo not ready"); const o = await notePicOut(key, src); mine.push(o); media.push(o); } }
           rows.push({ owner_id: sbUser.id, id: x.id, body: await noteSeal(key, { c: x.c.id, t: x.m.t, x: x.m.text || "", ...(x.m.rpost ? { rp: x.m.rpost } : {}), ...(x.m.zpost ? { zp: x.m.zpost } : {}) }, x.id), media, deleted: false });
+          if (mine.length) fresh.push(...mine);
           done.push({ x, pm: { h, e: media } });
         } else {
           rows.push({ owner_id: sbUser.id, id: x.id, body: await noteSeal(key, { n: x.c.name, t: x.c.t }, x.id), media: [], deleted: false });
           done.push({ x });
         }
-      } catch (e) { /* this one is tried again on the next round */ }
+      } catch (e) { /* this one is tried again on the next round */ if (mine.length) sb.storage.from(DM_BUCKET).remove(mine.map(notePath).filter(Boolean)).then(() => {}, () => {}); }
     }
     if (!rows.length) continue;
     const { error } = await sb.from("notes_self").upsert(rows, { onConflict: "owner_id,id" });
-    if (error) throw error;
+    if (error) { if (fresh.length) sb.storage.from(DM_BUCKET).remove(fresh.map(notePath).filter(Boolean)).then(() => {}, () => {}); throw error; }
     notesPushed = true;
     done.forEach(d => {
       const old = ns.pm[d.x.id];

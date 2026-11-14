@@ -274,6 +274,9 @@ private fun tombs(ns: JSONObject): JSONObject {
     return t
 }
 
+// the sealed pictures already uploaded for a message whose batch did not go through: a retry reuses them (message id -> picture sig, links)
+private val noteHold = HashMap<String, Pair<String, JSONArray>>()
+
 // notesPush(): what changed here goes up; what was removed here is marked removed there
 private suspend fun Online.notesPush(ns: JSONObject, key: ByteArray): Boolean {
     val me = uid ?: return false
@@ -295,6 +298,7 @@ private suspend fun Online.notesPush(ns: JSONObject, key: ByteArray): Boolean {
     // to the server as removed then, the next pull brings the notes back
     if (gone.size >= 3 && s.chats.isEmpty()) gone = emptyList()
     val stale = ArrayList<String>()
+    try {
     for (part in todo.chunked(20)) {
         val rows = JSONArray(); val done = ArrayList<Pair<Todo, JSONObject?>>()
         for (x in part) {
@@ -302,7 +306,13 @@ private suspend fun Online.notesPush(ns: JSONObject, key: ByteArray): Boolean {
                 if (x.m != null) {
                     val hh = imgSig(x.m); val have = pm.optJSONObject(x.id)
                     var media = if (have != null && have.optString("h") == hh) have.optJSONArray("e") else null
-                    if (media == null) { media = JSONArray(); for (src in x.m.imgs) media.put(notePicOut(key, src)) }
+                    if (media == null) media = noteHold[x.id]?.takeIf { it.first == hh }?.second
+                    if (media == null) {
+                        val up = JSONArray(); val fresh = ArrayList<String>()
+                        try { for (src in x.m.imgs) { val md = notePicOut(key, src); up.put(md); Sb.pathOf(md.optString("url"), "dm-media")?.let { fresh.add(it) } } }
+                        catch (e: Exception) { if (fresh.isNotEmpty()) Sb.remove("dm-media", fresh); throw e }
+                        media = up; noteHold[x.id] = hh to up
+                    }
                     val body = JSONObject().put("c", x.c.id).put("t", x.m.t).put("x", x.m.text)
                     x.m.rpost?.let { body.put("rp", JSONObject().put("id", it.id).put("u", it.u ?: JSONObject.NULL)) }
                     x.m.zpost?.let { body.put("zp", JSONObject().put("x", it.x).put("t", it.t).put("a", it.a ?: JSONObject.NULL)) }
@@ -321,6 +331,7 @@ private suspend fun Online.notesPush(ns: JSONObject, key: ByteArray): Boolean {
         did = true
         done.forEach { (x, p) ->
             val old = pm.optJSONObject(x.id)
+            noteHold.remove(x.id)
             pushed.put(x.id, x.sig)
             if (p != null) {
                 pm.put(x.id, p)
@@ -352,7 +363,16 @@ private suspend fun Online.notesPush(ns: JSONObject, key: ByteArray): Boolean {
             sigs.forEach { (id, sg) -> pushed.put(id, sg) }
         }
     }
-    if (stale.isNotEmpty()) app.scope.launch { Sb.remove("dm-media", stale) }
+    } finally {
+        // replaced or removed pictures go even when a later step failed; held pictures of a message that is gone or changed go too
+        if (stale.isNotEmpty()) app.scope.launch { Sb.remove("dm-media", stale.toList()) }
+        val live = HashSet<String>(); todo.forEach { t -> if (t.m != null) live.add(t.id + "|" + imgSig(t.m)) }
+        noteHold.entries.toList().filter { (it.key + "|" + it.value.first) !in live }.forEach { e ->
+            noteHold.remove(e.key)
+            val ps = e.value.second.objs().mapNotNull { Sb.pathOf(it.optString("url"), "dm-media") }
+            if (ps.isNotEmpty()) app.scope.launch { Sb.remove("dm-media", ps) }
+        }
+    }
     return did
 }
 

@@ -423,6 +423,17 @@ Deno.serve(async (req) => {
     if (o) await logEntries(admin, o.user_id as string, Array.isArray(body.entries) ? (body.entries as Entry[]).slice(0, 40) : []);
     return json({ ok: true });
   }
+  // a message the owner deletes in his chat is forgotten by him too (his own messages stay in his memory)
+  if (body.action === "forget") {
+    const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
+    const ids = (Array.isArray(body.ids) ? body.ids : []).filter((x: unknown) => typeof x === "string" && /^[\w-]{6,64}$/.test(x as string)).slice(0, 20);
+    if (o && ids.length) {
+      const { data: rows } = await admin.from("zenith_docs").select("doc_id, data").eq("owner_id", o.user_id).eq("kind", "mindlog").in("doc_id", ids);
+      const mine = (rows || []).filter((r: { data: { ai?: boolean } }) => !(r.data && r.data.ai)).map((r: { doc_id: string }) => r.doc_id);
+      if (mine.length) await admin.from("zenith_docs").delete().eq("owner_id", o.user_id).eq("kind", "mindlog").in("doc_id", mine);
+    }
+    return json({ ok: true });
+  }
   // his own chat: every message there is for him. He answers like a person: only when he looks at his phone. In the middle of a conversation
   // that is within seconds; otherwise it depends on what he is doing (asleep, at work, gaming, out). The phone gets either his answer right
   // away ("now", with the moment he saw it, so it can show Seen and then the typing), or "later": the minute job sends the answer by push when

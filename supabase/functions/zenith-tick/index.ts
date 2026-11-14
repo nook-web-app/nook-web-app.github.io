@@ -255,11 +255,6 @@ let zenCloseness = 50;
 // deno-lint-ignore no-explicit-any
 async function mindTick(owner: string, zen: string, docs: { doc_id: string; data: any }[]) {
   const now = Date.now();
-  // ONE TIME: his memory starts over (asked by the owner): his messages, his state and his notebook go, he has never talked to the owner
-  if (await useModel(admin, "mind-reset-2", 1)) {
-    await admin.from("zenith_docs").delete().eq("owner_id", owner).in("kind", ["mind", "mindlog"]);
-    await setFollow(owner, zen, false);
-  }
   const st = await loadState(admin, owner);
   const recent = await recentEntries(admin, owner, 60);
   const lastAt = recent.length ? recent[recent.length - 1].t : 0;

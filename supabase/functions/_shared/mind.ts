@@ -117,8 +117,11 @@ export function asTranscript(list: Entry[]): string {
 // the locker, one short break), goes to the gym or out for a walk some days, games with his friend Jonas, eats dinner with his family and
 // sometimes goes out with Jonas and Lukas. Every part of the day has its own "attention": the chance per minute that he looks at his phone.
 export const ZTZ = "Europe/Berlin";
+const fmtParts = new Map<string, Intl.DateTimeFormat>();
 export function localTime(t: number, tz = ZTZ) {
-  const p = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "numeric", weekday: "short", hourCycle: "h23" }).formatToParts(new Date(t));
+  let f = fmtParts.get(tz);
+  if (!f) { f = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "numeric", weekday: "short", hourCycle: "h23" }); fmtParts.set(tz, f); }
+  const p = f.formatToParts(new Date(t));
   const g = (k: string) => (p.find((x) => x.type === k) || { value: "0" }).value;
   return { h: Number(g("hour")) % 24, m: Number(g("minute")), wd: g("weekday") };
 }
@@ -204,7 +207,8 @@ export function planFor(day: string): Plan {
   planCache.set(day, plan);
   return plan;
 }
-export function dayKey(t: number) { return new Date(t).toLocaleDateString("en-CA", { timeZone: ZTZ }); }
+const fmtDay = new Intl.DateTimeFormat("en-CA", { timeZone: ZTZ });
+export function dayKey(t: number) { return fmtDay.format(new Date(t)); }
 export type Life = { asleep: boolean; what: string; att: number; plan: Plan; m: number; next: Block | null };
 // what he is doing at a moment (a night belongs to the day before it)
 export function lifeAt(t: number): Life {

@@ -92,7 +92,7 @@ fun ConvScreen(id: String) {
             Row(Modifier.weight(1f).padding(start = 4.dp).then(if (isZ) Modifier.tap { app.go(Route.Zen) } else Modifier), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (isZ) ZenAv(36.dp) else MyAvatar(36.dp)
                 Column {
-                    T(if (isZ) "Zenith" else chat.name, Fs.lg, FontWeight.Bold, maxLines = 1, lineHeight = (16 * 1.2).sp)
+                    T(chat.name, Fs.lg, FontWeight.Bold, maxLines = 1, lineHeight = (16 * 1.2).sp)
                     T("@" + (if (isZ) s.zen.optString("handle").ifEmpty { "zenith" } else s.profile.handle), Fs.sm, color = c.muted, maxLines = 1, lineHeight = (13 * 1.2).sp)
                 }
             }
@@ -102,8 +102,10 @@ fun ConvScreen(id: String) {
             Box(Modifier.width(44.dp)) {
                 IB("dots") {
                     if (isZ) app.open(listOf(
-                        // his chat is never removed (it is always there), only what is shown on this phone; he still remembers
-                        SheetItem("Clear chat for me", "trash", danger = true) { app.confirm("Clear this chat? He will still remember it.", "Clear") { chat.msgs.clear(); app.persist(); app.on.zenSyncSoon() } },
+                        // a nickname for him, only on this phone
+                        SheetItem("Rename chat", "edit") { app.panels.add(Panel.RenameChat(chat)) },
+                        // it only goes for the owner: his chat stays (it is always there) and he still remembers it
+                        SheetItem("Delete chat", "close", danger = true) { app.confirm("Delete this chat? It is only deleted for you, he still remembers it.", "Delete") { chat.msgs.clear(); app.persist(); app.on.zenSyncSoon() } },
                     ))
                     else app.open(listOf(
                         SheetItem("Rename chat", "edit") { app.panels.add(Panel.RenameChat(chat)) },
@@ -127,7 +129,9 @@ fun ConvScreen(id: String) {
                 FoldAway(m.leaving) { Box(Modifier.padding(bottom = 6.dp).msgIn(anim, !m.ai)) { SwipeReply(m.ai && !isZ, { fill[0]?.invoke("@zenith ") }) { Bubble(m, open == m.id, onTap = { open = if (open == m.id) null else m.id }) {
                     app.open(listOfNotNull(
                         if (m.text.isNotEmpty()) SheetItem("Copy message", "copy") { app.clipboard(m.text) } else null,
-                        SheetItem(if (isZ) "Delete for me" else "Delete message", "trash", danger = true) {
+                        SheetItem(if (isZ && m.ai) "Delete for me" else "Delete message", "trash", danger = true) {
+                            // in his chat: his messages go only for the owner; the owner's own go for both (he forgets them too)
+                            if (isZ && !m.ai) { val ids = org.json.JSONArray().put(m.id); app.scope.launch { runCatching { Sb.fn("zenith", org.json.JSONObject().put("action", "forget").put("ids", ids)) } } }
                             // the command and every card it brought in go together (a post with several files has one message per file)
                             val first = m.mcard?.let { it.optInt("n") == 0 && it.optInt("x") != 1 } == true
                             val group = if (first) chat.msgs.filter { x -> x.mcard != null && x.text == m.text && x.t >= m.t && x.t <= m.t + 40 } else listOf(m)

@@ -97,7 +97,7 @@ fun ChatsScreen() {
             if (zOn()) item(key = "zdm") {
                 val last = s.chats.firstOrNull { it.id == ZDM }?.msgs?.lastOrNull()
                 val sub = when { last == null -> "Say hi"; callLogOf(last.text) != null -> "Call"; last.text.isEmpty() -> "Sent a photo"; else -> last.text }
-                LRow({ ZenAv(48.dp) }, "Zenith", sub, last?.let { ago(it.t) }) { app.zenDm(); app.go(Route.Conv(ZDM)) }
+                LRow({ ZenAv(48.dp) }, s.chats.firstOrNull { it.id == ZDM }?.name ?: "Zenith", sub, last?.let { ago(it.t) }) { app.zenDm(); app.go(Route.Conv(ZDM)) }
             }
             items(convos, key = { "d" + it.other }) { cv -> ConvoRow(cv) }
             if ((dm.inbox != null || on.me == null) && convos.isEmpty() && s.chats.isEmpty() && inboxFailed) item { Empty("smile", "Could not load your chats. Pull to try again, or check the connection.") }

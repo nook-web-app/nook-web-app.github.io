@@ -145,6 +145,9 @@ private suspend fun Online.noteTake(ns: JSONObject, key: ByteArray, r: JSONObjec
     }
     // a note this phone already knew but no longer has was removed here: the removal goes up, it is not brought back
     if (pushed.has(rowId) && !here) return false
+    // a note that was deleted on this phone never comes back from an older copy on the server (two syncs at once can leave one there):
+    // the deletion is sent again instead
+    if (!here && ns.optJSONObject("tomb")?.has(rowId) == true) { pushed.put(rowId, "regone"); return false }
     val p = noteOpen(key, r.optString("body"), rowId)
     if (isChat) {
         var c = s.chats.firstOrNull { it.id == rid }
@@ -263,6 +266,14 @@ private suspend fun Online.notesPullRows(ns: JSONObject, key: ByteArray): Boolea
     return changed
 }
 
+// what was deleted on this phone in the last days (id -> when)
+private fun tombs(ns: JSONObject): JSONObject {
+    val t = ns.optJSONObject("tomb") ?: JSONObject().also { ns.put("tomb", it) }
+    val old = t.keys().asSequence().filter { System.currentTimeMillis() - t.optLong(it) > 4 * 86_400_000L }.toList()
+    old.forEach { t.remove(it) }
+    return t
+}
+
 // notesPush(): what changed here goes up; what was removed here is marked removed there
 private suspend fun Online.notesPush(ns: JSONObject, key: ByteArray): Boolean {
     val me = uid ?: return false
@@ -321,7 +332,7 @@ private suspend fun Online.notesPush(ns: JSONObject, key: ByteArray): Boolean {
         val r = Sb.upsert("notes_self", JSONArray(part.map { JSONObject().put("owner_id", me).put("id", it).put("body", "").put("media", JSONArray()).put("deleted", true) }), "owner_id,id")
         if (!r.ok) throw IllegalStateException(r.error?.message)
         did = true
-        part.forEach { id -> pm.optJSONObject(id)?.optJSONArray("e")?.objs()?.forEach { md -> Sb.pathOf(md.optString("url"), "dm-media")?.let { stale.add(it) } }; pushed.put(id, "gone"); pm.remove(id) }
+        part.forEach { id -> pm.optJSONObject(id)?.optJSONArray("e")?.objs()?.forEach { md -> Sb.pathOf(md.optString("url"), "dm-media")?.let { stale.add(it) } }; pushed.put(id, "gone"); pm.remove(id); tombs(ns).put(id, System.currentTimeMillis()) }
     }
     // settings, saved posts and lists go up only after the server copy has been read, so a fresh phone never wipes them
     if (ns.optBoolean("pullOk")) {

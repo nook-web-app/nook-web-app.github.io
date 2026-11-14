@@ -338,7 +338,9 @@ async function answerLate(owner: string, zen: string, st: MindState, recent: Ent
   const text = await gen(persona(st, pages, tz, "text", prev, await activity(admin, owner, zen)) + "\n\n" + why, asContents(recent.slice(-40)), null, 400);
   st.pending = null;
   await saveState(admin, owner, st);
-  if (!text) return true;
+  // a note, so a late answer that never came can be looked up: select * from ai_usage where model like 'debug:late%'
+  try { await admin.rpc("nook_ai_full", { p_model: "debug:late:" + (text ? "answered " + text.length : "the model gave no words"), p_limit: 1 }); } catch { /* only a note */ }
+  if (!text) { st.pending = { seeAt: Date.now() + 120000, since }; await saveState(admin, owner, st); return true; }
   // the time it takes to type it
   await new Promise((res) => setTimeout(res, Math.min(12000, 1500 + text.length * 120)));
   await sendTexts(owner, text, false);

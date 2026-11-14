@@ -430,6 +430,14 @@ Deno.serve(async (req) => {
     if (o) await logEntries(admin, o.user_id as string, Array.isArray(body.entries) ? (body.entries as Entry[]).slice(0, 40) : []);
     return json({ ok: true });
   }
+  // what he wrote since a moment, for a phone that missed the push (it asks again when his chat is open and when the app starts)
+  if (body.action === "pull") {
+    const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
+    if (!o) return json({ entries: [] });
+    const since = Number(body.since) || 0;
+    const list = (await recentEntries(admin, o.user_id as string, 30)).filter((e) => e.ai && e.t > since && e.kind !== "call").slice(-20);
+    return json({ entries: list.map((e) => ({ id: e.id, text: e.text, t: e.t })) });
+  }
   // a message the owner deletes in his chat is forgotten by him too (his own messages stay in his memory)
   if (body.action === "forget") {
     const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();

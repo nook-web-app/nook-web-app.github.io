@@ -153,7 +153,7 @@ class MainActivity : ComponentActivity() {
         app.foreground = true
         // the kept connections are only dropped after a real break (a short trip to a picker keeps them warm)
         if (!was && System.currentTimeMillis() - bgAt > 60_000) Sb.dropConnections()
-        if (app.signedIn) runCatching { app.importZenTexts() }
+        if (app.signedIn) { runCatching { app.importZenTexts() }; app.scope.launch { delay(2500); runCatching { app.on.zenPullTexts() } } }
         if (!was && app.signedIn) {
             // the feed no longer waits for the ban and notice checks: they run side by side
             app.on.feedTries = 0

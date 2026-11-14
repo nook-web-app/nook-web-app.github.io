@@ -61,6 +61,8 @@ fun ConvScreen(id: String) {
             if (isZ && r.ok && r.body.has("calls")) { app.zCalls = r.body.optBoolean("calls"); app.saveZ() }
         }
     }
+    // his chat: what he wrote while the phone did not get the push is asked for (when the chat opens, then every little while)
+    LaunchedEffect(chat.id) { if (isZ) while (true) { runCatching { app.on.zenPullTexts() }; kotlinx.coroutines.delay(20_000) } }
     // the token of a call is asked for ahead of time, so the call starts without that wait
     LaunchedEffect(chat.id) { if (zOn()) runCatching { CallWarm.prefetch() } }
     var open by remember { mutableStateOf<String?>(null) }

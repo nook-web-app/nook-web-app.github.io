@@ -469,6 +469,7 @@ fun AppState.importZenTexts(): String? {
         chat.t = maxOf(chat.t, j.optLong("t", System.currentTimeMillis()))
     }
     chat.zc = true
+    ctx?.getSharedPreferences("zstate", 0)?.edit()?.putLong("pulled", list.maxOf { it.optLong("t", 0L) }.coerceAtLeast(0L))?.apply()
     zSeen = maxOf(zSeen, System.currentTimeMillis()); saveZ()
     persist()
     on.zenSyncSoon()
@@ -535,4 +536,34 @@ fun Online.zDm(chat: LChat, m: LMsg) {
         }
         app.zenVersion++
     }
+}
+
+// zenPullTexts(): his texts that the push did not bring (the phone was off, the push got lost) are asked for and put in his chat.
+// What was pulled last is remembered, so a message the owner deleted on this phone never comes back.
+suspend fun Online.zenPullTexts(): Boolean {
+    if (!zOn()) return false
+    val c = app.ctx ?: return false
+    val p = c.getSharedPreferences("zstate", 0)
+    val chat = app.store.chats.firstOrNull { it.id == ZDM }
+    var since = p.getLong("pulled", 0L)
+    if (since == 0L) since = maxOf(chat?.msgs?.filter { it.ai }?.maxOfOrNull { it.t } ?: 0L, System.currentTimeMillis() - 3 * 3_600_000L)
+    val r = runCatching { Sb.fn("zenith", JSONObject().put("action", "pull").put("since", since), timeoutS = 20) }.getOrNull() ?: return false
+    if (!r.ok) return false
+    val list = r.body.optJSONArray("entries")?.objs().orEmpty()
+    if (list.isEmpty()) return false
+    val zc = app.zenDm()
+    var added = false
+    for (e in list) {
+        val id = e.optString("id"); val t = e.optLong("t")
+        if (id.isEmpty() || zc.msgs.any { it.id == id }) continue
+        zc.msgs.add(LMsg(id, e.optString("text"), t, emptyList(), ai = true)); added = true
+        app.zenNoAnim.add(id)
+    }
+    p.edit().putLong("pulled", list.maxOf { it.optLong("t") }).apply()
+    if (added) {
+        zc.msgs.sortBy { it.t }
+        app.zSeen = maxOf(app.zSeen, System.currentTimeMillis()); app.saveZ()
+        app.persist(); zenSyncSoon(); app.zenVersion++
+    }
+    return added
 }

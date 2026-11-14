@@ -1,6 +1,9 @@
 package io.github.nookwebapp.native_ui
 
 import androidx.compose.ui.zIndex
+import androidx.compose.material3.Text
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.text.withStyle
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -131,7 +134,7 @@ fun ConvScreen(id: String) {
             items(chat.msgs.drop(shownFrom), key = { it.id }) { m ->
                 // pulling one of Zenith's messages to the right starts an answer to him
                 val anim = remember(m.id) { if (m.id in had || m.id in app.zenNoAnim) MsgAnim.None else if (m.ai) MsgAnim.In else MsgAnim.Send }
-                FoldAway(m.leaving) { Box(Modifier.padding(bottom = 6.dp).msgIn(anim, !m.ai)) { SwipeBubble(left = m.ai, canReply = m.ai, time = whenText(m.t), onReply = { if (isZ) replyHook[0]?.invoke(m) else fill[0]?.invoke("@zenith ") }) { Bubble(m, open == m.id, onTap = { open = if (open == m.id) null else m.id }, onDouble = if (isZ && m.ai) ({ m.liked = !m.liked; app.persist(); app.scope.launch { runCatching { Sb.fn("zenith", org.json.JSONObject().put("action", "like").put("id", m.id).put("on", m.liked)) } } }) else null) {
+                FoldAway(m.leaving) { Box(Modifier.padding(bottom = 6.dp).msgIn(anim, !m.ai)) { SwipeBubble(left = m.ai, canReply = m.ai, onReply = { if (isZ) replyHook[0]?.invoke(m) else fill[0]?.invoke("@zenith ") }, onTime = { open = if (open == m.id) null else m.id }) { Bubble(m, open == m.id, onTap = {}, onDouble = if (isZ && m.ai) ({ m.liked = !m.liked; app.persist(); app.scope.launch { runCatching { Sb.fn("zenith", org.json.JSONObject().put("action", "like").put("id", m.id).put("on", m.liked)) } } }) else null) {
                     app.open(listOfNotNull(
                         if (isZ) SheetItem("Reply", "reply") { replyHook[0]?.invoke(m) } else null,
                         if (m.text.isNotEmpty()) SheetItem("Copy message", "copy") { app.clipboard(m.text) } else null,
@@ -191,8 +194,7 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>, replyHook: A
         AnimatedVisibility(replyTo != null, enter = expandVertically(tween(220)) + fadeIn(tween(200)), exit = shrinkVertically(tween(180)) + fadeOut(tween(140))) {
             lastReply?.let { rt ->
                 Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(c.bg2).padding(start = 10.dp, top = 4.dp, bottom = 4.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                    NIcon("reply", 16.dp, c.accent)
-                    Box(Modifier.padding(start = 8.dp).width(3.dp).height(26.dp).clip(CircleShape).background(c.accent))
+                    Box(Modifier.width(3.dp).height(26.dp).clip(CircleShape).background(c.accent))
                     Column(Modifier.weight(1f).padding(start = 8.dp)) {
                         T(if (rt.ai) "Zenith" else "You", Fs.xs, FontWeight.Bold, c.accent, maxLines = 1)
                         T(replySnippet(rt), Fs.sm, color = c.muted, maxLines = 1)
@@ -319,12 +321,13 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onDouble: (() -> U
                     m.reply?.let { rp ->
                         val ink = if (left) c.fg else Color.White
                         val barColor = if (rp.ai) (if (left) c.accent else Color.White) else (if (left) c.muted else Color.White.copy(alpha = 0.85f))
-                        Row(Modifier.fillMaxWidth().padding(bottom = 7.dp).height(IntrinsicSize.Min).clip(RoundedCornerShape(10.dp)).background(if (left) c.bg.copy(alpha = 0.6f) else Color.Black.copy(alpha = 0.2f)).padding(vertical = 5.dp, horizontal = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.width(3.dp).fillMaxHeight().clip(CircleShape).background(barColor))
-                            Column(Modifier.padding(start = 8.dp)) {
-                                T(if (rp.ai) "Zenith" else "You", Fs.xs, FontWeight.Bold, barColor, maxLines = 1)
-                                T(rp.text, Fs.sm, color = ink.copy(alpha = 0.82f), maxLines = 1)
-                            }
+                        // one slim line: the bar, who, and the start of what was answered
+                        Row(Modifier.fillMaxWidth().padding(bottom = 5.dp).height(IntrinsicSize.Min).clip(RoundedCornerShape(8.dp)).background(if (left) c.bg.copy(alpha = 0.6f) else Color.Black.copy(alpha = 0.2f)).padding(vertical = 3.dp, horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.width(2.5.dp).fillMaxHeight().clip(CircleShape).background(barColor))
+                            Text(androidx.compose.ui.text.buildAnnotatedString {
+                                withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold, color = barColor)) { append(if (rp.ai) "Zenith" else "You") }
+                                append("  "); append(rp.text.replace(Regex("\\s+"), " "))
+                            }, Modifier.padding(start = 7.dp), color = ink.copy(alpha = 0.8f), fontSize = Fs.xs, lineHeight = 15.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                         }
                     }
                     Tx(m.text, color = if (left) c.fg else c.on, linkColor = if (left) null else Color.White, onTap = tap, onLong = onLong, cut = false)
@@ -333,6 +336,10 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onDouble: (() -> U
         }
         // the like of a double tap sits on the corner of the bubble
         LikeHeart(m.liked, left)
+        // the time, under the message, opens with a swipe (his to the left, mine to the right)
+        AnimatedVisibility(open, enter = expandVertically(tween(240)) + fadeIn(tween(200)), exit = shrinkVertically(tween(240)) + fadeOut(tween(200))) {
+            T(whenText(m.t), Fs.xs, color = c.muted, align = if (left || m.mcard != null) TextAlign.Start else TextAlign.End, modifier = Modifier.fillMaxWidth().padding(top = 4.dp, end = 2.dp, start = 2.dp))
+        }
     }
 }
 
@@ -347,7 +354,11 @@ private fun LikeHeart(liked: Boolean, left: Boolean) {
     LaunchedEffect(liked) { if (first) { first = false; return@LaunchedEffect }; if (liked) { burst.snapTo(0f); burst.animateTo(1f, tween(650)) } }
     if (pop < 0.01f && burst.value <= 0f) return
     val pink = Color(0xFFFF4F79)
-    Box(Modifier.offset(x = if (left) 12.dp else (-12).dp, y = (-10).dp).size(26.dp), contentAlignment = Alignment.Center) {
+    // it sits on the bottom corner of the bubble and only takes a few dp of height, so a liked message does not leave a gap under it
+    Box(Modifier.offset(x = if (left) 12.dp else (-12).dp).layout { m, c ->
+        val p = m.measure(c)
+        layout(p.width, 6.dp.roundToPx()) { p.place(0, -(p.height - 8.dp.roundToPx())) }
+    }.size(24.dp), contentAlignment = Alignment.Center) {
         if (burst.value in 0.01f..0.99f) NIcon("heart", 22.dp, pink.copy(alpha = 0.55f * (1f - burst.value)), fill = true, modifier = Modifier.graphicsLayer { scaleX = 1f + burst.value * 1.6f; scaleY = 1f + burst.value * 1.6f; translationY = -burst.value * 18.dp.toPx() })
         Box(Modifier.graphicsLayer { scaleX = pop; scaleY = pop; alpha = pop.coerceIn(0f, 1f) }, contentAlignment = Alignment.Center) {
             NIcon("heart", 23.dp, c.bg, fill = true)
@@ -356,43 +367,24 @@ private fun LikeHeart(liked: Boolean, left: Boolean) {
     }
 }
 
-// swiping a message shows its time: his to the left, mine to the right; his can also be pulled to the right to answer it (the arrow grows
-// until it counts and the phone ticks). It springs back when let go.
+// a swipe on a message (nothing moves, only the phone ticks): his message to the right answers it and to the left shows its time,
+// mine to the right shows its time
 @Composable
-private fun SwipeBubble(left: Boolean, canReply: Boolean, time: String, onReply: () -> Unit, content: @Composable () -> Unit) {
-    val c = LocalNook.current
-    val density = androidx.compose.ui.platform.LocalDensity.current
+private fun SwipeBubble(left: Boolean, canReply: Boolean, onReply: () -> Unit, onTime: () -> Unit, content: @Composable () -> Unit) {
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
-    val scope = rememberCoroutineScope()
-    val maxPx = with(density) { 62.dp.toPx() }
-    val replyAt = with(density) { 48.dp.toPx() }
-    val off = remember { androidx.compose.animation.core.Animatable(0f) }
-    val swipeReply by rememberUpdatedState(onReply)
-    var ticked by remember { mutableStateOf(false) }
-    Box(Modifier.fillMaxWidth()) {
-        val x = off.value
-        // time: appears on the side the bubble left; his goes left, mine goes right
-        val showTime = if (left) x < 0f else x > 0f
-        if (showTime) T(time, Fs.xs, color = c.muted, modifier = Modifier.align(if (left) Alignment.CenterEnd else Alignment.CenterStart).graphicsLayer { alpha = (kotlin.math.abs(x) / maxPx).coerceIn(0f, 1f); translationX = if (left) (kotlin.math.abs(x) - maxPx) * 0.5f else (maxPx - kotlin.math.abs(x)) * -0.5f })
-        // the arrow of an answer
-        if (left && canReply && x > 0f) {
-            val p = (x / replyAt).coerceIn(0f, 1f)
-            Box(Modifier.align(Alignment.CenterStart).padding(start = 4.dp).size(30.dp).graphicsLayer { alpha = p; val s = 0.5f + 0.5f * p + (if (x >= replyAt) 0.15f else 0f); scaleX = s; scaleY = s }.clip(CircleShape).background(if (x >= replyAt) c.accent else c.bg2), contentAlignment = Alignment.Center) { NIcon("reply", 17.dp, if (x >= replyAt) c.on else c.muted) }
-        }
-        Box(Modifier.offset { androidx.compose.ui.unit.IntOffset(off.value.toInt(), 0) }.pointerInput(left, canReply) {
-            detectHorizontalDragGestures(
-                onDragStart = { ticked = false },
-                onDragEnd = { if (left && canReply && off.value >= replyAt) { haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); swipeReply() }; scope.launch { off.animateTo(0f, androidx.compose.animation.core.spring(androidx.compose.animation.core.Spring.DampingRatioMediumBouncy, androidx.compose.animation.core.Spring.StiffnessMedium)) } },
-                onDragCancel = { scope.launch { off.animateTo(0f) } },
-            ) { _, amount ->
-                // his: left shows the time, right answers; mine: right shows the time
-                val lo = if (left) -maxPx else 0f
-                val hi = if (left) (if (canReply) maxPx else 0f) else maxPx
-                val n = (off.value + amount * 0.55f).coerceIn(lo, hi)
-                if (left && canReply && !ticked && n >= replyAt) { ticked = true; haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove) }
-                if (n < replyAt) ticked = false
-                scope.launch { off.snapTo(n) }
-            }
-        }) { content() }
-    }
+    val limit = with(androidx.compose.ui.platform.LocalDensity.current) { 56.dp.toPx() }
+    val reply by rememberUpdatedState(onReply)
+    val time by rememberUpdatedState(onTime)
+    Box(Modifier.fillMaxWidth().pointerInput(left, canReply) {
+        var dx = 0f
+        detectHorizontalDragGestures(
+            onDragStart = { dx = 0f },
+            onDragEnd = {
+                val tick = androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress
+                if (left && canReply && dx > limit) { haptic.performHapticFeedback(tick); reply() }
+                else if (left && dx < -limit) { haptic.performHapticFeedback(tick); time() }
+                else if (!left && dx > limit) { haptic.performHapticFeedback(tick); time() }
+            },
+        ) { _, amount -> dx += amount }
+    }) { content() }
 }

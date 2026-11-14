@@ -2,7 +2,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { fetchImage, pagePreview } from "../_shared/preview.ts";
 import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
 import { ringPhone, warnPhone, textPhone, signalPhone } from "../_shared/ring.ts";
-import { activity, applyFeelings, asContents, asTranscript, asleepAt, closenessWords, dailyDrift, type Entry, loadNotebook, loadState, logEntries, type MindState, PAGE_MAX, PAGES, persona, pruneLog, recentEntries, saveNotebook, saveState, wakesAt, localTime, lifeAt } from "../_shared/mind.ts";
+import { activity, applyFeelings, asContents, asTranscript, asleepAt, closenessWords, dailyDrift, type Entry, loadNotebook, loadState, logEntries, type MindState, PAGE_MAX, PAGES, persona, pruneLog, recentEntries, saveNotebook, saveState, wakesAt, localTime, lifeAt, labelsOf, pickReply, REPLY_HELP } from "../_shared/mind.ts";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 const DAY = 864e5, HOUR = 36e5;
@@ -235,14 +235,14 @@ function hourIn(tz: string, t: number): number {
   try { return Number(new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", hourCycle: "h23" }).format(new Date(t))); } catch { return 12; }
 }
 // his texts go out one by one, a moment apart, like someone typing; each one is kept in his memory
-async function sendTexts(owner: string, raw: string, pro: boolean): Promise<number> {
-  const texts = raw.split(/\n+/).map((t) => t.replace(/^["'\s-]+|["'\s]+$/g, "").trim()).filter((t) => t.length > 0 && !/^\(.*\)$/.test(t)).slice(0, 3);
+async function sendTexts(owner: string, raw: string, pro: boolean, recent: Entry[] = [], max = 3): Promise<number> {
+  const texts = raw.split(/\n+/).map((t) => t.replace(/^["'\s-]+|["'\s]+$/g, "").trim()).filter((t) => t.length > 0 && !/^\(.*\)$/.test(t)).slice(0, max).map((t) => pickReply(t, recent)).filter((t) => t.text);
   let sent = 0;
   for (const t of texts) {
     const id = crypto.randomUUID();
     if (sent) await new Promise((res) => setTimeout(res, 1500 + Math.random() * 2500));
-    if (!(await textPhone(admin, owner, t.slice(0, 300), id))) break;
-    await logEntries(admin, owner, [{ id, ai: true, text: t, t: Date.now(), ...(pro ? { pro: true } : {}) }]);
+    if (!(await textPhone(admin, owner, t.text.slice(0, 300), id, t.re ? t.re.id : ""))) break;
+    await logEntries(admin, owner, [{ id, ai: true, text: t.text, t: Date.now(), ...(pro ? { pro: true } : {}), ...(t.re ? { re: t.re } : {}) }]);
     sent++;
   }
   return sent;
@@ -258,7 +258,7 @@ async function mindTick(owner: string, zen: string, docs: { doc_id: string; data
   // once a day: files in storage that nothing uses any more are put in quarantine for 14 days (and the quarantine is emptied)
   if (await useModel(admin, "sweep-day", 1)) sweepStorage().catch(() => {});
   const st = await loadState(admin, owner);
-  const recent = await recentEntries(admin, owner, 60);
+  const recent = await recentEntries(admin, owner, 100);
   const lastAt = recent.length ? recent[recent.length - 1].t : 0;
   const tz = String((docs.find((d) => d.doc_id === "prompt") || { data: {} }).data.tz || "");
   const before = JSON.stringify(st);
@@ -335,7 +335,7 @@ async function answerLate(owner: string, zen: string, st: MindState, recent: Ent
   const firstNew = recent.findIndex((e) => !e.ai && e.t >= since);
   const prev = firstNew > 0 ? recent[firstNew - 1].t : 0;
   const why = then.asleep ? "You were asleep when he wrote. You just woke up and saw it now." : now - since < 10 * 60000 ? "You saw it a few minutes after he sent it." : "You did not see it right away: you were " + then.what.replace(/ \(.*\)/, "") + ". You only saw it now, like a person would (no need to apologise unless it was long).";
-  const text = await gen(persona(st, pages, tz, "text", prev, await activity(admin, owner, zen)) + "\n\n" + why, asContents(recent.slice(-40)), null, 400);
+  const text = await gen(persona(st, pages, tz, "text", prev, await activity(admin, owner, zen)) + REPLY_HELP + "\n\n" + why, asContents(recent.slice(-80), labelsOf(recent)), null, 500);
   st.pending = null;
   await saveState(admin, owner, st);
   // a note, so a late answer that never came can be looked up: select * from ai_usage where model like 'debug:late%'
@@ -343,7 +343,7 @@ async function answerLate(owner: string, zen: string, st: MindState, recent: Ent
   if (!text) { st.pending = { seeAt: Date.now() + 120000, since }; await saveState(admin, owner, st); return true; }
   // the time it takes to type it
   await new Promise((res) => setTimeout(res, Math.min(12000, 1500 + text.length * 120)));
-  await sendTexts(owner, text, false);
+  await sendTexts(owner, text, false, recent, recent.filter((e) => !e.ai).length >= 3 && !recent[recent.length - 1].ai ? 5 : 3);
   return true;
 }
 
@@ -461,7 +461,7 @@ async function textFirst(owner: string, zen: string, st: MindState, recent: Entr
     + " Never say a song, game or show is new or just came out (you cannot know that); talk about things you like."
     + (c >= 25 && Math.random() < 0.15 ? " This time, ask if you can call him." : "")
     + (streak === 1 ? " He did not answer your last text: do not complain about it, send something light or something new." : "");
-  const contents = asContents(recent.slice(-30));
+  const contents = asContents(recent.slice(-60));
   contents.push({ role: "user", parts: [{ text: "(No new message from him. " + idea + " Write only what you send, one text per line, at most two.)" }] });
   const text = await gen(persona(st, pages, tz, "text", last ? last.t : 0, await activity(admin, owner, zen)), contents, null, 300);
   if (text) await sendTexts(owner, text, true);

@@ -446,9 +446,9 @@ fun Online.saveZen(pfp: String?, banner: String?, blurred: Boolean) {
 // or a new one called Zenith). Returns the id of that chat, or null when nothing was waiting.
 object ZenTexts {
     private fun prefs(c: android.content.Context) = c.getSharedPreferences("ztexts", 0)
-    fun add(c: android.content.Context, id: String, text: String) {
+    fun add(c: android.content.Context, id: String, text: String, re: String = "") {
         val a = runCatching { JSONArray(prefs(c).getString("list", "[]")) }.getOrDefault(JSONArray())
-        a.put(JSONObject().put("id", id).put("text", text).put("t", System.currentTimeMillis()))
+        a.put(JSONObject().put("id", id).put("text", text).put("re", re).put("t", System.currentTimeMillis()))
         prefs(c).edit().putString("list", a.toString()).apply()
     }
     fun take(c: android.content.Context): List<JSONObject> {
@@ -465,7 +465,7 @@ fun AppState.importZenTexts(): String? {
     val chat = zenChat()
     for (j in list) {
         val id = j.optString("id").ifEmpty { uid() }
-        if (chat.msgs.none { it.id == id }) chat.msgs.add(LMsg(id, j.optString("text"), j.optLong("t", System.currentTimeMillis()), emptyList(), ai = true))
+        if (chat.msgs.none { it.id == id }) chat.msgs.add(LMsg(id, j.optString("text"), j.optLong("t", System.currentTimeMillis()), emptyList(), ai = true).also { m -> m.reply = chat.msgs.firstOrNull { it.id == j.optString("re") }?.let { ReplyRef(it.id, replySnippet(it), it.ai) } })
         chat.t = maxOf(chat.t, j.optLong("t", System.currentTimeMillis()))
     }
     chat.zc = true
@@ -493,7 +493,12 @@ fun entryOf(m: LMsg): JSONObject {
     val log = callLogOf(m.text)
     val text = if (log != null) log.second.joinToString("\n") { (if (it.mine) "Him: " else "You: ") + it.text } else m.text.ifEmpty { if (m.imgs.isNotEmpty()) "(sent a photo)" else "" }
     return JSONObject().put("id", m.id).put("ai", m.ai).put("text", text.take(4000)).put("t", m.t).put("kind", if (log != null) "call" else "text")
+        .apply { m.reply?.let { put("re", JSONObject().put("id", it.id).put("text", it.text).put("ai", it.ai)) } }
 }
+
+// the start of a message, for the quote of a reply
+fun replySnippet(m: LMsg): String = (if (callLogOf(m.text) != null) "Call" else m.text.ifEmpty { "Photo" }).replace(Regex("\\s+"), " ").take(120)
+private fun reOf(j: JSONObject?): ReplyRef? = j?.takeIf { it.optString("id").isNotEmpty() }?.let { ReplyRef(it.optString("id"), it.optString("text"), it.optBoolean("ai")) }
 
 // zDm(): a message in his own chat. He answers like a person: when he looks at his phone. The server says "now" (with how long until he saw
 // it: the phone shows Seen, then the typing dots, then each text whole, one after the other) or "later" (the answer comes by push when he gets
@@ -503,7 +508,7 @@ fun Online.zDm(chat: LChat, m: LMsg) {
     app.scope.launch {
         val sentAt = System.currentTimeMillis()
         val recent = JSONArray()
-        chat.msgs.takeLast(20).forEach { recent.put(entryOf(it)) }
+        chat.msgs.takeLast(30).forEach { recent.put(entryOf(it)) }
         val parts = JSONArray()
         withContext(kotlinx.coroutines.Dispatchers.IO) { m.imgs.takeLast(2).mapNotNull { inline(it) } }.forEach { parts.put(it) }
         val body = JSONObject().put("action", "dm").put("recent", recent).put("parts", parts).put("replyId", uid())
@@ -526,6 +531,7 @@ fun Online.zDm(chat: LChat, m: LMsg) {
                     kotlinx.coroutines.delay((900L + t.length * 95L).coerceAtMost(9000L) + (if (i == 0) 500L else 0L))
                     app.zenTyping.remove(chat.id)
                     ai.text = t; ai.t = System.currentTimeMillis()
+                    ai.reply = reOf(j.optJSONArray("re")?.optJSONObject(i))
                     app.zenNoAnim.add(ai.id)
                     chat.msgs.add(ai); app.persist(); app.zenVersion++
                     app.ctx?.let { c -> if (!app.foreground) Notify.show(c, "Zenith", t.take(180), "ztext", ai.id.hashCode()) }
@@ -556,7 +562,7 @@ suspend fun Online.zenPullTexts(): Boolean {
     for (e in list) {
         val id = e.optString("id"); val t = e.optLong("t")
         if (id.isEmpty() || zc.msgs.any { it.id == id }) continue
-        zc.msgs.add(LMsg(id, e.optString("text"), t, emptyList(), ai = true)); added = true
+        zc.msgs.add(LMsg(id, e.optString("text"), t, emptyList(), ai = true).also { it.reply = reOf(e.optJSONObject("re")) }); added = true
         app.zenNoAnim.add(id)
     }
     p.edit().putLong("pulled", list.maxOf { it.optLong("t") }).apply()

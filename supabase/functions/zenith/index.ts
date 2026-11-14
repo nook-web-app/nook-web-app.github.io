@@ -3,7 +3,7 @@ import { fetchImage } from "../_shared/preview.ts";
 import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
 import { peekForSearch, type CallAsk } from "../_shared/chatstream.ts";
 import { ringPhone } from "../_shared/ring.ts";
-import { activity, asleepAt, asContents, asTranscript, type Entry, lifeAt, loadNotebook, loadState, logEntries, nextLook, persona, recentEntries, saveState } from "../_shared/mind.ts";
+import { activity, asleepAt, asContents, asTranscript, type Entry, labelsOf, lifeAt, loadNotebook, loadState, logEntries, nextLook, persona, pickReply, recentEntries, REPLY_HELP, saveState } from "../_shared/mind.ts";
 // Zenith is the name of the owner-only AI; the moderation AI is called Aegis
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
@@ -436,7 +436,7 @@ Deno.serve(async (req) => {
     if (!o) return json({ entries: [] });
     const since = Number(body.since) || 0;
     const list = (await recentEntries(admin, o.user_id as string, 30)).filter((e) => e.ai && e.t > since && e.kind !== "call").slice(-20);
-    return json({ entries: list.map((e) => ({ id: e.id, text: e.text, t: e.t })) });
+    return json({ entries: list.map((e) => ({ id: e.id, text: e.text, t: e.t, re: e.re || null })) });
   }
   // a message the owner deletes in his chat is forgotten by him too (his own messages stay in his memory)
   if (body.action === "forget") {
@@ -472,7 +472,7 @@ Deno.serve(async (req) => {
     if (handle) st.handle = handle;
     const calls = st.allowCalls && !(st.blockedUntil > now);
     if (st.blockedUntil > now) { await saveState(admin, owner, st); return json({ mode: "blocked", calls: false }); }
-    const recent = await recentEntries(admin, owner, 40);
+    const recent = await recentEntries(admin, owner, 100);
     const lastAi = [...recent].reverse().find((e) => e.ai);
     const life = lifeAt(now);
     // how eager he is about this person: someone new waits longer, and when he is hurt he takes his time
@@ -490,12 +490,12 @@ Deno.serve(async (req) => {
     const pages = await loadNotebook(admin, owner);
     const lastBefore = recent.length > 1 ? recent[recent.length - 2].t : 0;
     // deno-lint-ignore no-explicit-any
-    const history: any[] = asContents(recent);
+    const history: any[] = asContents(recent, labelsOf(recent));
     const last = history[history.length - 1];
     if (!last || last.role !== "user") return json({ mode: "now", texts: [], wait: 0, calls });
     const pics = Array.isArray(body.parts) ? (body.parts as { inline_data?: unknown }[]).filter((p) => p && p.inline_data).slice(0, 2) : [];
     if (pics.length) last.parts.push(...pics);
-    const system = persona(st, pages, tz, "text", lastBefore, await activity(admin, owner, await zenId())) + SEARCH_HELP + (calls ? CALL_HELP : "");
+    const system = persona(st, pages, tz, "text", lastBefore, await activity(admin, owner, await zenId())) + SEARCH_HELP + REPLY_HELP + (calls ? CALL_HELP : "");
     let got = await gemini(key, system, history, false, calls ? true : "search");
     if (got.call) {
       const mins = await planCall(got.call);
@@ -513,13 +513,17 @@ Deno.serve(async (req) => {
       const parts = (j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || [];
       text = parts.filter((p: { thought?: boolean }) => !p.thought).map((p: { text?: string }) => p.text || "").join("");
     } catch { /* no answer */ }
-    const texts = text.split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 3);
+    // several messages in a row can get several texts back (up to 5)
+    let waiting = 0;
+    for (let i = recent.length - 1; i >= 0 && !recent[i].ai; i--) waiting++;
+    const parsed = text.split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, waiting >= 3 ? 5 : 3).map((x) => pickReply(x, recent)).filter((x) => x.text);
+    const texts = parsed.map((x) => x.text);
     // no words came back (the model had a bad moment): he tries again in a minute instead of leaving the message unanswered
     if (!texts.length) { st.pending = { seeAt: Date.now() + 60000, since: st.pending ? st.pending.since : now }; await saveState(admin, owner, st); return json({ mode: "later", calls }); }
     const replyId = typeof body.replyId === "string" && /^[\w-]{6,40}$/.test(body.replyId) ? body.replyId : crypto.randomUUID();
     const ids = texts.map((_, i) => (i ? replyId + "-" + (i + 1) : replyId));
-    if (texts.length) await logEntries(admin, owner, texts.map((x, i) => ({ id: ids[i], ai: true, text: x, t: Date.now() + i })));
-    return json({ mode: "now", wait: Math.max(0, seeAt - now), texts, ids, calls });
+    if (texts.length) await logEntries(admin, owner, parsed.map((x, i) => ({ id: ids[i], ai: true, text: x.text, t: Date.now() + i, ...(x.re ? { re: x.re } : {}) })));
+    return json({ mode: "now", wait: Math.max(0, seeAt - now), texts, ids, re: parsed.map((x) => x.re || null), calls });
   }
   // the owner calls him: it rings first, and like a person he may not pick up (asleep, at work, phone away), or decline when he is not
   // comfortable with calls yet. A missed call is something he answers later, by text.

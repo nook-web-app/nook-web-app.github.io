@@ -15,7 +15,8 @@ import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 export const DAY = 864e5, HOUR = 36e5;
 export const PAGES = 9, PAGE_MAX = 1800;
 
-export type Entry = { id: string; ai: boolean; text: string; t: number; kind?: string; pro?: boolean };
+export type Reply = { id: string; text: string; ai: boolean };
+export type Entry = { id: string; ai: boolean; text: string; t: number; kind?: string; pro?: boolean; re?: Reply };
 export type MindState = {
   met: number;            // when they first talked
   closeness: number;      // 0 to 100
@@ -66,7 +67,7 @@ export async function saveNotebook(admin: SupabaseClient, owner: string, pages: 
 // messages are kept by their id, so the same message sent twice is one row
 export async function logEntries(admin: SupabaseClient, owner: string, list: Entry[]) {
   const rows = list.filter((e) => e && typeof e.id === "string" && /^[\w-]{6,40}$/.test(e.id) && typeof e.text === "string" && e.text.trim())
-    .map((e) => ({ owner_id: owner, kind: "state", doc_id: "ml:" + e.id, data: { ai: !!e.ai, text: e.text.slice(0, 4000), t: Number(e.t) || Date.now(), kind: e.kind || "text", ...(e.pro ? { pro: true } : {}) }, updated_at: new Date().toISOString() }));
+    .map((e) => ({ owner_id: owner, kind: "state", doc_id: "ml:" + e.id, data: { ai: !!e.ai, text: e.text.slice(0, 4000), t: Number(e.t) || Date.now(), kind: e.kind || "text", ...(e.pro ? { pro: true } : {}), ...(e.re && typeof e.re.id === "string" ? { re: { id: String(e.re.id).slice(0, 40), text: String(e.re.text || "").slice(0, 160), ai: !!e.re.ai } } : {}) }, updated_at: new Date().toISOString() }));
   if (!rows.length) return;
   const r = await admin.from("zenith_docs").upsert(rows, { onConflict: "owner_id,kind,doc_id", ignoreDuplicates: true });
   await noteError(admin, "log", r.error);
@@ -95,11 +96,29 @@ function gap(ms: number): string {
   if (ms < 2 * DAY) return Math.round(ms / HOUR) + " hours later";
   return Math.round(ms / DAY) + " days later";
 }
-export function asContents(list: Entry[]): { role: string; parts: { text: string }[] }[] {
+// the owner's newest messages get a number, so he can answer one of them with "@3 ..." (a reply that shows what it answers)
+export function labelsOf(list: Entry[]): Map<string, number> {
+  const m = new Map<string, number>();
+  const mine = list.filter((e) => !e.ai && e.kind !== "call" && e.kind !== "missed").slice(-8);
+  mine.forEach((e, i) => m.set(e.id, i + 1));
+  return m;
+}
+export function pickReply(line: string, list: Entry[]): { text: string; re?: Reply } {
+  const m = /^@(\d{1,2})\s+([\s\S]+)$/.exec(line.trim());
+  if (!m) return { text: line.replace(/^@\d{1,2}\s*$/, "").trim() };
+  const id = [...labelsOf(list)].find(([, n]) => n === Number(m[1]));
+  const src = id ? list.find((e) => e.id === id[0]) : null;
+  return { text: m[2].trim(), ...(src ? { re: { id: src.id, text: src.text.slice(0, 160), ai: false } } : {}) };
+}
+export const REPLY_HELP = "\n\nHis newest messages are numbered like [#3]. When one of your texts answers a specific message of his (not just the last one), start that text with @ and the number, like @3 haha yeah, and it shows as a reply to that message. Do that now and then, when it helps (for example when you answer several messages at once). Never write the [#3] numbers yourself.";
+export function asContents(list: Entry[], labels?: Map<string, number>): { role: string; parts: { text: string }[] }[] {
   const out: { role: string; parts: { text: string }[] }[] = [];
   let prev = 0;
   for (const e of list) {
     let text = e.kind === "call" ? "(a phone call between you two, what was said:)\n" + e.text : e.text;
+    if (e.re) text = "(replying to " + (e.re.ai ? "your" : "his") + " message: \"" + e.re.text.slice(0, 120) + "\")\n" + text;
+    const lab = labels && labels.get(e.id);
+    if (lab) text = "[#" + lab + "] " + text;
     if (prev && e.t - prev > 45 * 60000) text = "(" + gap(e.t - prev) + ")\n" + text;
     prev = e.t;
     const role = e.ai ? "model" : "user";

@@ -68,6 +68,8 @@ class LPost(
 
 data class RPost(val id: String, val u: String?)
 data class ZPost(val x: String, val t: Long, val a: String?)
+// a message that answers another one in his chat: which one and the start of its text (kept so it still shows when the old message is gone)
+data class ReplyRef(val id: String, val text: String, val ai: Boolean)
 
 class LMsg(val id: String, text: String, t: Long, imgs: List<String>, val ai: Boolean = false, rpost: RPost? = null, zpost: ZPost? = null) {
     var text by mutableStateOf(text)
@@ -75,6 +77,7 @@ class LMsg(val id: String, text: String, t: Long, imgs: List<String>, val ai: Bo
     var imgs by mutableStateOf(imgs)
     var rpost by mutableStateOf(rpost)
     var zpost by mutableStateOf(zpost)
+    var reply by mutableStateOf<ReplyRef?>(null)
     // "/media": the card of a video kept in a note (link, title, picture), see MediaGrab
     var mcard by mutableStateOf<JSONObject?>(null)
     // folding away after a delete (foldAway of the web app)
@@ -352,11 +355,12 @@ class Store(private val dir: File?) {
             m.rpost?.let { put("rpost", JSONObject().put("id", it.id).put("u", it.u ?: JSONObject.NULL)) }
             m.zpost?.let { put("zpost", JSONObject().put("x", it.x).put("t", it.t).put("a", it.a ?: JSONObject.NULL)) }
             m.zm?.let { put("zm", it) }
+            m.reply?.let { put("re", JSONObject().put("id", it.id).put("text", it.text).put("ai", it.ai)) }
             m.mcard?.let { put("mcard", it) }
         }
 
         fun msgOf(m: JSONObject): LMsg = LMsg(m.optString("id").ifEmpty { uid() }, m.optString("text", ""), m.optLong("t"), m.optJSONArray("imgs").strings(), m.optBoolean("ai"),
-            m.optJSONObject("rpost")?.let { RPost(it.optString("id"), it.optStr("u")) }, m.optJSONObject("zpost")?.let { ZPost(it.optString("x"), it.optLong("t"), it.optStr("a")) }).apply { zm = m.optJSONArray("zm"); mcard = MediaGrab.cleanCard(m.optJSONObject("mcard")) }
+            m.optJSONObject("rpost")?.let { RPost(it.optString("id"), it.optStr("u")) }, m.optJSONObject("zpost")?.let { ZPost(it.optString("x"), it.optLong("t"), it.optStr("a")) }).apply { zm = m.optJSONArray("zm"); reply = m.optJSONObject("re")?.let { ReplyRef(it.optString("id"), it.optString("text"), it.optBoolean("ai")) }; mcard = MediaGrab.cleanCard(m.optJSONObject("mcard")) }
     }
 }
 

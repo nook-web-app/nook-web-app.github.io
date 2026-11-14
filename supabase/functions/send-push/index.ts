@@ -82,7 +82,7 @@ Deno.serve(async (req) => {
   if (!secretCache || !same(secretCache, got)) return json({ error: "forbidden" }, 403);
   if (!(await setup())) return json({ error: "push keys missing" }, 500);
 
-  let body: { notification_id?: string; call?: { user_id?: string; reason?: string }; precall?: { user_id?: string }; ztext?: { user_id?: string; text?: string; id?: string }; zsig?: Record<string, string> };
+  let body: { notification_id?: string; call?: { user_id?: string; reason?: string }; precall?: { user_id?: string }; ztext?: { user_id?: string; text?: string; id?: string; re?: string }; zsig?: Record<string, string> };
   try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
   if (!body || typeof body !== "object") return json({ error: "bad json" }, 400);
   // Zenith calls: a push that makes the phone ring for 30 seconds (it is useless after that, so it is not kept)
@@ -116,7 +116,7 @@ Deno.serve(async (req) => {
     const { data: toks } = await admin.from("fcm_tokens").select("token").eq("user_id", uid);
     if (!toks || !toks.length) return json({ sent: 0 });
     const zid = /^[\w-]{6,64}$/.test(String(body.ztext.id || "")) ? String(body.ztext.id) : crypto.randomUUID();
-    const r = await sendFcm(toks, { type: "ztext", title: "Zenith", body: text, text, id: zid }, "86400s");
+    const r = await sendFcm(toks, { type: "ztext", title: "Zenith", body: text, text, id: zid, re: /^[\w-]{6,40}$/.test(String(body.ztext.re || "")) ? String(body.ztext.re) : "" }, "86400s");
     if (r.dead.length) await admin.from("fcm_tokens").delete().in("token", r.dead);
     return json({ sent: r.sent });
   }

@@ -54,6 +54,7 @@ fun ConvScreen(id: String) {
     // his own chat: his picture and name on top, the call button, and every message goes to him
     val isZ = chat.id == ZDM
     val fill = remember(chat.id) { arrayOfNulls<(String) -> Unit>(1) }
+    val replyHook = remember(chat.id) { arrayOfNulls<(LMsg) -> Unit>(1) }
     // opening a chat wakes Zenith's server up, so the first answer does not wait for it
     LaunchedEffect(chat.id) {
         if (zOn()) runCatching {
@@ -128,7 +129,7 @@ fun ConvScreen(id: String) {
             items(chat.msgs.drop(shownFrom), key = { it.id }) { m ->
                 // pulling one of Zenith's messages to the right starts an answer to him
                 val anim = remember(m.id) { if (m.id in had || m.id in app.zenNoAnim) MsgAnim.None else if (m.ai) MsgAnim.In else MsgAnim.Send }
-                FoldAway(m.leaving) { Box(Modifier.padding(bottom = 6.dp).msgIn(anim, !m.ai)) { SwipeReply(m.ai && !isZ, { fill[0]?.invoke("@zenith ") }) { Bubble(m, open == m.id, onTap = { open = if (open == m.id) null else m.id }) {
+                FoldAway(m.leaving) { Box(Modifier.padding(bottom = 6.dp).msgIn(anim, !m.ai)) { SwipeReply(m.ai || isZ, { if (isZ) replyHook[0]?.invoke(m) else fill[0]?.invoke("@zenith ") }) { Bubble(m, open == m.id, onTap = { open = if (open == m.id) null else m.id }) {
                     app.open(listOfNotNull(
                         if (m.text.isNotEmpty()) SheetItem("Copy message", "copy") { app.clipboard(m.text) } else null,
                         SheetItem(if (isZ && m.ai) "Delete for me" else "Delete message", "trash", danger = true) {
@@ -154,14 +155,14 @@ fun ConvScreen(id: String) {
             }
         }
         }
-        ConvDock(chat, fill)
+        ConvDock(chat, fill, replyHook)
     }
 }
 
 // .cdock: the pending photos and the text box with its photo and send buttons. The typed text lives here, so a keystroke
 // redraws the dock and not the messages. fill is given a way to put a word (Zenith's name) into the box.
 @Composable
-private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
+private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>, replyHook: Array<((LMsg) -> Unit)?>) {
     val app = LocalApp.current
     val c = LocalNook.current
     val isZ = chat.id == ZDM
@@ -172,10 +173,23 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
     val focus = remember { FocusRequester() }
     val pend = remember { mutableStateListOf<String>() }
     val picker = rememberPicker(4 - pend.size) { got -> pend.addAll(got.take(4 - pend.size)) }
+    var replyTo by remember(chat.id) { mutableStateOf<LMsg?>(null) }
+    replyHook[0] = { m -> replyTo = m; runCatching { focus.requestFocus() } }
     fill[0] = { pre -> val cur = tv.text; if (!cur.startsWith(pre.trim(), true)) setText(pre + cur); runCatching { focus.requestFocus() } }
     // .cdock: the pending photos and the text box with its photo and send buttons
     Column(Modifier.fillMaxWidth().background(c.bg).lineAbove(c.line).navigationBarsPadding().padding(bottom = 10.dp)) {
         if (!isZ) ZenPopHost(zOn() && zenHint(text)) { setText(text.replace(ZEN_AT, "@zenith ")) }
+        // the message being answered (swipe a message to the right to answer it)
+        replyTo?.let { rt ->
+            Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp).fillMaxWidth().clip(RoundedCornerShape(Rad.s)).background(c.bg2).padding(start = 10.dp, top = 6.dp, bottom = 6.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.width(3.dp).height(26.dp).clip(CircleShape).background(c.accent))
+                Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                    T(if (rt.ai) "Replying to Zenith" else "Replying to yourself", Fs.xs, FontWeight.SemiBold, c.accent)
+                    T(replySnippet(rt), Fs.sm, color = c.muted, maxLines = 1)
+                }
+                IB("close", box = 32.dp) { replyTo = null }
+            }
+        }
         if (pend.isNotEmpty()) Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             pend.forEachIndexed { i, src ->
                 Box(Modifier.size(64.dp).clip(RoundedCornerShape(Rad.s))) {
@@ -244,6 +258,8 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
                     return@pressTap
                 }
                 val m = LMsg(uid(), cleanText(text.trim()), Clock.now(), pend.toList())
+                if (isZ) replyTo?.let { rt -> m.reply = ReplyRef(rt.id, replySnippet(rt), rt.ai) }
+                replyTo = null
                 chat.msgs.add(m)
                 pend.clear(); setText("")
                 if (isZ) app.on.zDm(chat, m) else app.on.zAsk(chat, m)
@@ -274,7 +290,17 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onLong: () -> Unit
             if (shown) MediaCmd(card.optString("u"), card.optString("s"), card.optString("q"), tap, onLong, card.optJSONArray("l")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty(), card.optString("f"))
             Box(Modifier.align(Alignment.Start).padding(top = if (shown) 4.dp else 0.dp)) { MediaCard(m, tap, onLong) }
         }
-        m.rpost?.let { Box(Modifier.padding(top = if (m.imgs.isNotEmpty()) 4.dp else 0.dp)) { RCard(it.id, it.u) } }
+        // the quote of the message this one answers
+        m.reply?.let { rp ->
+            Row(Modifier.padding(top = 2.dp).widthIn(max = w * 0.82f).height(IntrinsicSize.Min).clip(RoundedCornerShape(Rad.s)).background(c.bg2.copy(alpha = 0.7f)).padding(end = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.width(3.dp).fillMaxHeight().background(c.accent))
+                Column(Modifier.padding(start = 8.dp, top = 5.dp, bottom = 5.dp)) {
+                    T(if (rp.ai) "Zenith" else "You", Fs.xs, FontWeight.SemiBold, c.accent)
+                    T(rp.text, Fs.sm, color = c.muted, maxLines = 2)
+                }
+            }
+        }
+        m.rpost?.let { Box(Modifier.padding(top = if (m.imgs.isNotEmpty() || m.reply != null) 4.dp else 0.dp)) { RCard(it.id, it.u) } }
         m.zpost?.let { Box(Modifier.padding(top = 4.dp)) { ZCard(it) } }
         // the text of a "/media" message is only its link (it is what the web app shows), the card is drawn instead
         val url = remember(m.text, m.mcard) { if (m.mcard != null || isMediaCmd(m.text)) null else firstUrl(m.text) }

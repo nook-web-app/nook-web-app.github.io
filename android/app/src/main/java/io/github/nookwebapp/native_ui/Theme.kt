@@ -42,6 +42,28 @@ val LightColors = NookColors(
     b1 = Color(0xFF9FCBFB), b2 = Color(0xFF5AA6F5), dark = false,
 )
 
+// the blues a chat can wear (chat menu, Chat color); the first one is the app's own. Each has a dark and a light version, and the colour of
+// the writing on it (the pale one needs dark writing in the dark theme)
+class ChatTint(val id: String, val name: String, val dark: Color, val darkFill: Color, val light: Color, val lightFill: Color, val onDark: Color = Color.White)
+val ChatTints = listOf(
+    ChatTint("", "Now", Color(0xFF208BFE), Color(0xFF1B75D6), Color(0xFF0B78F0), Color(0xFF0A73E6)),
+    ChatTint("ocean", "Deep ocean", Color(0xFF2F6BFF), Color(0xFF2557D6), Color(0xFF1F57E8), Color(0xFF1B4CCB)),
+    ChatTint("royal", "Royal", Color(0xFF3D5AFE), Color(0xFF3248D6), Color(0xFF2D49E8), Color(0xFF2A3FC4)),
+    ChatTint("sky", "Sky", Color(0xFF38A9FF), Color(0xFF2A8AD6), Color(0xFF1E92E8), Color(0xFF1A7ACC)),
+    ChatTint("teal", "Teal blue", Color(0xFF1AA3D9), Color(0xFF1485B3), Color(0xFF0E8DBE), Color(0xFF0C7AA3)),
+    ChatTint("steel", "Steel", Color(0xFF4C86C8), Color(0xFF3B6BA3), Color(0xFF3B72B3), Color(0xFF335F96)),
+    ChatTint("ice", "Ice", Color(0xFF6CB4F5), Color(0xFF4F94D3), Color(0xFF4A9BE8), Color(0xFF3A86D0), Color(0xFF0B1118)),
+    ChatTint("indigo", "Indigo", Color(0xFF5B7CFA), Color(0xFF4862D6), Color(0xFF4767EB), Color(0xFF3C54C9)),
+)
+fun tintOf(id: String): ChatTint = ChatTints.firstOrNull { it.id == id } ?: ChatTints[0]
+// the same colours with the accent of a tint (the default one changes nothing)
+fun NookColors.tinted(id: String): NookColors {
+    if (id.isEmpty()) return this
+    val t = tintOf(id)
+    val a = if (dark) t.dark else t.light
+    return NookColors(bg, bg2, fg, muted, line, a, if (dark) t.darkFill else t.lightFill, a, if (dark) t.onDark else Color.White, danger, good, like, scrim, b1, b2, dark)
+}
+
 val LocalNook = staticCompositionLocalOf { DarkColors }
 
 // font sizes and radii from :root (--fs-*, --r-*)
@@ -70,7 +92,7 @@ val BaseText = TextStyle(
 enum class ThemeMode { System, Dark, Light }
 
 // the same version as the web app (APP_VERSION in app.js); the app's own version code is made from it in build.gradle
-const val APP_VERSION = "3.49.20"
+const val APP_VERSION = "3.49.21"
 
 @Composable
 fun NookTheme(mode: ThemeMode = ThemeMode.System, content: @Composable () -> Unit) {

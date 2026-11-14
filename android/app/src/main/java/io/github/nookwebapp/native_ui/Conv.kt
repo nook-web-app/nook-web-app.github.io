@@ -51,6 +51,15 @@ import kotlinx.coroutines.awaitAll
 // the text box keeps what was typed (the draft) and up to four photos can go with a message.
 @Composable
 fun ConvScreen(id: String) {
+    // this chat wears its own blue (chat menu, Chat color); everything inside it is drawn with it
+    val base = LocalNook.current
+    val tint = LocalApp.current.store.chats.firstOrNull { it.id == id }?.tint.orEmpty()
+    val colors = remember(tint, base) { base.tinted(tint) }
+    CompositionLocalProvider(LocalNook provides colors) { ConvScreenBody(id) }
+}
+
+@Composable
+private fun ConvScreenBody(id: String) {
     val app = LocalApp.current
     val c = LocalNook.current
     val s = app.store
@@ -130,11 +139,13 @@ fun ConvScreen(id: String) {
                     if (isZ) app.open(listOf(
                         // a nickname for him, only on this phone
                         SheetItem("Rename chat", "edit") { app.panels.add(Panel.RenameChat(chat)) },
+                        SheetItem("Chat color", "sliders") { app.panels.add(Panel.ChatColor(chat)) },
                         // it only goes for the owner: his chat stays (it is always there) and he still remembers it
                         SheetItem("Delete chat", "close", danger = true) { app.confirm("Delete this chat? It is only deleted for you, he still remembers it.", "Delete") { app.on.zenClearChat(chat); app.persist(); app.on.zenSyncSoon() } },
                     ))
                     else app.open(listOf(
                         SheetItem("Rename chat", "edit") { app.panels.add(Panel.RenameChat(chat)) },
+                        SheetItem("Chat color", "sliders") { app.panels.add(Panel.ChatColor(chat)) },
                         SheetItem("Delete chat", "close", danger = true) { app.confirm("Delete this chat?", "Delete") { s.chats.remove(chat); app.persist(); app.pop() } },
                     ))
                 }

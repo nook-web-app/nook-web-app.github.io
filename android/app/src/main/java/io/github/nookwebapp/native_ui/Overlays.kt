@@ -201,6 +201,7 @@ fun PanelHost(app: AppState) {
                         Panel.EditProfile -> EditProfilePanel(app, p)
                         is Panel.ListForm -> ListFormPanel(app, p)
                         is Panel.RenameChat -> RenamePanel(app, p)
+                        is Panel.ChatColor -> ChatColorPanel(app, p)
                         is Panel.Crop -> CropPanel(app, p)
                         Panel.AddAccount -> AddAccountPanel(app, p)
                         Panel.NewAccount -> NewAccountPanel(app, p)
@@ -275,6 +276,40 @@ private fun ListFormPanel(app: AppState, p: Panel.ListForm) {
     }) {
         Fld("Name") { Field(name, { name = it }, "Favorites") }
         Fld("Description") { Field(desc, { desc = it }, "What is this list for") }
+    }
+}
+
+// Chat color: the blue of this chat alone (the bubbles, the send button, links and the highlight). A sample shows the choice at once.
+@Composable
+private fun ChatColorPanel(app: AppState, p: Panel.ChatColor) {
+    val base = LocalNook.current
+    val chat = p.chat
+    Modal("Chat color", "Done", onCancel = { app.closePanel(p) }, onAction = { app.closePanel(p) }) {
+        val shown = base.tinted(chat.tint)
+        CompositionLocalProvider(LocalNook provides shown) {
+            val c = LocalNook.current
+            Column(Modifier.fillMaxWidth().padding(bottom = 14.dp).clip(RoundedCornerShape(Rad.m)).background(base.bg).border(1.dp, base.line, RoundedCornerShape(Rad.m)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Box(Modifier.clip(RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.bubble, Rad.xs)).background(c.bg2).border(1.dp, c.line, RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.bubble, Rad.xs)).padding(horizontal = 14.dp, vertical = 9.dp)) { T("how is this one", Fs.lg, color = c.fg) }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Box(Modifier.clip(RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.xs, Rad.bubble)).background(c.accent).padding(horizontal = 14.dp, vertical = 9.dp)) { T("looks good", Fs.lg, color = c.on) }
+                }
+            }
+        }
+        // two rows of four
+        ChatTints.chunked(4).forEach { row ->
+            Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                row.forEach { t ->
+                    val on = chat.tint == t.id
+                    val col = if (base.dark) t.dark else t.light
+                    Column(Modifier.width(72.dp).tap(RoundedCornerShape(Rad.s)) { chat.tint = t.id; app.persist() }.padding(vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Box(Modifier.size(46.dp).clip(CircleShape).background(col).then(if (on) Modifier.border(3.dp, base.fg, CircleShape) else Modifier), contentAlignment = Alignment.Center) {
+                            if (on) NIcon("check", 22.dp, if (base.dark) t.onDark else Color.White)
+                        }
+                        T(t.name, Fs.xs, if (on) FontWeight.SemiBold else FontWeight.Normal, if (on) base.fg else base.muted, align = TextAlign.Center, maxLines = 1)
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -94,6 +94,8 @@ class LChat(val id: String, name: String, t: Long, msgs: List<LMsg> = emptyList(
     var draft by mutableStateOf(draft)
     // a chat with a message of Zenith in it is his chat; every other one is notes to self. Once a chat has been his it stays
     // his, so deleting his last message never turns it into a note (which the sync would then treat as removed)
+    // the blue this chat wears ("" is the app's own), see ChatTints
+    var tint by mutableStateOf("")
     var zc = false
     val isNotes: Boolean get() { if (!zc && msgs.any { it.ai }) zc = true; return !zc }
 }
@@ -229,7 +231,7 @@ class Store(private val dir: File?) {
             val msgs = mutableListOf<LMsg>()
             c.optJSONArray("msgs")?.forEachObj { m -> runCatching { msgs.add(msgOf(m)) } }
             if (c.optString("id").isEmpty()) return@forEachObj
-            chats.add(LChat(c.optString("id"), c.optString("name", "Chat"), c.optLong("t"), msgs, c.optString("draft", "")).also { it.zc = c.optBoolean("zc") })
+            chats.add(LChat(c.optString("id"), c.optString("name", "Chat"), c.optLong("t"), msgs, c.optString("draft", "")).also { it.zc = c.optBoolean("zc"); it.tint = c.optString("th") })
         }
         lists.clear()
         j.optJSONArray("lists")?.forEachObj { l -> val lid = l.optString("id"); if (lid.isNotEmpty()) lists.add(LList(lid, l.optString("name"), l.optString("desc", ""), l.optJSONArray("ids").strings())) }
@@ -276,7 +278,7 @@ class Store(private val dir: File?) {
         j.put("posts", JSONArray().apply { posts.toList().forEach { p -> if (!p.prov) put(postJson(p)) } })
         j.put("chats", JSONArray().apply {
             chats.toList().forEach { c ->
-                put(JSONObject().put("id", c.id).put("name", c.name).put("t", c.t).put("draft", c.draft).put("zc", !c.isNotes).put("msgs", JSONArray().apply { c.msgs.toList().forEach { m -> put(msgJson(m)) } }))
+                put(JSONObject().put("id", c.id).put("name", c.name).put("t", c.t).put("draft", c.draft).put("th", c.tint).put("zc", !c.isNotes).put("msgs", JSONArray().apply { c.msgs.toList().forEach { m -> put(msgJson(m)) } }))
             }
         })
         j.put("lists", JSONArray().apply { lists.toList().forEach { l -> put(JSONObject().put("id", l.id).put("name", l.name).put("desc", l.desc).put("ids", JSONArray(l.ids.toList()))) } })

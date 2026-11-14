@@ -51,6 +51,7 @@ sealed interface Panel {
     data object EditProfile : Panel
     data class ListForm(val list: LList?, val after: ((LList) -> Unit)? = null) : Panel
     data class RenameChat(val chat: LChat) : Panel
+    data class ChatColor(val chat: LChat) : Panel
     data class Crop(val src: String, val round: Boolean, val w: Int, val h: Int, val title: String, val done: (String?) -> Unit) : Panel
     data object AddAccount : Panel
     data object NewAccount : Panel

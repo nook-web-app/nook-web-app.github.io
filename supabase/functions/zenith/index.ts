@@ -446,6 +446,17 @@ Deno.serve(async (req) => {
     const list = (await recentEntries(admin, o.user_id as string, 30)).filter((e) => e.ai && e.t > since && e.kind !== "call").slice(-20);
     return json({ entries: list.map((e) => ({ id: e.id, text: e.text, t: e.t, re: e.re || null })) });
   }
+  // texts he decided not to send after all (the owner was typing and started a new message): they are taken out of his memory again
+  if (body.action === "unsend") {
+    const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
+    const ids = (Array.isArray(body.ids) ? body.ids : []).filter((x: unknown) => typeof x === "string" && /^[\w-]{6,44}$/.test(x as string)).slice(0, 10).map((x: string) => "ml:" + x);
+    if (o && ids.length) {
+      const { data: rows } = await admin.from("zenith_docs").select("doc_id, data").eq("owner_id", o.user_id).eq("kind", "state").in("doc_id", ids);
+      const his = (rows || []).filter((r: { data: { ai?: boolean } }) => r.data && r.data.ai).map((r: { doc_id: string }) => r.doc_id);
+      if (his.length) await admin.from("zenith_docs").delete().eq("owner_id", o.user_id).eq("kind", "state").in("doc_id", his);
+    }
+    return json({ ok: true });
+  }
   // a message the owner deletes in his chat is forgotten by him too (his own messages stay in his memory)
   if (body.action === "forget") {
     const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();

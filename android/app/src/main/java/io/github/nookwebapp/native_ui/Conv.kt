@@ -169,10 +169,12 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>, replyHook: A
     // the text and where the cursor is: a word put in by the app (Zenith's name) leaves the cursor after it
     var tv by remember(chat.id) { mutableStateOf(TextFieldValue(chat.draft, TextRange(chat.draft.length))) }
     val text = tv.text
-    fun setText(t: String) { tv = TextFieldValue(t, TextRange(t.length)); chat.draft = t; app.persist() }
+    fun setText(t: String) { tv = TextFieldValue(t, TextRange(t.length)); chat.draft = t; app.persist(); if (t.isEmpty()) ZTyping.at = 0 }
     val focus = remember { FocusRequester() }
     val pend = remember { mutableStateListOf<String>() }
     val picker = rememberPicker(4 - pend.size) { got -> pend.addAll(got.take(4 - pend.size)) }
+    // in his chat the typing is noted, so he can see it (he waits for the owner or texts anyway)
+    DisposableEffect(chat.id) { if (isZ) ZTyping.open = true; onDispose { if (isZ) { ZTyping.open = false; ZTyping.at = 0 } } }
     var replyTo by remember(chat.id) { mutableStateOf<LMsg?>(null) }
     replyHook[0] = { m -> replyTo = m; runCatching { focus.requestFocus() } }
     fill[0] = { pre -> val cur = tv.text; if (!cur.startsWith(pre.trim(), true)) setText(pre + cur); runCatching { focus.requestFocus() } }
@@ -201,7 +203,7 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>, replyHook: A
         Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             IB("image", tint = c.accent, box = 40.dp, height = 42.dp, enabled = pend.size < 4) { picker.gallery() }
             BasicTextField(
-                tv, { v -> val changed = v.text != tv.text; tv = v; if (changed) { chat.draft = v.text; app.persist() } },
+                tv, { v -> val changed = v.text != tv.text; tv = v; if (changed) { chat.draft = v.text; app.persist(); if (isZ) ZTyping.at = if (v.text.isEmpty()) 0 else System.currentTimeMillis() } },
                 Modifier.weight(1f).focusRequester(focus).heightIn(min = 42.dp, max = 140.dp).clip(RoundedCornerShape(Rad.bubble)).background(c.bg2).padding(horizontal = 14.dp, vertical = 10.dp),
                 textStyle = LocalTextStyle.current.copy(color = c.fg, fontSize = Fs.lg, lineHeight = (16 * 1.35).sp), cursorBrush = SolidColor(c.accent),
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),

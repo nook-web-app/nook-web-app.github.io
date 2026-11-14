@@ -500,6 +500,23 @@ fun entryOf(m: LMsg): JSONObject {
 fun replySnippet(m: LMsg): String = (if (callLogOf(m.text) != null) "Call" else m.text.ifEmpty { "Photo" }).replace(Regex("\\s+"), " ").take(120)
 private fun reOf(j: JSONObject?): ReplyRef? = j?.takeIf { it.optString("id").isNotEmpty() }?.let { ReplyRef(it.optString("id"), it.optString("text"), it.optBoolean("ai")) }
 
+// whether the owner is typing in his chat right now (the last key was a few seconds ago). He sees it like a person would: when he is about to
+// text he either waits until the owner is done, or sends anyway.
+object ZTyping { @Volatile var at = 0L; @Volatile var open = false }
+fun typingNow() = ZTyping.open && ZTyping.at > 0 && System.currentTimeMillis() - ZTyping.at < 6000
+// true: he decided to wait (and did, up to 45 seconds, until the owner stopped typing); false: he sends right away
+suspend fun politeWait(): Boolean {
+    if (!typingNow() || kotlin.random.Random.nextFloat() > 0.65f) return false
+    val t0 = System.currentTimeMillis()
+    while (typingNow() && System.currentTimeMillis() - t0 < 45_000) kotlinx.coroutines.delay(500)
+    kotlinx.coroutines.delay(600L + (kotlin.random.Random.nextFloat() * 1500).toLong())
+    return true
+}
+// the push of one of his texts: when the owner is typing in his chat, it may wait for them to finish
+fun AppState.importZenTextsPolite() {
+    scope.launch { politeWait(); importZenTexts() }
+}
+
 // zDm(): a message in his own chat. He answers like a person: when he looks at his phone. The server says "now" (with how long until he saw
 // it: the phone shows Seen, then the typing dots, then each text whole, one after the other) or "later" (the answer comes by push when he gets
 // to it). When he needs space the message is not delivered.
@@ -524,6 +541,12 @@ fun Online.zDm(chat: LChat, m: LMsg) {
                 val ids = j.optJSONArray("ids")?.strings().orEmpty()
                 kotlinx.coroutines.delay(maxOf(0L, sentAt + j.optLong("wait") - System.currentTimeMillis()))
                 app.zSeen = maxOf(app.zSeen, m.t); app.saveZ()
+                // the owner is typing: he waits for them or texts anyway
+                if (politeWait() && chat.msgs.lastOrNull()?.let { !it.ai && it.t > m.t } == true) {
+                    // they sent something else meanwhile, so what he had written is old: he does not send it (a new answer comes for the new message)
+                    runCatching { Sb.fn("zenith", JSONObject().put("action", "unsend").put("ids", JSONArray(ids))) }
+                    return@launch
+                }
                 texts.forEachIndexed { i, t ->
                     val ai = LMsg(ids.getOrNull(i) ?: uid(), "", System.currentTimeMillis(), emptyList(), ai = true)
                     app.zenTyping[chat.id] = ai; app.zenVersion++

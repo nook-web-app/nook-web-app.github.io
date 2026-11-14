@@ -191,12 +191,12 @@ async function say(zen: string, text: string, parent: string | null): Promise<st
 
 // calls that were planned in the chat ("call me in 10 minutes"): the minute job rings the phone when the time has come
 async function duePlans(owner: string) {
-  const { data } = await admin.from("zenith_docs").select("doc_id, data").eq("owner_id", owner).eq("kind", "callplan").like("doc_id", "________-____-____-____-____________");
+  const { data } = await admin.from("zenith_docs").select("doc_id, data").eq("owner_id", owner).eq("kind", "state").like("doc_id", "cp:%");
   for (const r of data || []) {
     const at = Number(r.data && r.data.at) || 0;
     if (at > Date.now()) continue;
     // the plan is taken away first, so two runs never ring twice
-    const del = await admin.from("zenith_docs").delete().eq("owner_id", owner).eq("kind", "callplan").eq("doc_id", r.doc_id).select("doc_id");
+    const del = await admin.from("zenith_docs").delete().eq("owner_id", owner).eq("kind", "state").eq("doc_id", r.doc_id).select("doc_id");
     if (!del.data || !del.data.length) continue;
     // a plan that is more than half an hour late is dropped
     if (Date.now() - at < 30 * 60000 && (await loadState(admin, owner)).allowCalls) await ringPhone(admin, owner, String(r.data.reason || "he asked you to call him"));
@@ -302,7 +302,7 @@ async function describeOne(owner: string) {
     const { data: posts } = await admin.from("posts").select("id, body, media_url").eq("user_id", owner).eq("mod_status", "safe").not("media_url", "is", null).gt("created_at", new Date(Date.now() - 6 * DAY).toISOString()).order("created_at", { ascending: false }).limit(6);
     const rows = (posts || []) as { id: string; body: string | null; media_url: string | null }[];
     if (!rows.length) return;
-    const { data: have } = await admin.from("zenith_docs").select("doc_id").eq("owner_id", owner).eq("kind", "mind").in("doc_id", rows.map((r) => "pic:" + r.id));
+    const { data: have } = await admin.from("zenith_docs").select("doc_id").eq("owner_id", owner).eq("kind", "state").in("doc_id", rows.map((r) => "pic:" + r.id));
     const done = new Set((have || []).map((r: { doc_id: string }) => r.doc_id));
     const p = rows.find((r) => !done.has("pic:" + r.id));
     if (!p) return;
@@ -310,7 +310,7 @@ async function describeOne(owner: string) {
     let d = "";
     if (md && md.pics.length) d = (await ask("Describe what the picture or video shows in one short factual sentence. Say only what you can actually see. If you cannot tell, say so.", "Caption: " + (String(p.body || "").slice(0, 300) || "(none)") + (md.note || ""), md.pics, true)).slice(0, 220);
     // a row is written even when nothing could be read, so it is not tried again every minute
-    await admin.from("zenith_docs").upsert({ owner_id: owner, kind: "mind", doc_id: "pic:" + p.id, data: { d: d || "(could not be seen)" }, updated_at: new Date().toISOString() }, { onConflict: "owner_id,kind,doc_id" });
+    await admin.from("zenith_docs").upsert({ owner_id: owner, kind: "state", doc_id: "pic:" + p.id, data: { d: d || "(could not be seen)" }, updated_at: new Date().toISOString() }, { onConflict: "owner_id,kind,doc_id" });
   } catch { /* next minute */ }
 }
 
@@ -515,7 +515,8 @@ Deno.serve(async (req) => {
   const id = owner.user_id as string;
   let zen = "";
   try { zen = await ensureZenith(); } catch (e) { return json({ error: String((e as Error).message || e) }, 500); }
-  const { data: docs } = await admin.from("zenith_docs").select("doc_id, data").eq("owner_id", id).eq("kind", "state");
+  // his memory rows (messages, pictures, planned calls) are left out here
+  const { data: docs } = await admin.from("zenith_docs").select("doc_id, data").eq("owner_id", id).eq("kind", "state").not("doc_id", "like", "ml:%").not("doc_id", "like", "pic:%").not("doc_id", "like", "cp:%");
   if (mode === "reply") { try { await duePlans(id); await mindTick(id, zen, docs || []); } catch { /* the replies go on */ } return await replies(id, zen, docs || [], odds); }
   if (mode === "import") return await importOld(id, zen);
   const state = (docs || []).find((d) => d.doc_id === "main");

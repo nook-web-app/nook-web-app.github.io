@@ -225,14 +225,14 @@ suspend fun Online.zenPull(): Boolean {
     if (!isOwner()) return false
     var sig = ""
     runCatching {
-        val nw = Sb.get(Q("zenith_docs").select("updated_at").eq("owner_id", me).neq("kind", "mindlog").neq("kind", "mind").order("updated_at", false).limit(1))
-        val ct = Sb.count(Q("zenith_docs").select("doc_id").eq("owner_id", me).neq("kind", "mindlog").neq("kind", "mind"))
+        val nw = Sb.get(Q("zenith_docs").select("updated_at").eq("owner_id", me).notStarts("doc_id", "ml:").notStarts("doc_id", "pic:").notStarts("doc_id", "cp:").neq("doc_id", "mind").neq("doc_id", "notebook").order("updated_at", false).limit(1))
+        val ct = Sb.count(Q("zenith_docs").select("doc_id").eq("owner_id", me).notStarts("doc_id", "ml:").notStarts("doc_id", "pic:").notStarts("doc_id", "cp:").neq("doc_id", "mind").neq("doc_id", "notebook"))
         if (nw.ok && ct.ok) sig = me + "|" + (nw.one?.optString("updated_at") ?: "") + "|" + ct.count
     }
     if (sig.isNotEmpty() && sig == zenPullSig && System.currentTimeMillis() - zenPullAt < 300_000) return false
     val incr = zenPulledIso.isNotEmpty() && System.currentTimeMillis() - zenFullAt < 600_000
     var changed = zenApplyDeleted()
-    val r = Sb.pageAll { Q("zenith_docs").select("kind, doc_id, data, updated_at").eq("owner_id", me).neq("kind", "mindlog").neq("kind", "mind").apply { if (incr) gte("updated_at", zenPulledIso) }.order("kind").order("doc_id") }
+    val r = Sb.pageAll { Q("zenith_docs").select("kind, doc_id, data, updated_at").eq("owner_id", me).notStarts("doc_id", "ml:").notStarts("doc_id", "pic:").notStarts("doc_id", "cp:").neq("doc_id", "mind").neq("doc_id", "notebook").apply { if (incr) gte("updated_at", zenPulledIso) }.order("kind").order("doc_id") }
     if (!r.ok) return changed
     var newest = if (incr) zenPulledIso else ""
     r.rows.forEach { if (it.optString("updated_at") > newest) newest = it.optString("updated_at") }

@@ -83,7 +83,7 @@ async function planCall(c: CallAsk): Promise<number> {
     if (rt && rt.waitUntil) rt.waitUntil(go()); else await go();
     return Math.max(1, Math.round(c.minutes));
   }
-  await admin.from("zenith_docs").upsert({ owner_id: owner, kind: "callplan", doc_id: crypto.randomUUID(), data: { at: Date.now() + Math.round(c.minutes * 60000), reason }, updated_at: new Date().toISOString() }, { onConflict: "owner_id,kind,doc_id" });
+  await admin.from("zenith_docs").upsert({ owner_id: owner, kind: "state", doc_id: "cp:" + crypto.randomUUID(), data: { at: Date.now() + Math.round(c.minutes * 60000), reason }, updated_at: new Date().toISOString() }, { onConflict: "owner_id,kind,doc_id" });
   return Math.round(c.minutes);
 }
 // Tavily is a search service made for AI (free plan: 1,000 searches a month, no card). Its key is the secret TAVILY_API_KEY.
@@ -441,11 +441,11 @@ Deno.serve(async (req) => {
   // a message the owner deletes in his chat is forgotten by him too (his own messages stay in his memory)
   if (body.action === "forget") {
     const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
-    const ids = (Array.isArray(body.ids) ? body.ids : []).filter((x: unknown) => typeof x === "string" && /^[\w-]{6,64}$/.test(x as string)).slice(0, 20);
+    const ids = (Array.isArray(body.ids) ? body.ids : []).filter((x: unknown) => typeof x === "string" && /^[\w-]{6,40}$/.test(x as string)).slice(0, 20);
     if (o && ids.length) {
-      const { data: rows } = await admin.from("zenith_docs").select("doc_id, data").eq("owner_id", o.user_id).eq("kind", "mindlog").in("doc_id", ids);
+      const { data: rows } = await admin.from("zenith_docs").select("doc_id, data").eq("owner_id", o.user_id).eq("kind", "state").in("doc_id", ids.map((x: string) => "ml:" + x));
       const mine = (rows || []).filter((r: { data: { ai?: boolean } }) => !(r.data && r.data.ai)).map((r: { doc_id: string }) => r.doc_id);
-      if (mine.length) await admin.from("zenith_docs").delete().eq("owner_id", o.user_id).eq("kind", "mindlog").in("doc_id", mine);
+      if (mine.length) await admin.from("zenith_docs").delete().eq("owner_id", o.user_id).eq("kind", "state").in("doc_id", mine);
     }
     return json({ ok: true });
   }
@@ -516,7 +516,7 @@ Deno.serve(async (req) => {
     const texts = text.split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 3);
     // no words came back (the model had a bad moment): he tries again in a minute instead of leaving the message unanswered
     if (!texts.length) { st.pending = { seeAt: Date.now() + 60000, since: st.pending ? st.pending.since : now }; await saveState(admin, owner, st); return json({ mode: "later", calls }); }
-    const replyId = typeof body.replyId === "string" && /^[\w-]{6,64}$/.test(body.replyId) ? body.replyId : crypto.randomUUID();
+    const replyId = typeof body.replyId === "string" && /^[\w-]{6,40}$/.test(body.replyId) ? body.replyId : crypto.randomUUID();
     const ids = texts.map((_, i) => (i ? replyId + "-" + (i + 1) : replyId));
     if (texts.length) await logEntries(admin, owner, texts.map((x, i) => ({ id: ids[i], ai: true, text: x, t: Date.now() + i })));
     return json({ mode: "now", wait: Math.max(0, seeAt - now), texts, ids, calls });

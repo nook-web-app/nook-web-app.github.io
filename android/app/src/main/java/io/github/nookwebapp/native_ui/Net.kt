@@ -76,6 +76,8 @@ class Q(val table: String) {
     fun select(cols: String) = apply { params.add("select" to cols.replace(" ", "")) }
     fun eq(col: String, v: Any) = f(col, "eq.$v")
     fun neq(col: String, v: Any) = f(col, "neq.$v")
+    // doc ids that do not start with a prefix (PostgREST wildcard is *)
+    fun notStarts(col: String, prefix: String) = f(col, "not.like.$prefix*")
     fun gt(col: String, v: Any) = f(col, "gt.$v")
     fun gte(col: String, v: Any) = f(col, "gte.$v")
     fun lt(col: String, v: Any) = f(col, "lt.$v")

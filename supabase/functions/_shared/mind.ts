@@ -1,9 +1,10 @@
 // Zenith's mind: what he remembers, how he feels about the owner, and his private notebook.
 //
 // Everything lives in zenith_docs (only the owner and the server can read it; the app never shows it):
-//   kind "mind",    doc "state"     how close they are, trust, hurt, his mood, what they talked about last, the people he follows or blocks
-//   kind "mind",    doc "notebook"  nine pages he writes and rewrites himself, about the owner, the two of them, or anything he wants
-//   kind "mindlog", doc <message id> one row per message of his chat, per call and per text he sent first, so nothing is counted twice
+//   (the table only allows the kinds state, post, flag and chat, so everything is kept as kind "state" with a prefix in the doc id)
+//   doc "mind"       how close they are, trust, hurt, his mood, what they talked about last, the people he follows or blocks
+//   doc "notebook"   nine pages he writes and rewrites himself, about the owner, the two of them, or anything he wants
+//   doc "ml:<message id>" one row per message of his chat, per call and per text he sent first, so nothing is counted twice
 //
 // The relationship grows slowly, like in real life: closeness (0 to 100) can only rise a little each day, and less the closer they already
 // are, so they become friends after about three to five weeks of talking and get really close only after more than a year. Bad days take
@@ -42,30 +43,30 @@ export function freshState(now = Date.now()): MindState {
 }
 
 export async function loadState(admin: SupabaseClient, owner: string): Promise<MindState> {
-  const { data } = await admin.from("zenith_docs").select("data").eq("owner_id", owner).eq("kind", "mind").eq("doc_id", "state").maybeSingle();
+  const { data } = await admin.from("zenith_docs").select("data").eq("owner_id", owner).eq("kind", "state").eq("doc_id", "mind").maybeSingle();
   if (data && data.data && typeof data.data.met === "number") return { ...freshState(), ...(data.data as MindState) };
   const s = freshState();
   await saveState(admin, owner, s);
   return s;
 }
 export async function saveState(admin: SupabaseClient, owner: string, s: MindState) {
-  const r = await admin.from("zenith_docs").upsert({ owner_id: owner, kind: "mind", doc_id: "state", data: s, updated_at: new Date().toISOString() }, { onConflict: "owner_id,kind,doc_id" });
+  const r = await admin.from("zenith_docs").upsert({ owner_id: owner, kind: "state", doc_id: "mind", data: s, updated_at: new Date().toISOString() }, { onConflict: "owner_id,kind,doc_id" });
   await noteError(admin, "state", r.error);
 }
 export async function loadNotebook(admin: SupabaseClient, owner: string): Promise<string[]> {
-  const { data } = await admin.from("zenith_docs").select("data").eq("owner_id", owner).eq("kind", "mind").eq("doc_id", "notebook").maybeSingle();
+  const { data } = await admin.from("zenith_docs").select("data").eq("owner_id", owner).eq("kind", "state").eq("doc_id", "notebook").maybeSingle();
   const p = data && data.data && Array.isArray(data.data.pages) ? (data.data.pages as unknown[]).map((x) => String(x || "")) : [];
   while (p.length < PAGES) p.push("");
   return p.slice(0, PAGES);
 }
 export async function saveNotebook(admin: SupabaseClient, owner: string, pages: string[]) {
-  await admin.from("zenith_docs").upsert({ owner_id: owner, kind: "mind", doc_id: "notebook", data: { pages: pages.slice(0, PAGES).map((p) => p.slice(0, PAGE_MAX)) }, updated_at: new Date().toISOString() }, { onConflict: "owner_id,kind,doc_id" });
+  await admin.from("zenith_docs").upsert({ owner_id: owner, kind: "state", doc_id: "notebook", data: { pages: pages.slice(0, PAGES).map((p) => p.slice(0, PAGE_MAX)) }, updated_at: new Date().toISOString() }, { onConflict: "owner_id,kind,doc_id" });
 }
 
 // messages are kept by their id, so the same message sent twice is one row
 export async function logEntries(admin: SupabaseClient, owner: string, list: Entry[]) {
-  const rows = list.filter((e) => e && typeof e.id === "string" && /^[\w-]{6,64}$/.test(e.id) && typeof e.text === "string" && e.text.trim())
-    .map((e) => ({ owner_id: owner, kind: "mindlog", doc_id: e.id, data: { ai: !!e.ai, text: e.text.slice(0, 4000), t: Number(e.t) || Date.now(), kind: e.kind || "text", ...(e.pro ? { pro: true } : {}) }, updated_at: new Date().toISOString() }));
+  const rows = list.filter((e) => e && typeof e.id === "string" && /^[\w-]{6,40}$/.test(e.id) && typeof e.text === "string" && e.text.trim())
+    .map((e) => ({ owner_id: owner, kind: "state", doc_id: "ml:" + e.id, data: { ai: !!e.ai, text: e.text.slice(0, 4000), t: Number(e.t) || Date.now(), kind: e.kind || "text", ...(e.pro ? { pro: true } : {}) }, updated_at: new Date().toISOString() }));
   if (!rows.length) return;
   const r = await admin.from("zenith_docs").upsert(rows, { onConflict: "owner_id,kind,doc_id", ignoreDuplicates: true });
   await noteError(admin, "log", r.error);
@@ -76,16 +77,16 @@ export async function noteError(admin: SupabaseClient, what: string, error: { me
   try { await admin.rpc("nook_ai_full", { p_model: ("debug:mind:" + what + ":" + String(error.message || error)).replace(/[^\w .,:'()-]+/g, " ").replace(/\s+/g, " ").slice(0, 150), p_limit: 1 }); } catch { /* only a note */ }
 }
 export async function recentEntries(admin: SupabaseClient, owner: string, n = 40, since = 0): Promise<Entry[]> {
-  let q = admin.from("zenith_docs").select("doc_id, data").eq("owner_id", owner).eq("kind", "mindlog");
+  let q = admin.from("zenith_docs").select("doc_id, data").eq("owner_id", owner).eq("kind", "state").like("doc_id", "ml:%");
   if (since) q = q.gt("data->>t", String(since));
   const { data } = await q.order("data->>t", { ascending: false }).limit(n);
-  return ((data || []) as { doc_id: string; data: Entry }[]).map((r) => ({ ...r.data, id: r.doc_id })).sort((a, b) => a.t - b.t);
+  return ((data || []) as { doc_id: string; data: Entry }[]).map((r) => ({ ...r.data, id: r.doc_id.slice(3) })).sort((a, b) => a.t - b.t);
 }
 // old rows go: the notebook holds what matters from them
 export async function pruneLog(admin: SupabaseClient, owner: string) {
-  const { data } = await admin.from("zenith_docs").select("doc_id").eq("owner_id", owner).eq("kind", "mindlog").order("data->>t", { ascending: false }).range(400, 900);
+  const { data } = await admin.from("zenith_docs").select("doc_id").eq("owner_id", owner).eq("kind", "state").like("doc_id", "ml:%").order("data->>t", { ascending: false }).range(400, 900);
   const ids = (data || []).map((r: { doc_id: string }) => r.doc_id);
-  if (ids.length) await admin.from("zenith_docs").delete().eq("owner_id", owner).eq("kind", "mindlog").in("doc_id", ids);
+  if (ids.length) await admin.from("zenith_docs").delete().eq("owner_id", owner).eq("kind", "state").in("doc_id", ids);
 }
 
 // the chat as the model reads it: his and the owner's turns, with a note where time passed in between
@@ -378,7 +379,7 @@ export async function activity(admin: SupabaseClient, owner: string, zen: string
     const [mine, his, desc] = await Promise.all([
       admin.from("posts").select(cols).eq("user_id", owner).eq("mod_status", "safe").gt("created_at", since).order("created_at", { ascending: false }).limit(10),
       admin.from("posts").select(cols).eq("user_id", zen).gt("created_at", since).order("created_at", { ascending: false }).limit(10),
-      admin.from("zenith_docs").select("doc_id, data").eq("owner_id", owner).eq("kind", "mind").like("doc_id", "pic:%"),
+      admin.from("zenith_docs").select("doc_id, data").eq("owner_id", owner).eq("kind", "state").like("doc_id", "pic:%"),
     ]);
     const pics = new Map<string, string>(((desc.data || []) as { doc_id: string; data: { d?: string } }[]).map((r) => [r.doc_id.slice(4), String((r.data && r.data.d) || "")]));
     const all = [...((mine.data || []) as P[]), ...((his.data || []) as P[])].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));

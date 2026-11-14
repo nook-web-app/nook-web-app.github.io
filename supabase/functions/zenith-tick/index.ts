@@ -1,8 +1,8 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { fetchImage, pagePreview } from "../_shared/preview.ts";
 import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
-import { ringPhone, warnPhone, textPhone } from "../_shared/ring.ts";
-import { applyFeelings, asContents, asTranscript, asleepAt, closenessWords, dailyDrift, type Entry, loadNotebook, loadState, logEntries, type MindState, PAGE_MAX, PAGES, persona, pruneLog, recentEntries, saveNotebook, saveState, wakesAt, localTime } from "../_shared/mind.ts";
+import { ringPhone, warnPhone, textPhone, signalPhone } from "../_shared/ring.ts";
+import { applyFeelings, asContents, asTranscript, asleepAt, closenessWords, dailyDrift, type Entry, loadNotebook, loadState, logEntries, type MindState, PAGE_MAX, PAGES, persona, pruneLog, recentEntries, saveNotebook, saveState, wakesAt, localTime, lifeAt } from "../_shared/mind.ts";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 const DAY = 864e5, HOUR = 36e5;
@@ -199,7 +199,7 @@ async function duePlans(owner: string) {
     const del = await admin.from("zenith_docs").delete().eq("owner_id", owner).eq("kind", "callplan").eq("doc_id", r.doc_id).select("doc_id");
     if (!del.data || !del.data.length) continue;
     // a plan that is more than half an hour late is dropped
-    if (Date.now() - at < 30 * 60000) await ringPhone(admin, owner, String(r.data.reason || "he asked you to call him"));
+    if (Date.now() - at < 30 * 60000 && (await loadState(admin, owner)).allowCalls) await ringPhone(admin, owner, String(r.data.reason || "he asked you to call him"));
   }
 }
 
@@ -271,22 +271,32 @@ async function mindTick(owner: string, zen: string, docs: { doc_id: string; data
   await textFirst(owner, st, recent, tz);
 }
 
-// a message that came while he slept (or that the phone never got an answer to): he answers once he is up
+// the owner wrote (or called) and he had not looked yet: when the moment comes that he picks up his phone, the phone shows Seen, he types,
+// and his answer arrives by push. A message the phone never got an answer to is handled the same way after three minutes.
 async function answerLate(owner: string, st: MindState, recent: Entry[], tz: string): Promise<boolean> {
   const now = Date.now();
-  if (st.blockedUntil > now || asleepAt(now)) return false;
   const last = recent[recent.length - 1];
-  if (!last || last.ai || last.kind === "call") return false;
-  if (now - last.t < 3 * 60000 || now - last.t > 2 * DAY) return false;
-  // right after waking up he takes a few minutes before he looks at his phone
-  const woke = asleepAt(last.t) ? wakesAt(last.t) : 0;
-  if (woke && now - woke < (5 + (last.t % 20)) * 60000) return false;
+  if (!last || last.ai || last.kind === "call") {
+    if (st.pending) { st.pending = null; await saveState(admin, owner, st); }
+    return false;
+  }
+  if (st.blockedUntil > now || asleepAt(now)) return false;
+  const seeAt = st.pending && st.pending.seeAt ? st.pending.seeAt : last.t + 3 * 60000;
+  if (now < seeAt || now - last.t > 3 * DAY) return false;
   if (!(await useModel(admin, "mind-late-" + last.id, 1))) return false;
+  await signalPhone(admin, owner, { type: "zseen", t: String(now) });
   const pages = await loadNotebook(admin, owner);
-  const prev = recent.length > 1 ? recent[recent.length - 2].t : 0;
-  const system = persona(st, pages, tz, "text", prev) + "\n\n" + (woke ? "You were asleep when he wrote this. You just woke up and are answering now, still a bit sleepy." : "You did not see his message right away and are answering a bit late.");
-  const text = await gen(system, asContents(recent.slice(-40)), null, 400);
+  const since = st.pending ? st.pending.since : last.t;
+  const then = lifeAt(since);
+  const firstNew = recent.findIndex((e) => !e.ai && e.t >= since);
+  const prev = firstNew > 0 ? recent[firstNew - 1].t : 0;
+  const why = then.asleep ? "You were asleep when he wrote. You just woke up and saw it now." : now - since < 10 * 60000 ? "You saw it a few minutes after he sent it." : "You did not see it right away: you were " + then.what.replace(/ \(.*\)/, "") + ". You only saw it now, like a person would (no need to apologise unless it was long).";
+  const text = await gen(persona(st, pages, tz, "text", prev) + "\n\n" + why, asContents(recent.slice(-40)), null, 400);
+  st.pending = null;
+  await saveState(admin, owner, st);
   if (!text) return true;
+  // the time it takes to type it
+  await new Promise((res) => setTimeout(res, Math.min(12000, 1500 + text.length * 120)));
   await sendTexts(owner, text, false);
   return true;
 }
@@ -305,8 +315,9 @@ const REFLECT_SCHEMA = {
     ended: { type: "BOOLEAN", description: "true when the conversation had come to an end" },
     follow: { type: "STRING", enum: ["keep", "follow", "unfollow"] },
     block: { type: "STRING", enum: ["none", "block", "unblock"] },
+    calls: { type: "STRING", enum: ["keep", "allow", "not_yet"], description: "whether you are comfortable with phone calls with him: allow when you know him well enough and want to, not_yet to take it back" },
   },
-  required: ["notebook", "warmth", "depth", "hurt", "mood", "feel", "topic", "ended", "follow", "block"],
+  required: ["notebook", "warmth", "depth", "hurt", "mood", "feel", "topic", "ended", "follow", "block", "calls"],
 };
 async function reflect(owner: string, zen: string, st: MindState, recent: Entry[]): Promise<boolean> {
   const now = Date.now();
@@ -324,9 +335,9 @@ async function reflect(owner: string, zen: string, st: MindState, recent: Entry[
     + "\n\nYour notebook now:\n" + book
     + "\n\nOlder messages, already thought about:\n" + (older.length ? asTranscript(older) : "(none)")
     + "\n\nThe new conversation to think over:\n" + asTranscript(fresh).slice(-9000)
-    + "\n\nUpdate your notebook: rewrite only the pages that should change (each page under " + Math.round(PAGE_MAX / 6) + " words, give the whole new text of that page). Use the pages however you like. A layout you can use: 1 who he is, 2 the two of you and how you feel, 3 things he told you about his life, 4 inside jokes and moments you shared, 5 details about your own life you mentioned (so you stay consistent), 6 things you want to ask him or bring up later, 7 his moods and what helps him, 8 your own opinions and tastes, 9 your diary. Keep what still matters, drop what does not, write in your own voice. Then say how this conversation felt. Follow or unfollow him on Nook only if it really fits how you feel (people follow a friend after a while, and unfollow someone who keeps hurting them). Block him only if he has been cruel to you again and again, never for one bad moment; unblock when you are ready to talk again.";
+    + "\n\nUpdate your notebook: rewrite only the pages that should change (each page under " + Math.round(PAGE_MAX / 6) + " words, give the whole new text of that page). Use the pages however you like. A layout you can use: 1 who he is, 2 the two of you and how you feel, 3 things he told you about his life, 4 inside jokes and moments you shared, 5 details about your own life you mentioned (so you stay consistent), 6 things you want to ask him or bring up later, 7 his moods and what helps him, 8 your own opinions and tastes, 9 your diary. Keep what still matters, drop what does not, write in your own voice. Then say how this conversation felt. Follow or unfollow him on Nook only if it really fits how you feel (people follow a friend after a while, and unfollow someone who keeps hurting them). Block him only if he has been cruel to you again and again, never for one bad moment; unblock when you are ready to talk again. Phone calls: " + (st.allowCalls ? "you are fine with calls with him right now; say not_yet only if that changed." : "you are not comfortable with calls with him yet; say allow only when you really feel you know him well enough and would like to hear his voice (people usually need a while for that)") + "";
   const raw = await gen(system, [{ role: "user", parts: [{ text: prompt }] }], REFLECT_SCHEMA, 3500);
-  let r: { notebook?: { page: number; text: string }[]; warmth?: number; depth?: number; hurt?: number; mood?: string; feel?: string; topic?: string; ended?: boolean; follow?: string; block?: string } = {};
+  let r: { notebook?: { page: number; text: string }[]; warmth?: number; depth?: number; hurt?: number; mood?: string; feel?: string; topic?: string; ended?: boolean; follow?: string; block?: string; calls?: string } = {};
   try { r = JSON.parse(raw); } catch { return true; }
   let changed = false;
   for (const e of Array.isArray(r.notebook) ? r.notebook : []) {
@@ -345,6 +356,11 @@ async function reflect(owner: string, zen: string, st: MindState, recent: Entry[
   if (r.follow === "unfollow" && st.closeness < 30 && st.hurt >= 3 && st.follows !== false) { await setFollow(owner, zen, false); st.follows = false; }
   if (r.block === "block" && st.trust < 15 && st.hurt >= 6 && !(st.blockedUntil > now)) { st.blockedUntil = now + (2 + Math.random() * 4) * DAY; await setBlock(owner, zen, true); }
   if (r.block === "unblock" && st.blockedUntil > now) { st.blockedUntil = 0; await setBlock(owner, zen, false); }
+  // calls are his to allow: when he feels he knows the owner well enough (never right away), and he can take it back
+  const hadCalls = st.allowCalls;
+  if (r.calls === "allow" && st.closeness >= 12 && st.hurt < 3) st.allowCalls = true;
+  if (r.calls === "not_yet") st.allowCalls = false;
+  if (st.allowCalls !== hadCalls) await signalPhone(admin, owner, { type: "zperm", calls: st.allowCalls ? "1" : "0" });
   await saveState(admin, owner, st);
   return true;
 }
@@ -365,7 +381,8 @@ async function setBlock(owner: string, zen: string, on: boolean) {
 // and not again when his last text got no answer (twice in a row at most)
 async function textFirst(owner: string, st: MindState, recent: Entry[], tz: string) {
   const now = Date.now();
-  if (st.blockedUntil > now || asleepAt(now)) return;
+  if (st.blockedUntil > now || asleepAt(now) || st.pending) return;
+  const life = lifeAt(now);
   const myHour = tz ? hourIn(tz, now) : 12;
   if (myHour >= 1 && myHour < 9) return;
   const last = recent[recent.length - 1];
@@ -381,7 +398,8 @@ async function textFirst(owner: string, st: MindState, recent: Entry[], tz: stri
   const lastPro = pros.length ? pros[pros.length - 1].t : 0;
   if (lastPro && now - lastPro < hours * 0.4 * HOUR) return;
   if (pros.filter((e) => now - e.t < DAY).length >= 8) return;
-  if (Math.random() > 1 / (hours * 60)) return;
+  // he texts when he has his phone in his hand: not at work, not at dinner
+  if (Math.random() > Math.min(1.5, life.att / 0.25) / (hours * 60)) return;
   const pages = await loadNotebook(admin, owner);
   const over = st.ended || !last || now - last.t > 3 * HOUR;
   const idea = (over

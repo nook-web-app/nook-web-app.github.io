@@ -50,3 +50,17 @@ export async function textPhone(admin: SupabaseClient, owner: string, text: stri
     return r.ok && Number(j.sent) > 0;
   } catch { return false; }
 }
+
+// a small signal to the phone with nothing to show: he read the messages (zseen), or he changed whether calls are allowed (zperm)
+export async function signalPhone(admin: SupabaseClient, owner: string, data: Record<string, string>): Promise<void> {
+  try {
+    const { data: secret } = await admin.rpc("nook_purge_secret");
+    if (typeof secret !== "string" || !secret) return;
+    await fetch(Deno.env.get("SUPABASE_URL")! + "/functions/v1/send-push", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-purge-secret": secret },
+      body: JSON.stringify({ zsig: { user_id: owner, ...data } }),
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch { /* only a signal */ }
+}

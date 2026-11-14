@@ -63,6 +63,13 @@ class PushService : FirebaseMessagingService() {
     // a notification arrives as data only; the phone shows it (not while the app is open, where the live connection tells)
     override fun onMessageReceived(m: RemoteMessage) {
         val d = m.data
+        // quiet signals of his chat: he read the messages, or he changed whether calls are allowed
+        if (d["type"] == "zseen" || d["type"] == "zperm") {
+            val p = applicationContext.getSharedPreferences("zstate", 0)
+            if (d["type"] == "zseen") p.edit().putLong("seen", System.currentTimeMillis()).apply() else p.edit().putBoolean("calls", d["calls"] == "1").apply()
+            AppState.current?.let { a -> android.os.Handler(android.os.Looper.getMainLooper()).post { a.loadZ() } }
+            return
+        }
         // Zenith texts first: the message goes into his chat and shows as a notification when the app is not in front
         if (d["type"] == "ztext") {
             val ctx = applicationContext

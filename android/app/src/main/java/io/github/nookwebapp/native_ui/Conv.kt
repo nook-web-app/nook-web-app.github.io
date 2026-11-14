@@ -55,7 +55,12 @@ fun ConvScreen(id: String) {
     val isZ = chat.id == ZDM
     val fill = remember(chat.id) { arrayOfNulls<(String) -> Unit>(1) }
     // opening a chat wakes Zenith's server up, so the first answer does not wait for it
-    LaunchedEffect(chat.id) { if (zOn()) runCatching { Sb.fn("zenith", org.json.JSONObject().put("action", "ping")) } }
+    LaunchedEffect(chat.id) {
+        if (zOn()) runCatching {
+            val r = Sb.fn("zenith", org.json.JSONObject().put("action", "ping"))
+            if (isZ && r.ok && r.body.has("calls")) { app.zCalls = r.body.optBoolean("calls"); app.saveZ() }
+        }
+    }
     // the token of a call is asked for ahead of time, so the call starts without that wait
     LaunchedEffect(chat.id) { if (zOn()) runCatching { CallWarm.prefetch() } }
     var open by remember { mutableStateOf<String?>(null) }
@@ -84,7 +89,7 @@ fun ConvScreen(id: String) {
         // .bar.chb: back, the chat's picture, name and handle, and its options
         Row(Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.width(44.dp).offset(x = (-10).dp)) { IB("back") { app.pop() } }
-            Row(Modifier.weight(1f).padding(start = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.weight(1f).padding(start = 4.dp).then(if (isZ) Modifier.tap { app.go(Route.Zen) } else Modifier), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (isZ) ZenAv(36.dp) else MyAvatar(36.dp)
                 Column {
                     T(if (isZ) "Zenith" else chat.name, Fs.lg, FontWeight.Bold, maxLines = 1, lineHeight = (16 * 1.2).sp)
@@ -92,7 +97,8 @@ fun ConvScreen(id: String) {
                 }
             }
             // the call with Zenith: only the owner has it
-            if (zOn() && isZ) Box(Modifier.width(44.dp)) { IB("phone") { app.startCall() } }
+            // the call button is there only when he is comfortable with calls (he decides, and can change his mind)
+            if (zOn() && isZ && app.zCalls) Box(Modifier.width(44.dp)) { IB("phone") { app.startCall() } }
             if (!isZ) Box(Modifier.width(44.dp)) {
                 IB("dots") {
                     app.open(listOf(
@@ -125,6 +131,11 @@ fun ConvScreen(id: String) {
                         },
                     ))
                 } } } }
+            }
+            // Delivered or Seen under the newest message to him
+            val lm = chat.msgs.lastOrNull()
+            if (isZ && lm != null && !lm.ai && callLogOf(lm.text) == null && typing == null) item(key = "zstatus") {
+                T(if (lm.t <= app.zSeen) "Seen" else if (lm.t <= app.zUndelivered) "Not delivered" else "Delivered", Fs.xs, color = c.muted, align = TextAlign.End, modifier = Modifier.fillMaxWidth().padding(end = 4.dp, bottom = 4.dp))
             }
             // his answer while it is still being typed out
             // (the same key as the message it becomes, so the finished message takes the place of the typed one without a jump)

@@ -3,7 +3,7 @@ import { fetchImage } from "../_shared/preview.ts";
 import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
 import { peekForSearch, type CallAsk } from "../_shared/chatstream.ts";
 import { ringPhone } from "../_shared/ring.ts";
-import { asleepAt, asContents, asTranscript, type Entry, loadNotebook, loadState, logEntries, persona, recentEntries, saveState } from "../_shared/mind.ts";
+import { asleepAt, asContents, asTranscript, type Entry, lifeAt, loadNotebook, loadState, logEntries, nextLook, persona, recentEntries, saveState } from "../_shared/mind.ts";
 // Zenith is the name of the owner-only AI; the moderation AI is called Aegis
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
@@ -71,6 +71,8 @@ async function planCall(c: CallAsk): Promise<number> {
   const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
   if (!o) return 0;
   const owner = o.user_id as string;
+  // calls are his choice: until he is comfortable with them, he does not call
+  if (!(await loadState(admin, owner)).allowCalls) return -1;
   const reason = c.reason ? "he asked you to call him: " + c.reason : "he asked you to call him";
   // "now" or "soon" (a minute and a half or less) rings from here after a few seconds, so his message arrives first and the phone rings right after
   if (c.minutes <= 1.5) {
@@ -206,7 +208,7 @@ async function chatFailed(model: string, status: number, said: string) {
 }
 // the answer of the first model that gives one (or its request for a search). Whatever goes wrong with a model (used up, refuses, not found,
 // bad request, broken, no words in its answer) hands over to the next one; null only when every model is out
-async function gemini(key: string, system: unknown, history: unknown, stream: boolean, tools = false): Promise<{ res: Response | null; search: { query: string } | null; call: CallAsk | null }> {
+async function gemini(key: string, system: unknown, history: unknown, stream: boolean, tools: boolean | "search" = false): Promise<{ res: Response | null; search: { query: string } | null; call: CallAsk | null }> {
   // the whole chain gives up after 60 seconds, and one model after 15 seconds without its first words, so a slow model never holds the chat for minutes
   const deadline = Date.now() + 60000;
   for (const { model, limit } of CHAIN) {
@@ -227,7 +229,7 @@ async function gemini(key: string, system: unknown, history: unknown, stream: bo
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: String(system || "") }] },
           contents: history,
-          ...(withTools ? { tools: [CHAT_TOOLS] } : {}),
+          ...(withTools ? { tools: [tools === "search" ? SEARCH_TOOL : CHAT_TOOLS] } : {}),
           // a model that cannot be told to think less needs room for its thinking too
           generationConfig: { temperature: 1, maxOutputTokens: think === "minimal" ? 140 : 400, ...(think ? { thinkingConfig: { thinkingLevel: think } } : {}) },
         }),
@@ -305,7 +307,12 @@ Deno.serve(async (req) => {
   }
   await parse;
   // the app asks this when a chat opens: the owner check above is then remembered, so the first message does not wait for it
-  if (body.action === "ping") return json({ ok: true });
+  if (body.action === "ping") {
+    // whether he lets the owner call him right now (the call button only shows then)
+    let calls = false;
+    try { const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle(); if (o) { const st = await loadState(admin, o.user_id as string); calls = st.allowCalls && !(st.blockedUntil > Date.now()); } } catch { /* unknown */ }
+    return json({ ok: true, calls });
+  }
   // a one use token for a voice call: the phone gets the token and the first message to send (the key stays here)
   if (body.action === "live") {
     const key = await geminiKey();
@@ -416,8 +423,10 @@ Deno.serve(async (req) => {
     if (o) await logEntries(admin, o.user_id as string, Array.isArray(body.entries) ? (body.entries as Entry[]).slice(0, 40) : []);
     return json({ ok: true });
   }
-  // his own chat: every message there is for him. He answers from his memory (the latest messages and calls), his notebook and how he
-  // feels about the owner. While he sleeps nothing comes back: he answers when he wakes up (zenith-tick). When he needs space, nothing either.
+  // his own chat: every message there is for him. He answers like a person: only when he looks at his phone. In the middle of a conversation
+  // that is within seconds; otherwise it depends on what he is doing (asleep, at work, gaming, out). The phone gets either his answer right
+  // away ("now", with the moment he saw it, so it can show Seen and then the typing), or "later": the minute job sends the answer by push when
+  // he gets to it. When he needs space, nothing is delivered.
   if (body.action === "dm") {
     const key = await geminiKey();
     if (!key) return json({ error: "no gemini key in the vault" }, 500);
@@ -428,43 +437,88 @@ Deno.serve(async (req) => {
     const rec = Array.isArray(body.recent) ? (body.recent as Entry[]).slice(-30) : [];
     // the new message gets the server's time, so a phone clock that is off never puts it before his last answer
     const newest = rec[rec.length - 1];
-    if (newest && !newest.ai) newest.t = Date.now();
+    const now = Date.now();
+    if (newest && !newest.ai) newest.t = now;
     await logEntries(admin, owner, rec);
     const st = await loadState(admin, owner);
     const name = typeof body.name === "string" ? body.name.trim().slice(0, 60) : "", handle = typeof body.handle === "string" ? body.handle.trim().slice(0, 40) : "";
-    if ((name && name !== st.name) || (handle && handle !== st.handle)) { st.name = name || st.name; st.handle = handle || st.handle; await saveState(admin, owner, st); }
-    if (st.blockedUntil > Date.now()) return json({ blocked: true });
-    if (asleepAt(Date.now())) return json({ asleep: true });
-    const [pages, recent] = await Promise.all([loadNotebook(admin, owner), recentEntries(admin, owner, 40)]);
+    if (name) st.name = name;
+    if (handle) st.handle = handle;
+    const calls = st.allowCalls && !(st.blockedUntil > now);
+    if (st.blockedUntil > now) { await saveState(admin, owner, st); return json({ mode: "blocked", calls: false }); }
+    const recent = await recentEntries(admin, owner, 40);
+    const lastAi = [...recent].reverse().find((e) => e.ai);
+    const life = lifeAt(now);
+    // how eager he is about this person: someone new waits longer, and when he is hurt he takes his time
+    const eager = (0.6 + Math.min(1, st.closeness / 60) * 0.6) * (st.hurt >= 6 ? 0.3 : 1);
+    const engaged = !!lastAi && now - lastAi.t < 8 * 60000 && !life.asleep && life.att >= 0.02;
+    let seeAt = st.pending && st.pending.seeAt ? st.pending.seeAt : engaged ? now + (3 + Math.random() * 25) * 1000 : nextLook(now, eager);
+    if (seeAt < now) seeAt = now + 2000;
+    if (seeAt - now > 45000) {
+      st.pending = { seeAt, since: st.pending ? st.pending.since : now };
+      await saveState(admin, owner, st);
+      return json({ mode: "later", calls });
+    }
+    st.pending = null;
+    await saveState(admin, owner, st);
+    const pages = await loadNotebook(admin, owner);
     const lastBefore = recent.length > 1 ? recent[recent.length - 2].t : 0;
     // deno-lint-ignore no-explicit-any
     const history: any[] = asContents(recent);
     const last = history[history.length - 1];
-    if (!last || last.role !== "user") return json({ error: "nothing to answer" }, 400);
-    // the photos of the newest message go with it
+    if (!last || last.role !== "user") return json({ mode: "now", texts: [], wait: 0, calls });
     const pics = Array.isArray(body.parts) ? (body.parts as { inline_data?: unknown }[]).filter((p) => p && p.inline_data).slice(0, 2) : [];
     if (pics.length) last.parts.push(...pics);
-    const system = persona(st, pages, tz, "text", lastBefore) + SEARCH_HELP + CALL_HELP;
-    let got = await gemini(key, system, history, true, true);
+    const system = persona(st, pages, tz, "text", lastBefore) + SEARCH_HELP + (calls ? CALL_HELP : "");
+    let got = await gemini(key, system, history, false, calls ? true : "search");
     if (got.call) {
       const mins = await planCall(got.call);
-      last.parts.push({ text: "(The phone call is arranged: it will ring his phone " + (mins <= 1 ? "in a few seconds" : "in about " + mins + " minutes") + ". Answer with only a few words, like ok, sure, or calling you in a sec. Do not say what the call will be about unless he asked. Do not use any tool now.)" });
-      got = await gemini(key, system, history, true, false);
+      last.parts.push({ text: mins < 0 ? "(You do not want to call him yet. Tell him in your own way.)" : "(The phone call is arranged: it will ring his phone " + (mins <= 1 ? "in a few seconds" : "in about " + mins + " minutes") + ". Answer with only a few words, like ok, sure, or calling you in a sec. Do not say what the call will be about unless he asked. Do not use any tool now.)" });
+      got = await gemini(key, system, history, false, false);
     } else if (got.search) {
       const first = last.parts.find((p: { text?: unknown }) => p && typeof p.text === "string") as { text: string } | undefined;
       last.parts.push({ text: await searchNote(got.search.query || (first ? first.text.slice(0, 200) : "the latest news")) });
-      got = await gemini(key, system, history, true, false);
+      got = await gemini(key, system, history, false, false);
     }
-    const up = got.res;
-    if (!up || !up.body) return json({ error: "Zenith is resting. Try again later." }, 503);
+    if (!got.res) return json({ error: "Zenith is resting. Try again later." }, 503);
+    let text = "";
+    try {
+      const j = await got.res.json();
+      const parts = (j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || [];
+      text = parts.filter((p: { thought?: boolean }) => !p.thought).map((p: { text?: string }) => p.text || "").join("");
+    } catch { /* no answer */ }
+    const texts = text.split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 3);
     const replyId = typeof body.replyId === "string" && /^[\w-]{6,64}$/.test(body.replyId) ? body.replyId : crypto.randomUUID();
-    // a few lines are a few texts (the phone shows them the same way, with the same ids)
-    const out = teeReply(up.body, async (text) => {
-      const lines = text.split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 3);
-      const t = Date.now();
-      if (lines.length) await logEntries(admin, owner, lines.map((x, i) => ({ id: i ? replyId + "-" + (i + 1) : replyId, ai: true, text: x, t: t + i })));
-    });
-    return new Response(out, { status: up.status, headers: { ...cors, "Content-Type": up.headers.get("content-type") || "text/event-stream" } });
+    const ids = texts.map((_, i) => (i ? replyId + "-" + (i + 1) : replyId));
+    if (texts.length) await logEntries(admin, owner, texts.map((x, i) => ({ id: ids[i], ai: true, text: x, t: Date.now() + i })));
+    return json({ mode: "now", wait: Math.max(0, seeAt - now), texts, ids, calls });
+  }
+  // the owner calls him: it rings first, and like a person he may not pick up (asleep, at work, phone away), or decline when he is not
+  // comfortable with calls yet. A missed call is something he answers later, by text.
+  if (body.action === "dial") {
+    const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
+    if (!o) return json({ pickup: true, in: 3000 });
+    const owner = o.user_id as string;
+    const now = Date.now();
+    const st = await loadState(admin, owner);
+    const recent = await recentEntries(admin, owner, 10);
+    const lastAi = [...recent].reverse().find((e) => e.ai);
+    const life = lifeAt(now);
+    const again = now - (st.lastDialAt || 0) < 4 * 60000;
+    st.lastDialAt = now;
+    let pickup: boolean, why = "noanswer";
+    if (st.blockedUntil > now) pickup = false;
+    else if (!st.allowCalls) { pickup = false; why = "declined"; }
+    else if (life.asleep) pickup = again && st.closeness >= 40 && Math.random() < 0.5;
+    else if (lastAi && now - lastAi.t < 8 * 60000 && life.att >= 0.02) pickup = Math.random() < 0.92;
+    else pickup = Math.random() < (life.att < 0.03 ? 0.08 : Math.min(0.92, 0.3 + life.att * 2));
+    if (!pickup) {
+      const doing = why === "declined" ? "you declined it, you are not comfortable with calls with him yet" : life.asleep ? "you were asleep" : "you missed it, you were " + life.what;
+      await logEntries(admin, owner, [{ id: crypto.randomUUID(), ai: false, kind: "missed", text: "(he tried to call you: " + doing + ")", t: now }]);
+      if (!(st.blockedUntil > now) && !st.pending) st.pending = { seeAt: why === "declined" ? now + (20 + Math.random() * 90) * 1000 : nextLook(now + 60000, 1), since: now };
+    }
+    await saveState(admin, owner, st);
+    return json({ pickup, why, in: pickup ? 3000 + Math.floor(Math.random() * 9000) : why === "declined" ? 3000 + Math.floor(Math.random() * 6000) : 25000 });
   }
   if (!Array.isArray(body.history)) return json({ error: "bad request" }, 400);
 
@@ -492,7 +546,7 @@ Deno.serve(async (req) => {
     let got = await gemini(key, system + who + SEARCH_HELP, body.history, stream, true);
     if (got.call) {
       const mins = await planCall(got.call);
-      const note = "(The phone call is arranged: it will ring his phone " + (mins <= 1 ? "in a few seconds" : "in about " + mins + " minutes") + ". Answer with only a few words, like ok, sure, or calling you in a sec. Do not say what the call will be about or add anything else unless he asked. Do not use any tool now.)";
+      const note = mins < 0 ? "(You do not want to call him: you are not comfortable with calls with him yet. Tell him in your own way, without using any tool.)" : "(The phone call is arranged: it will ring his phone " + (mins <= 1 ? "in a few seconds" : "in about " + mins + " minutes") + ". Answer with only a few words, like ok, sure, or calling you in a sec. Do not say what the call will be about or add anything else unless he asked. Do not use any tool now.)";
       if (last && Array.isArray(last.parts)) last.parts.push({ text: note });
       got = await gemini(key, system + who, body.history, stream, false);
     }

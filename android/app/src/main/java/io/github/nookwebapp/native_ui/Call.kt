@@ -104,7 +104,7 @@ import kotlin.math.sin
 // not end it; while it runs there is a notification with the call timer (the chip in the status bar), a small pill inside the app, and
 // a card, like the one of Samsung's music player, that opens from both of them. The End button, or the one of the notification, ends it.
 enum class CallPhase(val label: String) {
-    Connecting("Connecting..."), Reconnecting("Reconnecting..."), Listening("Listening"), Thinking("Thinking..."), Searching("Searching the web..."), Speaking("Speaking"),
+    Calling("Calling..."), Connecting("Connecting..."), Reconnecting("Reconnecting..."), Listening("Listening"), Thinking("Thinking..."), Searching("Searching the web..."), Speaking("Speaking"),
 }
 
 // a line of the captions; its words grow while it is being said

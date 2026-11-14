@@ -461,6 +461,7 @@ fun AppState.importZenTexts(): String? {
         chat.t = maxOf(chat.t, j.optLong("t", System.currentTimeMillis()))
     }
     chat.zc = true
+    zSeen = maxOf(zSeen, System.currentTimeMillis()); saveZ()
     persist()
     on.zenSyncSoon()
     zenVersion++
@@ -485,51 +486,43 @@ fun entryOf(m: LMsg): JSONObject {
     return JSONObject().put("id", m.id).put("ai", m.ai).put("text", text.take(4000)).put("t", m.t).put("kind", if (log != null) "call" else "text")
 }
 
-// zDm(): a message in his own chat. The server answers from his memory and how he feels about the owner. While he sleeps nothing
-// comes back (he answers by himself when he wakes up), and when he needs space the message is not delivered.
+// zDm(): a message in his own chat. He answers like a person: when he looks at his phone. The server says "now" (with how long until he saw
+// it: the phone shows Seen, then the typing dots, then each text whole, one after the other) or "later" (the answer comes by push when he gets
+// to it). When he needs space the message is not delivered.
 fun Online.zDm(chat: LChat, m: LMsg) {
     if (!zOn()) return
     app.scope.launch {
+        val sentAt = System.currentTimeMillis()
         val recent = JSONArray()
         chat.msgs.takeLast(20).forEach { recent.put(entryOf(it)) }
         val parts = JSONArray()
         withContext(kotlinx.coroutines.Dispatchers.IO) { m.imgs.takeLast(2).mapNotNull { inline(it) } }.forEach { parts.put(it) }
-        val replyId = uid()
-        val body = JSONObject().put("action", "dm").put("recent", recent).put("parts", parts).put("replyId", replyId)
+        val body = JSONObject().put("action", "dm").put("recent", recent).put("parts", parts).put("replyId", uid())
             .put("tz", java.util.TimeZone.getDefault().id).put("name", app.store.profile.name).put("handle", app.store.profile.handle)
-        val ai = LMsg(replyId, "", System.currentTimeMillis(), emptyList(), ai = true)
-        var done = false
-        // he reads it first: the typing dots show after a moment, not at once
-        val dots = app.scope.launch { kotlinx.coroutines.delay(1200); if (!done) { app.zenTyping[chat.id] = ai; app.zenVersion++ } }
-        var full = ""
-        val res = runCatching {
-            Keep.around(app.ctx) {
-                Sb.fnRaw("zenith", body, 90) { ln ->
-                    if (!ln.startsWith("data:")) return@fnRaw
-                    val t = partsText(runCatching { JSONObject(ln.substring(5)) }.getOrNull())
-                    if (t.isNotEmpty()) { full += t; if (app.zenTyping[chat.id] == null) app.zenTyping[chat.id] = ai; ai.text = full.replace(Regex("\\s*\\n+\\s*"), " ") }
-                }
-            }
-        }
-        done = true; dots.cancel()
-        app.zenTyping.remove(chat.id)
-        val (code, all) = res.getOrElse { 0 to "" }
-        val j = if (all.trimStart().startsWith("{")) runCatching { JSONObject(all) }.getOrNull() else null
-        when {
-            j?.optBoolean("asleep") == true -> {}
-            j?.optBoolean("blocked") == true -> app.say("Not delivered")
-            code !in 200..299 || full.isBlank() -> app.say("Zenith is not reachable right now. Try again")
-            else -> {
-                // a few lines are a few texts, one after the other
-                val texts = full.split(Regex("\\n+")).map { it.trim() }.filter { it.isNotEmpty() }.take(3)
-                val now = System.currentTimeMillis()
+        val r = runCatching { Keep.around(app.ctx) { Sb.fn("zenith", body, timeoutS = 90) } }.getOrNull()
+        val j = r?.body
+        if (r == null || !r.ok || j == null || !j.has("mode")) { app.say("Zenith is not reachable right now. Try again"); return@launch }
+        if (j.has("calls")) { app.zCalls = j.optBoolean("calls"); app.saveZ() }
+        when (j.optString("mode")) {
+            "blocked" -> { app.zUndelivered = m.t; app.saveZ() }
+            "now" -> {
+                val texts = j.optJSONArray("texts")?.strings().orEmpty()
+                val ids = j.optJSONArray("ids")?.strings().orEmpty()
+                kotlinx.coroutines.delay(maxOf(0L, sentAt + j.optLong("wait") - System.currentTimeMillis()))
+                app.zSeen = maxOf(app.zSeen, m.t); app.saveZ()
                 texts.forEachIndexed { i, t ->
-                    val msg = if (i == 0) ai.also { it.text = t; it.t = now } else LMsg(replyId + "-" + (i + 1), t, now + i, emptyList(), ai = true)
-                    app.zenNoAnim.add(msg.id)
-                    chat.msgs.add(msg)
+                    val ai = LMsg(ids.getOrNull(i) ?: uid(), "", System.currentTimeMillis(), emptyList(), ai = true)
+                    app.zenTyping[chat.id] = ai; app.zenVersion++
+                    // the time it takes to type it
+                    kotlinx.coroutines.delay((900L + t.length * 95L).coerceAtMost(9000L) + (if (i == 0) 500L else 0L))
+                    app.zenTyping.remove(chat.id)
+                    ai.text = t; ai.t = System.currentTimeMillis()
+                    app.zenNoAnim.add(ai.id)
+                    chat.msgs.add(ai); app.persist(); app.zenVersion++
+                    app.ctx?.let { c -> if (!app.foreground) Notify.show(c, "Zenith", t.take(180), "ztext", ai.id.hashCode()) }
+                    kotlinx.coroutines.delay(350)
                 }
-                app.persist(); zenSyncSoon()
-                app.ctx?.let { c -> if (!app.foreground) Notify.show(c, "Zenith", texts.first().take(180), "ztext", replyId.hashCode()) }
+                zenSyncSoon()
             }
         }
         app.zenVersion++

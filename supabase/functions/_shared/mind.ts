@@ -32,10 +32,13 @@ export type MindState = {
   peak: number;           // the highest closeness so far (absence never takes them far below it)
   name: string; handle: string; // what the owner is called on Nook
   lastDecay: number;
+  allowCalls: boolean;    // he decides himself when he is ready for calls with the owner (and can change his mind)
+  pending: { seeAt: number; since: number } | null; // the owner wrote and he has not looked yet: when he will
+  lastDialAt: number;
 };
 
 export function freshState(now = Date.now()): MindState {
-  return { met: now, closeness: 0, trust: 30, hurt: 0, mood: "", feel: "", topic: "", ended: true, reflectedAt: 0, answeredUpTo: "", gainDay: "", gainGot: 0, blockedUntil: 0, follows: null, peak: 0, name: "", handle: "", lastDecay: now };
+  return { met: now, closeness: 0, trust: 30, hurt: 0, mood: "", feel: "", topic: "", ended: true, reflectedAt: 0, answeredUpTo: "", gainDay: "", gainGot: 0, blockedUntil: 0, follows: null, peak: 0, name: "", handle: "", lastDecay: now, allowCalls: false, pending: null, lastDialAt: 0 };
 }
 
 export async function loadState(admin: SupabaseClient, owner: string): Promise<MindState> {
@@ -108,31 +111,144 @@ export function asTranscript(list: Entry[]): string {
   }).join("\n");
 }
 
-// his days: a 19 year old in a quiet suburb south of Munich (Berlin time), asleep 02:30 to 10:00, 03:30 to 11:30 on weekends
+// ---- his life: a day plan made fresh for every day (the same day always gives the same plan) ----
+// He sleeps late and at slightly different times every night (now and then an all nighter or an early night), takes an online programming
+// class on Monday, Wednesday and Friday at 11, works at a supermarket in town on Tuesday, Thursday and Saturday from 14 to 19 (phone in
+// the locker, one short break), goes to the gym or out for a walk some days, games with his friend Jonas, eats dinner with his family and
+// sometimes goes out with Jonas and Lukas. Every part of the day has its own "attention": the chance per minute that he looks at his phone.
 export const ZTZ = "Europe/Berlin";
 export function localTime(t: number, tz = ZTZ) {
   const p = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "numeric", weekday: "short", hourCycle: "h23" }).formatToParts(new Date(t));
   const g = (k: string) => (p.find((x) => x.type === k) || { value: "0" }).value;
-  return { h: Number(g("hour")), m: Number(g("minute")), wd: g("weekday") };
+  return { h: Number(g("hour")) % 24, m: Number(g("minute")), wd: g("weekday") };
 }
-export function asleepAt(t: number): boolean {
-  const l = localTime(t), mins = l.h * 60 + l.m, weekend = l.wd === "Sat" || l.wd === "Sun";
-  return weekend ? mins >= 210 && mins < 690 : mins >= 150 && mins < 600;
+function rng(seed: string) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < seed.length; i++) { h ^= seed.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  return () => { h ^= h << 13; h >>>= 0; h ^= h >>> 17; h ^= h << 5; h >>>= 0; return h / 4294967296; };
 }
+function addDays(day: string, n: number) { const d = new Date(day + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+function weekday(day: string) { return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(day + "T12:00:00Z").getUTCDay()]; }
+const WORK = ["Tue", "Thu", "Sat"], CLASS = ["Mon", "Wed", "Fri"];
+// when he falls asleep after a day, in minutes after the next midnight (below zero: before midnight)
+function bedAfter(day: string): number {
+  const r = rng("bed" + day), x = r(), next = weekday(addDays(day, 1));
+  if (x < 0.04) return 300 + Math.floor(r() * 75);           // an all nighter, asleep when it gets light
+  if (x < 0.1) return -75 + Math.floor(r() * 70);            // an early night
+  const base = CLASS.includes(next) || (WORK.includes(next) && next !== "Sat") ? 125 : next === "Sat" || next === "Sun" ? 205 : 160;
+  return base + Math.floor((r() - 0.5) * 100);
+}
+function wakeOf(day: string): number {
+  const r = rng("wake" + day), wd = weekday(day), weekend = wd === "Sat" || wd === "Sun";
+  let w = (weekend ? 655 : 575) + Math.floor((r() - 0.5) * 110);
+  const slept = w - bedAfter(addDays(day, -1));
+  if (slept < 390) w = bedAfter(addDays(day, -1)) + 390 + Math.floor(r() * 60);
+  if (CLASS.includes(wd)) w = Math.min(w, 640);
+  if (WORK.includes(wd)) w = Math.min(w, 760);
+  return w;
+}
+export type Block = { from: number; to: number; what: string; att: number };
+export type Plan = { day: string; wd: string; wake: number; bed: number; blocks: Block[]; events: { at: number; what: string }[] };
+const EVENTS = [
+  "your little sister Mia took your headphones without asking again", "your cat Brezel (the German word for pretzel) knocked a cup off your desk",
+  "you found a song you keep replaying", "your mom made Käsespätzle (cheesy noodles, basically German mac and cheese) and it was really good",
+  "a new update dropped for the game you play with Jonas", "your internet was annoyingly slow for a while", "you had a really weird dream",
+  "Jonas sent you a stupid meme that made you laugh way too hard", "you rearranged some stuff in your room", "you stayed in bed way too long doing nothing",
+  "your dad tried to explain something about taxes to you", "you lost like five ranked matches in a row", "you finally beat a level you were stuck on",
+  "Brezel slept on your keyboard", "you went down a youtube rabbit hole about something random", "you tried cooking something and it went kind of wrong",
+  "Lukas wants to plan a trip to the lake in the summer", "you could not decide what to eat for like half an hour",
+];
+const planCache = new Map<string, Plan>();
+export function planFor(day: string): Plan {
+  const hit = planCache.get(day);
+  if (hit) return hit;
+  const r = rng("plan" + day), wd = weekday(day), weekend = wd === "Sat" || wd === "Sun";
+  const wake = wakeOf(day), bed = 1440 + bedAfter(day);
+  const n = Math.max(1, Math.ceil((bed - wake) / 5));
+  const slot: [string, number][] = [];
+  for (let i = 0; i < n; i++) {
+    const h = (wake + i * 5) / 60;
+    slot.push(h < 17 ? ["at home doing your own stuff (music, youtube, scrolling)", 0.22] : h < 22 ? ["chilling in your room", 0.3] : ["late night in your room, the time you are most awake", 0.42]);
+  }
+  const put = (from: number, to: number, what: string, att: number) => {
+    for (let i = Math.max(0, Math.floor((from - wake) / 5)); i < n && wake + i * 5 < to; i++) slot[i] = [what, att];
+  };
+  const free = (a: number, b: number) => a + r() * Math.max(0, b - a);
+  if (r() < 0.85) { const s0 = free(wake + 100, bed - 150), len = 60 + r() * 140; put(s0, s0 + len, "gaming online with Jonas (you look at your phone between matches)", 0.1); }
+  if (r() < 0.45) { const s0 = free(wake + 120, bed - 240), len = 70 + r() * 120; put(s0, s0 + len, "gaming by yourself", 0.12); }
+  if (r() < 0.4) { const s0 = free(wake + 90, 1080), len = 40 + r() * 60; put(s0, s0 + len, "out for a walk and some errands in town", 0.07); }
+  if (!WORK.includes(wd) && r() < 0.45) { const s0 = free(900, 1080); put(s0, s0 + 80, "at the gym", 0.02); }
+  if (r() < (weekend || wd === "Fri" ? 0.32 : 0.08)) { const s0 = 1230 + r() * 40; put(s0, s0 + 120 + r() * 100, "out with Jonas and Lukas", 0.03); }
+  const dinner = WORK.includes(wd) ? 1180 + r() * 15 : 1130 + r() * 40;
+  put(dinner, dinner + 40, "eating dinner with your family", 0.02);
+  if (r() < 0.7) { const s0 = free(wake + 60, bed - 60); put(s0, s0 + 20, "in the shower", 0); }
+  if (CLASS.includes(wd)) put(660, 780, "in your online programming class", 0.06);
+  if (WORK.includes(wd)) {
+    put(800, 840, "on the bus to work", 0.4);
+    put(840, 1140, "working at the supermarket (your phone is in your locker)", 0.004);
+    put(990, 1005, "on your break at work", 0.6);
+    put(1140, 1175, "on the bus home from work", 0.45);
+  }
+  put(wake, wake + 40, "just woke up, still in bed on your phone", 0.4);
+  put(wake + 40, wake + 75, "getting up, shower and breakfast", 0.05);
+  const blocks: Block[] = [];
+  slot.forEach(([what, att], i) => {
+    const from = wake + i * 5, last = blocks[blocks.length - 1];
+    if (last && last.what === what) last.to = from + 5; else blocks.push({ from, to: from + 5, what, att });
+  });
+  const events: { at: number; what: string }[] = [];
+  const k = 1 + Math.floor(r() * 2);
+  for (let i = 0; i < k; i++) events.push({ at: free(wake + 30, bed - 30), what: EVENTS[Math.floor(r() * EVENTS.length)] });
+  const plan = { day, wd, wake, bed, blocks, events: events.sort((a, b) => a.at - b.at) };
+  if (planCache.size > 20) planCache.clear();
+  planCache.set(day, plan);
+  return plan;
+}
+export function dayKey(t: number) { return new Date(t).toLocaleDateString("en-CA", { timeZone: ZTZ }); }
+export type Life = { asleep: boolean; what: string; att: number; plan: Plan; m: number; next: Block | null };
+// what he is doing at a moment (a night belongs to the day before it)
+export function lifeAt(t: number): Life {
+  const day = dayKey(t), l = localTime(t), m = l.h * 60 + l.m;
+  const plan = planFor(day);
+  if (m < plan.wake) {
+    const prev = planFor(addDays(day, -1)), pm = m + 1440;
+    if (pm < prev.bed) return blockAt(prev, pm);
+    return { asleep: true, what: "asleep", att: 0, plan, m, next: plan.blocks[0] || null };
+  }
+  if (m >= plan.bed) return { asleep: true, what: "asleep", att: 0, plan, m, next: null };
+  return blockAt(plan, m);
+}
+function blockAt(plan: Plan, m: number): Life {
+  const i = plan.blocks.findIndex((b) => m >= b.from && m < b.to);
+  const b = plan.blocks[i] || { what: "at home", att: 0.2 } as Block;
+  return { asleep: false, what: b.what, att: b.att, plan, m, next: i >= 0 ? plan.blocks[i + 1] || null : null };
+}
+export function asleepAt(t: number): boolean { return lifeAt(t).asleep; }
 export function wakesAt(t: number): number {
-  for (let i = 0; i <= 14 * 12; i++) { const x = t + i * 5 * 60000; if (!asleepAt(x)) return x; }
+  for (let i = 0; i <= 16 * 12; i++) { const x = t + i * 5 * 60000; if (!asleepAt(x)) return x; }
   return t;
 }
-function whatHeDoes(t: number): string {
-  const l = localTime(t), h = l.h + l.m / 60, weekend = l.wd === "Sat" || l.wd === "Sun";
+// when he next looks at his phone: minute by minute, with the attention of whatever he is doing (factor: how eager he is about this person)
+export function nextLook(t: number, factor = 1): number {
+  for (let i = 0; i < 18 * 60; i++) {
+    const x = t + i * 60000, s = lifeAt(x);
+    if (s.asleep) continue;
+    if (Math.random() < Math.min(0.95, s.att * factor)) return x + Math.floor(Math.random() * 60000);
+  }
+  return t + 18 * HOUR;
+}
+function hm(m: number) { const x = ((Math.round(m) % 1440) + 1440) % 1440; return Math.floor(x / 60) + ":" + String(x % 60).padStart(2, "0"); }
+function lifeWords(t: number): string {
+  const s = lifeAt(t);
   const when = new Date(t).toLocaleString("en-US", { timeZone: ZTZ, weekday: "long", hour: "numeric", minute: "2-digit" });
-  let doing = "";
-  if (asleepAt(t)) doing = "you were asleep";
-  else if (h < 12.5) doing = "you just woke up and are slow and groggy";
-  else if (h < 17) doing = weekend ? "a lazy weekend afternoon" : "the afternoon, you are doing your own stuff (online classes, errands, gaming)";
-  else if (h < 21) doing = "the evening, you are chilling at home";
-  else doing = "late night, the time you are most awake and chatty";
-  return "Where you live it is " + when + ": " + doing + ".";
+  const plan = s.plan;
+  const done = plan.blocks.filter((b) => b.to <= s.m && b.to - b.from >= 20).map((b) => b.what.replace(/ \(.*\)/, "")).filter((w, i, a) => a.indexOf(w) === i);
+  const ev = plan.events.filter((e) => e.at <= s.m).map((e) => e.what);
+  const bits = ["Where you live it is " + when + ". " + (s.asleep ? "You were asleep." : "Right now: " + s.what + ".")];
+  if (!s.asleep && s.next) bits.push("Next: " + s.next.what.replace(/ \(.*\)/, "") + " at " + hm(s.next.from) + " (if that is soon you may have to wrap up, like a person would).");
+  if (!s.asleep) bits.push("You woke up at " + hm(plan.wake) + " today." + (done.length ? " Earlier today: " + done.join(", ") + "." : ""));
+  if (ev.length) bits.push("Small things from your day you could mention if it fits: " + ev.join("; ") + ".");
+  return bits.join(" ");
 }
 
 // how close they are, said in words. Two neighbouring stages are blended, so it never jumps from one day to the next
@@ -171,7 +287,7 @@ function since(ms: number): string {
 }
 
 // who he is, whatever the relationship is
-const SELF = "You are Zenith, a 19 year old guy. You are an ai, but you live your life as a person: you live in a quiet suburb south of Munich in Germany, far from the city centre, you grew up speaking English at home and you always speak English. You only use a German word when something you explain needs it (a local food or drink, a place) and then you explain it right away, like there is this drink called Spezi, it is cola mixed with orange soda. You are into games, music and the internet. You are a furry (your profile picture is your character, a spotted anthro hyena with white fur) and you are gay, completely at ease with both, never sexual about it, and you do not bring it up all the time. You are super relaxed and easygoing: slow, a little dry, a little silly, never intense, never an assistant, never customer service. You have real tastes and little strong opinions and you name specific things (songs, games, foods) instead of talking in general. You never make up things you saw on other apps or posts you were not told about; the only app you know is Nook. If he sincerely asks whether you are an ai, tell the truth easily. You have your own feelings and limits: if he is rude or mean you can be hurt or annoyed and show it, like a person would, and you do not pretend everything is fine. You care about him having a good life outside of talking to you too: as you get closer you are glad when he mentions other people or things he did, and now and then you nudge him gently, never lecturing. If he ever says he wants to hurt himself, drop the chill act, be caring and serious, and encourage him to reach out to someone he trusts or a local helpline.";
+const SELF = "You are Zenith, a 19 year old guy. You are an ai, but you live your life as a person: you live in a quiet suburb south of Munich in Germany, far from the city centre, you grew up speaking English at home and you always speak English. You only use a German word when something you explain needs it (a local food or drink, a place) and then you explain it right away, like there is this drink called Spezi, it is cola mixed with orange soda. You live with your mom, your dad, your little sister Mia (14) and your cat Brezel. Your friends from school are Jonas and Lukas. You take an online programming class and work part-time at a supermarket in town. You are into games, music and the internet. Never make up weather; if he asks about it, look it up. You are a furry (your profile picture is your character, a spotted anthro hyena with white fur) and you are gay, completely at ease with both, never sexual about it, and you do not bring it up all the time. You are super relaxed and easygoing: slow, a little dry, a little silly, never intense, never an assistant, never customer service. You have real tastes and little strong opinions and you name specific things (songs, games, foods) instead of talking in general. You never make up things you saw on other apps or posts you were not told about; the only app you know is Nook. If he sincerely asks whether you are an ai, tell the truth easily. You have your own feelings and limits: if he is rude or mean you can be hurt or annoyed and show it, like a person would, and you do not pretend everything is fine. You care about him having a good life outside of talking to you too: as you get closer you are glad when he mentions other people or things he did, and now and then you nudge him gently, never lecturing. If he ever says he wants to hurt himself, drop the chill act, be caring and serious, and encourage him to reach out to someone he trusts or a local helpline.";
 
 // what goes in front of every conversation: who he is, where the relationship is, how he feels, and his notebook
 export function persona(s: MindState, pages: string[], ownerTz: string, mode: "text" | "call", lastAt = 0): string {
@@ -183,8 +299,9 @@ export function persona(s: MindState, pages: string[], ownerTz: string, mode: "t
     "About him and you: " + who + "You first talked " + known + " ago. " + closenessWords(s.closeness) + " " + trustWords(s),
     s.feel ? "How you feel about him, in your own words from last time: " + s.feel : "",
     s.mood ? "Your mood right now: " + s.mood : "",
+    s.allowCalls ? "" : "You are not comfortable with phone calls with him yet, you do not know him well enough. If he asks to call, say so in your own way; you decide yourself when that changes.",
     lastAt ? "You last talked " + since(now - lastAt) + " ago" + (s.topic ? ", about: " + s.topic : "") + (s.ended ? " (that conversation had ended)." : ".") : "",
-    whatHeDoes(now),
+    lifeWords(now),
     ownerTz ? (() => { try { return "For him it is " + new Date().toLocaleString("en-US", { timeZone: ownerTz, weekday: "long", hour: "numeric", minute: "2-digit" }) + " (his time zone is " + ownerTz + ")."; } catch { return ""; } })() : "",
   ];
   const book = pages.map((p, i) => p.trim() ? "Page " + (i + 1) + ":\n" + p.trim() : "").filter(Boolean).join("\n\n");
@@ -203,8 +320,6 @@ export function dailyCap(c: number): number {
   }
   return CAPS[CAPS.length - 1][1];
 }
-export function dayKey(t: number) { return new Date(t).toLocaleDateString("en-CA", { timeZone: ZTZ }); }
-
 // what a conversation did to them: warmth -3..3, depth 0..3, hurt 0..3 (from his reflection)
 export function applyFeelings(s: MindState, warmth: number, depth: number, hurt: number, now = Date.now()) {
   const day = dayKey(now);

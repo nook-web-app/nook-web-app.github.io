@@ -191,6 +191,12 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     var call by mutableStateOf<CallSession?>(null)
     // the card of the call is open over the app
     var callCard by mutableStateOf(false)
+    // his own chat: whether he lets the owner call him, when he last read the owner's messages, and a message that was not delivered
+    var zCalls by mutableStateOf(false)
+    var zSeen by androidx.compose.runtime.mutableLongStateOf(0L)
+    var zUndelivered by androidx.compose.runtime.mutableLongStateOf(0L)
+    fun loadZ() { ctx?.getSharedPreferences("zstate", 0)?.let { zCalls = it.getBoolean("calls", false); zSeen = it.getLong("seen", 0); zUndelivered = it.getLong("undel", 0) } }
+    fun saveZ() { ctx?.getSharedPreferences("zstate", 0)?.edit()?.putBoolean("calls", zCalls)?.putLong("seen", zSeen)?.putLong("undel", zUndelivered)?.apply() }
     // the chat the call was started from: its log is saved there when the call ends
     var callChatId: String? = null
     // asks for the microphone and answers whether it was given; set by the activity
@@ -225,11 +231,35 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
             return
         }
         if (ringing != null) ringing.answer()
+        else if (reason == null) {
+            // the owner calls him: it rings first (with the ringback tone), and like a person he may not pick up
+            val s = CallSession(scope, { updateCallNote() }, null)
+            s.phase = CallPhase.Calling
+            call = s
+            s.startLive(this, hold = true)
+            dial(s)
+        }
         else call = CallSession(scope, { updateCallNote() }, reason).also { it.startLive(this) }
         runCatching { androidx.core.content.ContextCompat.startForegroundService(c, android.content.Intent(c, CallService::class.java)) }
         // his picture goes into the notification as soon as it is read
         scope.launch(kotlinx.coroutines.Dispatchers.IO) { CallNote.loadAvatar(this@AppState); updateCallNote() }
         openCall()
+    }
+    private fun dial(s: CallSession) {
+        scope.launch {
+            val tone = runCatching { android.media.ToneGenerator(android.media.AudioManager.STREAM_VOICE_CALL, 60) }.getOrNull()
+            runCatching { tone?.startTone(android.media.ToneGenerator.TONE_SUP_RINGTONE) }
+            val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { Sb.fn("zenith", org.json.JSONObject().put("action", "dial"), timeoutS = 15) }.getOrNull() }
+            // no answer from the server (or an old one): he picks up
+            val pick = r == null || !r.ok || r.body.optBoolean("pickup", true)
+            val wait = r?.body?.optLong("in", 3000) ?: 3000
+            val start = System.currentTimeMillis()
+            while (call === s && System.currentTimeMillis() - start < wait) kotlinx.coroutines.delay(200)
+            runCatching { tone?.stopTone(); tone?.release() }
+            if (call !== s) return@launch
+            if (pick) { s.phase = CallPhase.Connecting; s.answer() }
+            else { say(if (r?.body?.optString("why") == "declined") "Zenith declined" else "No answer"); endCall(false) }
+        }
     }
     // End: the sound stops at once, the screen plays its goodbye, then the call is gone
     fun endCall(animated: Boolean = true) {

@@ -319,7 +319,9 @@ fun ToBottomButton(list: androidx.compose.foundation.lazy.LazyListState, unread:
     }
     var show by remember { mutableStateOf(false) }
     LaunchedEffect(list) { snapshotFlow { far }.collectLatest { f -> if (f) { kotlinx.coroutines.delay(400); show = true } else show = false } }
-    androidx.compose.animation.AnimatedVisibility(show, modifier = modifier, enter = fadeIn(tween(160)) + androidx.compose.animation.scaleIn(tween(160), 0.8f), exit = fadeOut(tween(140)) + androidx.compose.animation.scaleOut(tween(140), 0.8f)) {
+    androidx.compose.animation.AnimatedVisibility(show, modifier = modifier,
+        enter = fadeIn(tween(180)) + androidx.compose.animation.scaleIn(androidx.compose.animation.core.spring(androidx.compose.animation.core.Spring.DampingRatioMediumBouncy, androidx.compose.animation.core.Spring.StiffnessMedium), 0.4f) + androidx.compose.animation.slideInVertically(androidx.compose.animation.core.spring(androidx.compose.animation.core.Spring.DampingRatioLowBouncy, androidx.compose.animation.core.Spring.StiffnessMediumLow)) { it / 2 },
+        exit = fadeOut(tween(140)) + androidx.compose.animation.scaleOut(tween(160), 0.6f) + androidx.compose.animation.slideOutVertically(tween(160)) { it / 3 }) {
         Box(Modifier.padding(end = 6.dp, bottom = 10.dp)) {
             Box(
                 Modifier.size(44.dp).shadow(14.dp, CircleShape, ambientColor = Color(0x38000000), spotColor = Color(0x38000000)).clip(CircleShape).background(c.bg2).border(1.dp, c.line, CircleShape)
@@ -332,7 +334,11 @@ fun ToBottomButton(list: androidx.compose.foundation.lazy.LazyListState, unread:
                         }
                     },
                 contentAlignment = Alignment.Center,
-            ) { NIcon("back", 22.dp, c.fg, modifier = Modifier.rotate(-90f)) }
+            ) {
+                // the arrow bobs a little, so it is noticed
+                val bob by androidx.compose.animation.core.rememberInfiniteTransition(label = "bob").animateFloat(0f, 3f, androidx.compose.animation.core.infiniteRepeatable(tween(750), androidx.compose.animation.core.RepeatMode.Reverse), label = "bobv")
+                NIcon("back", 22.dp, c.fg, modifier = Modifier.rotate(-90f).graphicsLayer { translationY = bob.dp.toPx() })
+            }
             if (unread > 0) Box(
                 Modifier.align(Alignment.BottomEnd).offset(x = 6.dp, y = 6.dp).defaultMinSize(minWidth = 22.dp, minHeight = 22.dp).clip(CircleShape).background(c.accent).padding(horizontal = 6.dp),
                 contentAlignment = Alignment.Center,

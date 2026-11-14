@@ -99,9 +99,13 @@ fun ConvScreen(id: String) {
             // the call with Zenith: only the owner has it
             // the call button is there only when he is comfortable with calls (he decides, and can change his mind)
             if (zOn() && isZ && app.zCalls) Box(Modifier.width(44.dp)) { IB("phone") { app.startCall() } }
-            if (!isZ) Box(Modifier.width(44.dp)) {
+            Box(Modifier.width(44.dp)) {
                 IB("dots") {
-                    app.open(listOf(
+                    if (isZ) app.open(listOf(
+                        // his chat is never removed (it is always there), only what is shown on this phone; he still remembers
+                        SheetItem("Clear chat for me", "trash", danger = true) { app.confirm("Clear this chat? He will still remember it.", "Clear") { chat.msgs.clear(); app.persist(); app.on.zenSyncSoon() } },
+                    ))
+                    else app.open(listOf(
                         SheetItem("Rename chat", "edit") { app.panels.add(Panel.RenameChat(chat)) },
                         SheetItem("Delete chat", "close", danger = true) { app.confirm("Delete this chat?", "Delete") { s.chats.remove(chat); app.persist(); app.pop() } },
                     ))

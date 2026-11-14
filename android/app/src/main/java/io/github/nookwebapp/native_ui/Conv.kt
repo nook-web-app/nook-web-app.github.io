@@ -313,7 +313,8 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onDouble: (() -> U
     val fx = rememberBubbleFx()
     val opened by rememberUpdatedState(open)
     val tap = { if (!opened) fx.pop(); onTap() }
-    Column(Modifier.fillMaxWidth().pointerInput(m.id) { detectTapGestures(onTap = { tap() }, onDoubleTap = if (onDouble != null) { _ -> onDouble() } else null, onLongPress = { AppState.current?.buzz(); onLong() }) }, horizontalAlignment = if (left) Alignment.Start else Alignment.End) {
+    // the touch area is the message itself (the row is as wide as its widest part), so a tap beside a message does nothing
+    Column(Modifier.fillMaxWidth().wrapContentWidth(if (left) Alignment.Start else Alignment.End).pointerInput(m.id) { detectTapGestures(onTap = { tap() }, onDoubleTap = if (onDouble != null) { _ -> onDouble() } else null, onLongPress = { AppState.current?.buzz(); onLong() }) }, horizontalAlignment = if (left) Alignment.Start else Alignment.End) {
         if (m.imgs.isNotEmpty()) Box(Modifier.width(minOf(w * 0.82f, 320.dp)).clip(RoundedCornerShape(Rad.bubble))) { ImgGrid(m.imgs, whenText(m.t), framed = false) }
         // "/media link": the command stays in view with its link shortened, and the card of the video answers on the left
         m.mcard?.let { card ->
@@ -335,7 +336,7 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onDouble: (() -> U
             val glow by androidx.compose.animation.core.animateFloatAsState(if (flash) 1f else 0f, tween(if (flash) 220 else 700), label = "glow")
             Box(
                 Modifier.padding(top = if (m.imgs.isNotEmpty() || url != null || m.rpost != null) 4.dp else 0.dp).bubbleFx(fx, left).widthIn(max = w * 0.82f)
-                    .clip(shape).background(if (left) c.bg2 else c.accent).background(Color.White.copy(alpha = 0.2f * glow)).then(if (left) Modifier.border(1.dp, c.line, shape) else Modifier).padding(start = 14.dp, end = 14.dp, top = if (rp != null) 6.dp else 9.dp, bottom = 9.dp),
+                    .graphicsLayer { val k = 1f + 0.035f * glow; scaleX = k; scaleY = k }.clip(shape).background(if (left) c.bg2 else c.accent).then(if (left) Modifier.border(1.dp, c.line, shape) else Modifier).border(2.dp, (if (left) c.accent else Color.White).copy(alpha = 0.9f * glow), shape).padding(start = 14.dp, end = 14.dp, top = if (rp != null) 6.dp else 9.dp, bottom = 9.dp),
             ) {
                 Column {
                     // the message this one answers: one faded line, a tap takes you to it
@@ -352,7 +353,7 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onDouble: (() -> U
         LikeHeart(m.liked, left)
         // the time, under the message, opens with a swipe (his to the left, mine to the right)
         AnimatedVisibility(open, enter = expandVertically(tween(240)) + fadeIn(tween(200)), exit = shrinkVertically(tween(240)) + fadeOut(tween(200))) {
-            T(whenText(m.t), Fs.xs, color = c.muted, align = if (left || m.mcard != null) TextAlign.Start else TextAlign.End, modifier = Modifier.fillMaxWidth().padding(top = 4.dp, end = 2.dp, start = 2.dp))
+            T(whenText(m.t), Fs.xs, color = c.muted, modifier = Modifier.padding(top = 4.dp, end = 2.dp, start = 2.dp))
         }
     }
 }

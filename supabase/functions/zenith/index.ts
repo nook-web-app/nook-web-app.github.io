@@ -425,7 +425,11 @@ Deno.serve(async (req) => {
     if (!o) return json({ error: "no owner" }, 500);
     const owner = o.user_id as string;
     const tz = typeof body.tz === "string" && /^[A-Za-z_]+(\/[A-Za-z0-9_+-]+){1,2}$/.test(body.tz) ? body.tz : "";
-    await logEntries(admin, owner, Array.isArray(body.recent) ? (body.recent as Entry[]).slice(-30) : []);
+    const rec = Array.isArray(body.recent) ? (body.recent as Entry[]).slice(-30) : [];
+    // the new message gets the server's time, so a phone clock that is off never puts it before his last answer
+    const newest = rec[rec.length - 1];
+    if (newest && !newest.ai) newest.t = Date.now();
+    await logEntries(admin, owner, rec);
     const st = await loadState(admin, owner);
     const name = typeof body.name === "string" ? body.name.trim().slice(0, 60) : "", handle = typeof body.handle === "string" ? body.handle.trim().slice(0, 40) : "";
     if ((name && name !== st.name) || (handle && handle !== st.handle)) { st.name = name || st.name; st.handle = handle || st.handle; await saveState(admin, owner, st); }
@@ -477,12 +481,20 @@ Deno.serve(async (req) => {
     const stream = body.stream === true;
     const system = String(body.system || "");
     // the chat model knows it can search; when it asks for a search, the findings are added to the last message and it answers again
-    let got = await gemini(key, system + (stream ? HUMAN_HELP : "") + SEARCH_HELP, body.history, stream, true);
+    // in a notes chat (@zenith) he is the same person with the same relationship as in his own chat
+    let who = "";
+    if (stream) {
+      try {
+        const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
+        if (o) { const [st, pages] = await Promise.all([loadState(admin, o.user_id as string), loadNotebook(admin, o.user_id as string)]); who = "\n\n" + persona(st, pages, "", "text") + "\n\nThis is one of his notes chats, where he calls you in with @zenith. Answer the last message that mentions you."; }
+      } catch { who = HUMAN_HELP; }
+    }
+    let got = await gemini(key, system + who + SEARCH_HELP, body.history, stream, true);
     if (got.call) {
       const mins = await planCall(got.call);
       const note = "(The phone call is arranged: it will ring his phone " + (mins <= 1 ? "in a few seconds" : "in about " + mins + " minutes") + ". Answer with only a few words, like ok, sure, or calling you in a sec. Do not say what the call will be about or add anything else unless he asked. Do not use any tool now.)";
       if (last && Array.isArray(last.parts)) last.parts.push({ text: note });
-      got = await gemini(key, system + (stream ? HUMAN_HELP : ""), body.history, stream, false);
+      got = await gemini(key, system + who, body.history, stream, false);
     }
     if (got.search) {
       let query = got.search.query;
@@ -492,7 +504,7 @@ Deno.serve(async (req) => {
       }
       const note = await searchNote(query || "the latest news");
       if (last && Array.isArray(last.parts)) last.parts.push({ text: note });
-      got = await gemini(key, system + (stream ? HUMAN_HELP : ""), body.history, stream, false);
+      got = await gemini(key, system + who, body.history, stream, false);
     }
     const up = got.res;
     // every model is used up or unavailable: the only time the chat sees an error

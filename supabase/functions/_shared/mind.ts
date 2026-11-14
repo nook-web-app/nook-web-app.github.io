@@ -49,7 +49,8 @@ export async function loadState(admin: SupabaseClient, owner: string): Promise<M
   return s;
 }
 export async function saveState(admin: SupabaseClient, owner: string, s: MindState) {
-  await admin.from("zenith_docs").upsert({ owner_id: owner, kind: "mind", doc_id: "state", data: s, updated_at: new Date().toISOString() }, { onConflict: "owner_id,kind,doc_id" });
+  const r = await admin.from("zenith_docs").upsert({ owner_id: owner, kind: "mind", doc_id: "state", data: s, updated_at: new Date().toISOString() }, { onConflict: "owner_id,kind,doc_id" });
+  await noteError(admin, "state", r.error);
 }
 export async function loadNotebook(admin: SupabaseClient, owner: string): Promise<string[]> {
   const { data } = await admin.from("zenith_docs").select("data").eq("owner_id", owner).eq("kind", "mind").eq("doc_id", "notebook").maybeSingle();
@@ -65,7 +66,14 @@ export async function saveNotebook(admin: SupabaseClient, owner: string, pages: 
 export async function logEntries(admin: SupabaseClient, owner: string, list: Entry[]) {
   const rows = list.filter((e) => e && typeof e.id === "string" && /^[\w-]{6,64}$/.test(e.id) && typeof e.text === "string" && e.text.trim())
     .map((e) => ({ owner_id: owner, kind: "mindlog", doc_id: e.id, data: { ai: !!e.ai, text: e.text.slice(0, 4000), t: Number(e.t) || Date.now(), kind: e.kind || "text", ...(e.pro ? { pro: true } : {}) }, updated_at: new Date().toISOString() }));
-  if (rows.length) await admin.from("zenith_docs").upsert(rows, { onConflict: "owner_id,kind,doc_id", ignoreDuplicates: true });
+  if (!rows.length) return;
+  const r = await admin.from("zenith_docs").upsert(rows, { onConflict: "owner_id,kind,doc_id", ignoreDuplicates: true });
+  await noteError(admin, "log", r.error);
+}
+// why a write failed is kept as a small row so it can be looked up: select * from ai_usage where model like 'debug:mind%'
+export async function noteError(admin: SupabaseClient, what: string, error: { message?: string } | null | undefined) {
+  if (!error) return;
+  try { await admin.rpc("nook_ai_full", { p_model: ("debug:mind:" + what + ":" + String(error.message || error)).replace(/[^\w .,:'()-]+/g, " ").replace(/\s+/g, " ").slice(0, 150), p_limit: 1 }); } catch { /* only a note */ }
 }
 export async function recentEntries(admin: SupabaseClient, owner: string, n = 40, since = 0): Promise<Entry[]> {
   let q = admin.from("zenith_docs").select("doc_id, data").eq("owner_id", owner).eq("kind", "mindlog");

@@ -195,7 +195,17 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     var zCalls by mutableStateOf(false)
     var zSeen by androidx.compose.runtime.mutableLongStateOf(0L)
     var zUndelivered by androidx.compose.runtime.mutableLongStateOf(0L)
-    fun loadZ() { ctx?.getSharedPreferences("zstate", 0)?.let { zCalls = it.getBoolean("calls", false); zSeen = it.getLong("seen", 0); zUndelivered = it.getLong("undel", 0) } }
+    fun loadZ() {
+        // ONE TIME: his chat starts over with his memory (his first messages were not how a stranger texts)
+        ctx?.getSharedPreferences("zstate", 0)?.let { p ->
+            if (!p.getBoolean("reset2", false)) {
+                store.chats.firstOrNull { it.id == ZDM }?.msgs?.clear()
+                p.edit().clear().putBoolean("reset2", true).apply()
+                persist()
+                runCatching { on.zenSyncSoon() }
+            }
+        }
+        ctx?.getSharedPreferences("zstate", 0)?.let { zCalls = it.getBoolean("calls", false); zSeen = it.getLong("seen", 0); zUndelivered = it.getLong("undel", 0) } }
     fun saveZ() { ctx?.getSharedPreferences("zstate", 0)?.edit()?.putBoolean("calls", zCalls)?.putLong("seen", zSeen)?.putLong("undel", zUndelivered)?.apply() }
     // the chat the call was started from: its log is saved there when the call ends
     var callChatId: String? = null

@@ -255,6 +255,11 @@ let zenCloseness = 50;
 // deno-lint-ignore no-explicit-any
 async function mindTick(owner: string, zen: string, docs: { doc_id: string; data: any }[]) {
   const now = Date.now();
+  // ONE TIME: his memory starts over (asked by the owner): his messages, his state and his notebook go, he has never talked to the owner
+  if (await useModel(admin, "mind-reset-2", 1)) {
+    await admin.from("zenith_docs").delete().eq("owner_id", owner).in("kind", ["mind", "mindlog"]);
+    await setFollow(owner, zen, false);
+  }
   const st = await loadState(admin, owner);
   const recent = await recentEntries(admin, owner, 60);
   const lastAt = recent.length ? recent[recent.length - 1].t : 0;
@@ -404,10 +409,14 @@ async function textFirst(owner: string, st: MindState, recent: Entry[], tz: stri
   // he texts when he has his phone in his hand: not at work, not at dinner
   if (Math.random() > Math.min(1.5, life.att / 0.25) / (hours * 60)) return;
   const pages = await loadNotebook(admin, owner);
+  // someone he never talked to does not get a text out of nowhere: the owner has to start talking first
+  if (!recent.some((e) => !e.ai && e.kind !== "missed")) return;
   const over = st.ended || !last || now - last.t > 3 * HOUR;
   const idea = (over
     ? "Your last conversation is over. Text him first to start something new, the way you would at your stage: something from your day, a random thought, a song or game you are into, or a question about something from your notebook. Do not pick the old conversation back up unless you are following up on something that matters (like something he said he would do)."
     : "You talked a little while ago. Pick it back up or start something new, whatever feels natural.")
+    + (c < 12 ? " You barely know him yet: text him only the way you would text someone new, short and a little careful, and only about something you two actually talked about or something from his messages. Do not tell him about your morning, your cat or your life out of nowhere, and do not act like old friends." : c < 30 ? " You are still getting to know each other: keep it casual and not too personal." : "")
+    + " Never say a song, game or show is new or just came out (you cannot know that); talk about things you like."
     + (c >= 25 && Math.random() < 0.15 ? " This time, ask if you can call him." : "")
     + (streak === 1 ? " He did not answer your last text: do not complain about it, send something light or something new." : "");
   const contents = asContents(recent.slice(-30));

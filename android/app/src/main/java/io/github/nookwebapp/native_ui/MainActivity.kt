@@ -65,8 +65,8 @@ class MainActivity : ComponentActivity() {
     private fun start(store: Store, root: android.view.View, show: () -> Unit) {
         app = AppState(store)
         AppState.current = app
-        app.loadZ()
         app.ctx = applicationContext
+        app.loadZ()
         app.activity = java.lang.ref.WeakReference(this)
         app.startForResult = { pi ->
             val d = kotlinx.coroutines.CompletableDeferred<androidx.activity.result.ActivityResult>()

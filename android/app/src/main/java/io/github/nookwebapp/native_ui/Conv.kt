@@ -123,7 +123,7 @@ fun ConvScreen(id: String) {
                 FoldAway(m.leaving) { Box(Modifier.padding(bottom = 6.dp).msgIn(anim, !m.ai)) { SwipeReply(m.ai && !isZ, { fill[0]?.invoke("@zenith ") }) { Bubble(m, open == m.id, onTap = { open = if (open == m.id) null else m.id }) {
                     app.open(listOfNotNull(
                         if (m.text.isNotEmpty()) SheetItem("Copy message", "copy") { app.clipboard(m.text) } else null,
-                        SheetItem("Delete message", "trash", danger = true) {
+                        SheetItem(if (isZ) "Delete for me" else "Delete message", "trash", danger = true) {
                             // the command and every card it brought in go together (a post with several files has one message per file)
                             val first = m.mcard?.let { it.optInt("n") == 0 && it.optInt("x") != 1 } == true
                             val group = if (first) chat.msgs.filter { x -> x.mcard != null && x.text == m.text && x.t >= m.t && x.t <= m.t + 40 } else listOf(m)

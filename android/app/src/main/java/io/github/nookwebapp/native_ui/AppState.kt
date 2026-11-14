@@ -63,6 +63,7 @@ sealed interface Panel {
     data object ChangePassword : Panel
     data object ChangeEmail : Panel
     data object Deactivate : Panel
+    data object Backup : Panel
     data object TotpSetup : Panel
     data object TotpOff : Panel
     data object WaitApproval : Panel
@@ -195,6 +196,8 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     var zCalls by mutableStateOf(false)
     var zSeen by androidx.compose.runtime.mutableLongStateOf(0L)
     var zUndelivered by androidx.compose.runtime.mutableLongStateOf(0L)
+    // Download data: an account asks for its password first (and the authenticator code when it has one); without an account there is nothing to prove
+    fun askBackup() { if (on.me != null) panels.add(Panel.Backup) else backup() }
     fun loadZ() {
         // ONE TIME: his chat starts over with his memory (his first messages were not how a stranger texts)
         ctx?.getSharedPreferences("zstate", 0)?.let { p ->

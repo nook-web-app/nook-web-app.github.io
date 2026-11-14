@@ -305,7 +305,7 @@ const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.sta
 
 // the hint for Zenith's name shows while "@zen..." is typed, not once "@zenith" is complete
 const zenHint = v => { const m = /@\w*$/.exec(v); return !!m && m[0].toLowerCase() !== "@zenith"; };
-const APP_VERSION = "3.49.6";
+const APP_VERSION = "3.49.7";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -3174,7 +3174,7 @@ function settingsV() {
     }]))));
   main.append(sec("Your data"));
   main.append(h("div", { class: "group" },
-    row(ic("copy", 22), "Download data", "Posts, notes and media", () => downloadBackup())));
+    row(ic("copy", 22), "Download data", "Posts, notes and media", () => guardedBackup())));
   main.append(sec("Updates"));
   main.append(h("div", { class: "group" }, row(ic("refresh", 22), "Check for updates", "Version " + APP_VERSION, () => {
     if (!window.nookCheckUpdate) { toast("Not available right now"); return; }
@@ -5082,6 +5082,37 @@ function authenticatorSetup() {
       });
     };
     askPw();
+  });
+}
+// Download my data: an account asks for its password first, and then for the authenticator code when it has one (the data is the whole account)
+function guardedBackup() {
+  if (!sbUser) return downloadBackup();
+  confirmLogin("Download my data", "Type your email and password to confirm it is you.", "Continue", async () => {
+    let on = totpOn;
+    if (on === null || on === undefined) { const r = await callFn("totp", { action: "status" }); on = r.ok ? !!r.body.enabled : null; }
+    if (on === null) return "Could not check your account. Try again";
+    // the password screen closes, then the next step opens
+    setTimeout(() => { if (on) backupCodeStep(); else downloadBackup(); }, 50);
+  });
+}
+function backupCodeStep() {
+  const code = codeInput();
+  const msg = h("p", { class: "note", role: "alert" });
+  const m = modal({
+    title: "Authenticator code",
+    action: "Download",
+    body: [h("p", { class: "note" }, "This account has an authenticator. Type the 6 digit code from the app."), h("div", { class: "fld" }, code), msg],
+    onAction: async close => {
+      const c = code.value.replace(/\s+/g, "");
+      if (!/^\d{6}$/.test(c)) { msg.textContent = "Type the 6 digit code from the app"; return; }
+      m.act.disabled = true;
+      try {
+        const r = await callFn("totp", { action: "confirm", code: c });
+        if (!r.ok) { msg.textContent = failText(r, "That code did not work"); return; }
+        close();
+        downloadBackup();
+      } finally { m.act.disabled = false; }
+    }
   });
 }
 function authenticatorOff() {

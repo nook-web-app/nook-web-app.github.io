@@ -211,6 +211,7 @@ fun PanelHost(app: AppState) {
                         Panel.ChangePassword -> ChangePasswordPanel(app, p)
                         Panel.ChangeEmail -> ChangeEmailPanel(app, p)
                         Panel.Deactivate -> DeactivatePanel(app, p)
+                        Panel.Backup -> BackupPanel(app, p)
                         Panel.TotpSetup -> TotpSetupPanel(app, p)
                         Panel.TotpOff -> TotpOffPanel(app, p)
                         Panel.WaitApproval -> WaitApprovalPanel(app, p)

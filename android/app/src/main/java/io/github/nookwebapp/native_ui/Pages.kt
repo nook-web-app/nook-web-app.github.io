@@ -256,7 +256,7 @@ fun SettingsScreen() {
                 SRow(ic("moon", 22.dp), "Deactivate account", "Hidden until you sign back in", last = true) { app.panels.add(Panel.Deactivate) }
             }
             Sec("Your data")
-            Group { SRow(ic("copy", 22.dp), "Download data", "Posts, notes and media", last = true) { app.backup() } }
+            Group { SRow(ic("copy", 22.dp), "Download data", "Posts, notes and media", last = true) { app.askBackup() } }
             Sec("Updates")
             Group {
                 SRow(ic("refresh", 22.dp), "Check for updates", if (app.updProgress != null) "Updating..." else "Version $APP_VERSION", last = true) { if (app.updProgress == null && !app.updBusy) app.checkUpdate(true) }

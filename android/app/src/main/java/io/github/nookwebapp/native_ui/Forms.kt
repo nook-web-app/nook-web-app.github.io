@@ -381,6 +381,33 @@ fun ZenEditPanel(app: AppState, p: Panel) {
     }
 }
 
+// Download my data: the password first, and the authenticator code when the account has one (the data is the whole account)
+@Composable
+fun BackupPanel(app: AppState, p: Panel) {
+    var pw by remember { mutableStateOf("") }
+    var code by remember { mutableStateOf("") }
+    var needCode by remember { mutableStateOf<Boolean?>(totpOn) }
+    LaunchedEffect(Unit) {
+        if (needCode == null) { val r = Sb.fn("totp", org.json.JSONObject().put("action", "status")); needCode = if (r.ok) r.body.optBoolean("enabled") else null }
+    }
+    Form(p, "Download my data", "Download", run = {
+        if (pw.isEmpty()) return@Form "Type your password"
+        val cc = code.replace(Regex("\\s+"), "")
+        if (needCode == true && !Regex("^\\d{6}$").matches(cc)) return@Form "Type the 6 digit code from your authenticator app"
+        app.on.verifyPassword(pw)?.let { return@Form it }
+        if (needCode == true) {
+            val r = Sb.fn("totp", org.json.JSONObject().put("action", "confirm").put("code", cc))
+            if (!r.ok) return@Form failText(r, "That code did not work")
+        }
+        app.backup()
+        null
+    }) {
+        Note("Type your password to confirm it is you." + if (needCode == true) " This account has an authenticator, so also type the 6 digit code from the app." else "")
+        PwField(pw, { pw = it }, "Password")
+        if (needCode == true) { Gap(); Field(code, { code = it.take(7) }, "6 digit code", border = true) }
+    }
+}
+
 // deactivating asks for the login password first, or the fingerprint when this account has one saved
 @Composable
 fun DeactivatePanel(app: AppState, p: Panel) {

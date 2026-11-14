@@ -246,6 +246,15 @@ Deno.serve(async (req) => {
   }
 
   const code = cleanCode(body.code);
+  // a code is checked and used up, nothing changes (the app asks for it before it hands out the account's data)
+  if (action === "confirm") {
+    if (!row || !row.enabled) return json({ ok: true, enabled: false });
+    if (!validCode(code)) return json({ error: "Enter the 6 digit code." }, 400);
+    if (!(await attempt(row))) return json({ error: GENERIC }, 400);
+    const hit = await check(row.secret, code, row.last_counter);
+    if (hit == null || !(await claim(row, hit, false))) return json({ error: "That code is wrong." }, 400);
+    return json({ ok: true, enabled: true });
+  }
   if (action === "enable" || action === "disable") {
     if (!row) return json({ error: "Start the setup first." }, 400);
     if (action === "enable" && row.enabled) return json({ ok: true });

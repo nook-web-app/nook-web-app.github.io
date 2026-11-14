@@ -208,9 +208,9 @@ async function chatFailed(model: string, status: number, said: string) {
 }
 // the answer of the first model that gives one (or its request for a search). Whatever goes wrong with a model (used up, refuses, not found,
 // bad request, broken, no words in its answer) hands over to the next one; null only when every model is out
-async function gemini(key: string, system: unknown, history: unknown, stream: boolean, tools: boolean | "search" = false): Promise<{ res: Response | null; search: { query: string } | null; call: CallAsk | null }> {
+async function gemini(key: string, system: unknown, history: unknown, stream: boolean, tools: boolean | "search" = false, budgetMs = 60000): Promise<{ res: Response | null; search: { query: string } | null; call: CallAsk | null }> {
   // the whole chain gives up after 60 seconds, and one model after 15 seconds without its first words, so a slow model never holds the chat for minutes
-  const deadline = Date.now() + 60000;
+  const deadline = Date.now() + budgetMs;
   for (const { model, limit } of CHAIN) {
     if (Date.now() > deadline) break;
     if ((resting[model] || 0) > Date.now()) continue;
@@ -231,7 +231,7 @@ async function gemini(key: string, system: unknown, history: unknown, stream: bo
           contents: history,
           ...(withTools ? { tools: [tools === "search" ? SEARCH_TOOL : CHAT_TOOLS] } : {}),
           // a model that cannot be told to think less needs room for its thinking too
-          generationConfig: { temperature: 1, maxOutputTokens: think === "minimal" ? 140 : 400, ...(think ? { thinkingConfig: { thinkingLevel: think } } : {}) },
+          generationConfig: { temperature: 1, maxOutputTokens: think === "minimal" ? 320 : 600, ...(think ? { thinkingConfig: { thinkingLevel: think } } : {}) },
         }),
       });
     };
@@ -269,6 +269,14 @@ async function zenId(): Promise<string> {
   const { data } = await admin.from("accounts").select("id").eq("username", "zenith").maybeSingle();
   zenIdCache = data ? (data.id as string) : "";
   return zenIdCache;
+}
+// how many messages he reads when he answers in his chat: 100 normally; when the model is slow (a long context makes it slower) the number
+// goes down until it is fast again, and it comes back up when the answers are quick. The notebook keeps what the older messages said.
+let dmCtx = 100;
+function tuneCtx(tookMs: number) {
+  if (tookMs > 15000) dmCtx = 20;
+  else if (tookMs > 8000) dmCtx = Math.max(20, Math.floor(dmCtx * 0.5));
+  else if (tookMs < 4000) dmCtx = Math.min(100, dmCtx + 15);
 }
 // what he is told about calling in his own chat
 const CALL_HELP = "\n\nYou can phone him: you have a tool named call_me. Use it when he asks you to call him or says yes to a call you offered (minutes 1 for now or soon, or the number he said). Never say you cannot call and never promise a call without using the tool. You may offer a call yourself now and then when it fits how close you are, but only call after he says yes.";
@@ -334,10 +342,10 @@ Deno.serve(async (req) => {
       const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
       if (o) {
         const ownerId = o.user_id as string;
-        const [st, pages, recent] = await Promise.all([loadState(admin, ownerId), loadNotebook(admin, ownerId), recentEntries(admin, ownerId, 24)]);
+        const [st, pages, recent, act] = await Promise.all([loadState(admin, ownerId), loadNotebook(admin, ownerId), recentEntries(admin, ownerId, 24), zenId().then((z) => activity(admin, ownerId, z))]);
         if (st.blockedUntil > Date.now()) return json({ ok: false, why: "blocked" });
         const lastAt = recent.length ? recent[recent.length - 1].t : 0;
-        system = persona(st, pages, tz, "call", lastAt, await activity(admin, ownerId, await zenId()))
+        system = persona(st, pages, tz, "call", lastAt, act)
           + (recent.length ? "\n\nThe latest messages and calls between you two, for context only (never recite them):\n" + asTranscript(recent).slice(-5000) : "")
           + (asleepAt(Date.now()) ? "\n\nYou were asleep and this call woke you up: you sound sleepy at first." : "")
           + "\n\n" + CALL_RULES;
@@ -465,14 +473,14 @@ Deno.serve(async (req) => {
     const newest = rec[rec.length - 1];
     const now = Date.now();
     if (newest && !newest.ai) newest.t = now;
-    await logEntries(admin, owner, rec);
-    const st = await loadState(admin, owner);
+    const [, st] = await Promise.all([logEntries(admin, owner, rec), loadState(admin, owner)]);
     const name = typeof body.name === "string" ? body.name.trim().slice(0, 60) : "", handle = typeof body.handle === "string" ? body.handle.trim().slice(0, 40) : "";
     if (name) st.name = name;
     if (handle) st.handle = handle;
     const calls = st.allowCalls && !(st.blockedUntil > now);
     if (st.blockedUntil > now) { await saveState(admin, owner, st); return json({ mode: "blocked", calls: false }); }
-    const recent = await recentEntries(admin, owner, 100);
+    // everything he needs is read at the same time
+    const [recent, pages, act] = await Promise.all([recentEntries(admin, owner, dmCtx), loadNotebook(admin, owner), zenId().then((z) => activity(admin, owner, z))]);
     const lastAi = [...recent].reverse().find((e) => e.ai);
     const life = lifeAt(now);
     // how eager he is about this person: someone new waits longer, and when he is hurt he takes his time
@@ -487,7 +495,6 @@ Deno.serve(async (req) => {
     }
     st.pending = null;
     await saveState(admin, owner, st);
-    const pages = await loadNotebook(admin, owner);
     const lastBefore = recent.length > 1 ? recent[recent.length - 2].t : 0;
     // deno-lint-ignore no-explicit-any
     const history: any[] = asContents(recent, labelsOf(recent));
@@ -495,17 +502,19 @@ Deno.serve(async (req) => {
     if (!last || last.role !== "user") return json({ mode: "now", texts: [], wait: 0, calls });
     const pics = Array.isArray(body.parts) ? (body.parts as { inline_data?: unknown }[]).filter((p) => p && p.inline_data).slice(0, 2) : [];
     if (pics.length) last.parts.push(...pics);
-    const system = persona(st, pages, tz, "text", lastBefore, await activity(admin, owner, await zenId())) + SEARCH_HELP + REPLY_HELP + (calls ? CALL_HELP : "");
-    let got = await gemini(key, system, history, false, calls ? true : "search");
+    const system = persona(st, pages, tz, "text", lastBefore, act) + SEARCH_HELP + REPLY_HELP + (calls ? CALL_HELP : "");
+    const t0 = Date.now();
+    let got = await gemini(key, system, history, false, calls ? true : "search", 30000);
     if (got.call) {
       const mins = await planCall(got.call);
       last.parts.push({ text: mins < 0 ? "(You do not want to call him yet. Tell him in your own way.)" : "(The phone call is arranged: it will ring his phone " + (mins <= 1 ? "in a few seconds" : "in about " + mins + " minutes") + ". Answer with only a few words, like ok, sure, or calling you in a sec. Do not say what the call will be about unless he asked. Do not use any tool now.)" });
-      got = await gemini(key, system, history, false, false);
+      got = await gemini(key, system, history, false, false, 30000);
     } else if (got.search) {
       const first = last.parts.find((p: { text?: unknown }) => p && typeof p.text === "string") as { text: string } | undefined;
       last.parts.push({ text: await searchNote(got.search.query || (first ? first.text.slice(0, 200) : "the latest news")) });
-      got = await gemini(key, system, history, false, false);
+      got = await gemini(key, system, history, false, false, 30000);
     }
+    tuneCtx(Date.now() - t0);
     if (!got.res) return json({ error: "Zenith is resting. Try again later." }, 503);
     let text = "";
     try {
@@ -513,10 +522,8 @@ Deno.serve(async (req) => {
       const parts = (j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || [];
       text = parts.filter((p: { thought?: boolean }) => !p.thought).map((p: { text?: string }) => p.text || "").join("");
     } catch { /* no answer */ }
-    // several messages in a row can get several texts back (up to 5)
-    let waiting = 0;
-    for (let i = recent.length - 1; i >= 0 && !recent[i].ai; i--) waiting++;
-    const parsed = text.split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, waiting >= 3 ? 5 : 3).map((x) => pickReply(x, recent)).filter((x) => x.text);
+    // he decides how many texts he sends (up to 8)
+    const parsed = text.split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 8).map((x) => pickReply(x, recent)).filter((x) => x.text);
     const texts = parsed.map((x) => x.text);
     // no words came back (the model had a bad moment): he tries again in a minute instead of leaving the message unanswered
     if (!texts.length) { st.pending = { seeAt: Date.now() + 60000, since: st.pending ? st.pending.since : now }; await saveState(admin, owner, st); return json({ mode: "later", calls }); }

@@ -235,7 +235,7 @@ function hourIn(tz: string, t: number): number {
   try { return Number(new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", hourCycle: "h23" }).format(new Date(t))); } catch { return 12; }
 }
 // his texts go out one by one, a moment apart, like someone typing; each one is kept in his memory
-async function sendTexts(owner: string, raw: string, pro: boolean, recent: Entry[] = [], max = 3): Promise<number> {
+async function sendTexts(owner: string, raw: string, pro: boolean, recent: Entry[] = [], max = 8): Promise<number> {
   const texts = raw.split(/\n+/).map((t) => t.replace(/^["'\s-]+|["'\s]+$/g, "").trim()).filter((t) => t.length > 0 && !/^\(.*\)$/.test(t)).slice(0, max).map((t) => pickReply(t, recent)).filter((t) => t.text);
   let sent = 0;
   for (const t of texts) {
@@ -314,6 +314,9 @@ async function describeOne(owner: string) {
   } catch { /* next minute */ }
 }
 
+// how many messages he reads for a late answer: it goes down when the model is slow and back up when it is quick
+let lateCtx = 80;
+function tuneLate(ms: number) { if (ms > 15000) lateCtx = 20; else if (ms > 8000) lateCtx = Math.max(20, Math.floor(lateCtx / 2)); else if (ms < 4000) lateCtx = Math.min(80, lateCtx + 15); }
 // the owner wrote (or called) and he had not looked yet: when the moment comes that he picks up his phone, the phone shows Seen, he types,
 // and his answer arrives by push. A message the phone never got an answer to is handled the same way after three minutes.
 async function answerLate(owner: string, zen: string, st: MindState, recent: Entry[], tz: string): Promise<boolean> {
@@ -335,7 +338,9 @@ async function answerLate(owner: string, zen: string, st: MindState, recent: Ent
   const firstNew = recent.findIndex((e) => !e.ai && e.t >= since);
   const prev = firstNew > 0 ? recent[firstNew - 1].t : 0;
   const why = then.asleep ? "You were asleep when he wrote. You just woke up and saw it now." : now - since < 10 * 60000 ? "You saw it a few minutes after he sent it." : "You did not see it right away: you were " + then.what.replace(/ \(.*\)/, "") + ". You only saw it now, like a person would (no need to apologise unless it was long).";
-  const text = await gen(persona(st, pages, tz, "text", prev, await activity(admin, owner, zen)) + REPLY_HELP + "\n\n" + why, asContents(recent.slice(-80), labelsOf(recent)), null, 500);
+  const tg = Date.now();
+  const text = await gen(persona(st, pages, tz, "text", prev, await activity(admin, owner, zen)) + REPLY_HELP + "\n\n" + why, asContents(recent.slice(-lateCtx), labelsOf(recent)), null, 600);
+  tuneLate(Date.now() - tg);
   st.pending = null;
   await saveState(admin, owner, st);
   // a note, so a late answer that never came can be looked up: select * from ai_usage where model like 'debug:late%'
@@ -343,7 +348,7 @@ async function answerLate(owner: string, zen: string, st: MindState, recent: Ent
   if (!text) { st.pending = { seeAt: Date.now() + 120000, since }; await saveState(admin, owner, st); return true; }
   // the time it takes to type it
   await new Promise((res) => setTimeout(res, Math.min(12000, 1500 + text.length * 120)));
-  await sendTexts(owner, text, false, recent, recent.filter((e) => !e.ai).length >= 3 && !recent[recent.length - 1].ai ? 5 : 3);
+  await sendTexts(owner, text, false, recent, 8);
   return true;
 }
 
@@ -462,7 +467,7 @@ async function textFirst(owner: string, zen: string, st: MindState, recent: Entr
     + (c >= 25 && Math.random() < 0.15 ? " This time, ask if you can call him." : "")
     + (streak === 1 ? " He did not answer your last text: do not complain about it, send something light or something new." : "");
   const contents = asContents(recent.slice(-60));
-  contents.push({ role: "user", parts: [{ text: "(No new message from him. " + idea + " Write only what you send, one text per line, at most two.)" }] });
+  contents.push({ role: "user", parts: [{ text: "(No new message from him. " + idea + " Write only what you send: one text per line, as many as you want to send (usually one or two).)" }] });
   const text = await gen(persona(st, pages, tz, "text", last ? last.t : 0, await activity(admin, owner, zen)), contents, null, 300);
   if (text) await sendTexts(owner, text, true);
 }

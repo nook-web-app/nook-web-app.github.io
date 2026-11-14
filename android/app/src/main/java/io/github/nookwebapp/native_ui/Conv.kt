@@ -74,6 +74,24 @@ fun ConvScreen(id: String) {
     var open by remember { mutableStateOf<String?>(null) }
     var shownFrom by remember(chat.id) { mutableIntStateOf(maxOf(0, chat.msgs.size - 80)) }
     val list = rememberLazyListState()
+    // a tap on the quote of a reply takes you to the message it answers: it scrolls there with an animation (a far one is first brought near),
+    // and the message flashes
+    var flashId by remember(chat.id) { mutableStateOf<String?>(null) }
+    val jumpScope = rememberCoroutineScope()
+    val jumpTo: (String) -> Unit = { rid ->
+        jumpScope.launch {
+            val idx = chat.msgs.indexOfFirst { it.id == rid }
+            if (idx < 0) { app.say("That message is gone"); return@launch }
+            if (idx < shownFrom) { shownFrom = maxOf(0, idx - 15); kotlinx.coroutines.delay(60) }
+            val at = (if (chat.msgs.isEmpty()) 1 else 0) + (if (shownFrom > 0) 1 else 0) + (idx - shownFrom)
+            val here = list.firstVisibleItemIndex
+            if (kotlin.math.abs(at - here) > 12) list.scrollToItem(if (at > here) maxOf(0, at - 8) else at + 8)
+            list.animateScrollToItem(at, -list.layoutInfo.viewportEndOffset / 3)
+            flashId = rid
+            kotlinx.coroutines.delay(1100)
+            if (flashId == rid) flashId = null
+        }
+    }
     // the messages already there when the chat opened come in without an animation
     val had = remember(chat.id) { chat.msgs.map { it.id }.toHashSet() }
     // a new message takes the view to the bottom; deleting one leaves the view where it is
@@ -134,7 +152,7 @@ fun ConvScreen(id: String) {
             items(chat.msgs.drop(shownFrom), key = { it.id }) { m ->
                 // pulling one of Zenith's messages to the right starts an answer to him
                 val anim = remember(m.id) { if (m.id in had || m.id in app.zenNoAnim) MsgAnim.None else if (m.ai) MsgAnim.In else MsgAnim.Send }
-                FoldAway(m.leaving) { Box(Modifier.padding(bottom = 6.dp).msgIn(anim, !m.ai)) { SwipeBubble(left = m.ai, canReply = m.ai, onReply = { if (isZ) replyHook[0]?.invoke(m) else fill[0]?.invoke("@zenith ") }, onTime = { open = if (open == m.id) null else m.id }) { Bubble(m, open == m.id, onTap = {}, onDouble = if (isZ && m.ai) ({ m.liked = !m.liked; app.persist(); app.scope.launch { runCatching { Sb.fn("zenith", org.json.JSONObject().put("action", "like").put("id", m.id).put("on", m.liked)) } } }) else null) {
+                FoldAway(m.leaving) { Box(Modifier.padding(bottom = 6.dp).msgIn(anim, !m.ai)) { SwipeBubble(left = m.ai, canReply = m.ai, onReply = { if (isZ) replyHook[0]?.invoke(m) else fill[0]?.invoke("@zenith ") }, onTime = { open = if (open == m.id) null else m.id }) { Bubble(m, open == m.id, onTap = {}, flash = flashId == m.id, onQuote = { rid -> jumpTo(rid) }, onDouble = if (isZ && m.ai) ({ m.liked = !m.liked; app.persist(); app.scope.launch { runCatching { Sb.fn("zenith", org.json.JSONObject().put("action", "like").put("id", m.id).put("on", m.liked)) } } }) else null) {
                     app.open(listOfNotNull(
                         if (isZ) SheetItem("Reply", "reply") { replyHook[0]?.invoke(m) } else null,
                         if (m.text.isNotEmpty()) SheetItem("Copy message", "copy") { app.clipboard(m.text) } else null,
@@ -288,7 +306,7 @@ private fun isMediaCmd(t: String) = MEDIA_CMD.containsMatchIn(t.trim())
 // .mrow: my message on the right in an accent bubble (photos above it), Zenith's on the left (.mrow.ai), and the time
 // under it while it is open
 @Composable
-private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onDouble: (() -> Unit)? = null, onLong: () -> Unit) {
+private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onDouble: (() -> Unit)? = null, flash: Boolean = false, onQuote: ((String) -> Unit)? = null, onLong: () -> Unit) {
     val c = LocalNook.current
     val w = LocalConfiguration.current.screenWidthDp.dp - 32.dp
     val left = m.ai
@@ -313,27 +331,21 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onDouble: (() -> U
         else if (m.text.isNotEmpty() && m.mcard == null) {
             val shape = if (left) RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.bubble, Rad.xs) else RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.xs, Rad.bubble)
             val rp = m.reply
-            // the message this one answers: a small faded bubble tucked behind the top of the real one, so the real bubble stays as slim as any other
-            if (rp != null) {
-                val qShape = RoundedCornerShape(14.dp)
-                Text(
-                    androidx.compose.ui.text.buildAnnotatedString {
-                        withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.SemiBold)) { append(if (rp.ai) "Zenith" else "You") }
-                        append("  "); append(rp.text.replace(Regex("\\s+"), " "))
-                    },
-                    Modifier.padding(top = if (m.imgs.isNotEmpty() || url != null || m.rpost != null) 4.dp else 0.dp).widthIn(max = w * 0.7f).clip(qShape)
-                        .background(if (left) c.bg2.copy(alpha = 0.7f) else c.accent.copy(alpha = 0.3f)).padding(start = 11.dp, end = 11.dp, top = 5.dp, bottom = 15.dp),
-                    color = c.muted, fontSize = Fs.sm, lineHeight = 16.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                )
-            }
+            // the bubble flashes a little when it was jumped to from a reply
+            val glow by androidx.compose.animation.core.animateFloatAsState(if (flash) 1f else 0f, tween(if (flash) 220 else 700), label = "glow")
             Box(
-                Modifier.padding(top = if (rp == null && (m.imgs.isNotEmpty() || url != null || m.rpost != null)) 4.dp else 0.dp)
-                    // the real bubble covers the lower part of the faded one
-                    .layout { mm, cc -> val p = mm.measure(cc); if (rp == null) layout(p.width, p.height) { p.place(0, 0) } else layout(p.width, p.height - 11.dp.roundToPx()) { p.place(0, -11.dp.roundToPx()) } }
-                    .bubbleFx(fx, left).widthIn(max = w * 0.82f)
-                    .clip(shape).background(if (left) c.bg2 else c.accent).then(if (left) Modifier.border(1.dp, c.line, shape) else Modifier).padding(horizontal = 14.dp, vertical = 9.dp),
+                Modifier.padding(top = if (m.imgs.isNotEmpty() || url != null || m.rpost != null) 4.dp else 0.dp).bubbleFx(fx, left).widthIn(max = w * 0.82f)
+                    .clip(shape).background(if (left) c.bg2 else c.accent).background(Color.White.copy(alpha = 0.2f * glow)).then(if (left) Modifier.border(1.dp, c.line, shape) else Modifier).padding(start = 14.dp, end = 14.dp, top = if (rp != null) 6.dp else 9.dp, bottom = 9.dp),
             ) {
-                Tx(m.text, color = if (left) c.fg else c.on, linkColor = if (left) null else Color.White, onTap = tap, onLong = onLong, cut = false)
+                Column {
+                    // the message this one answers: one faded line, a tap takes you to it
+                    if (rp != null) Text(
+                        rp.text.replace(Regex("\\s+"), " "),
+                        Modifier.padding(bottom = 1.dp).widthIn(max = 230.dp).clip(RoundedCornerShape(4.dp)).then(if (onQuote != null) Modifier.pointerInput(rp.id) { detectTapGestures(onTap = { onQuote(rp.id) }) } else Modifier),
+                        color = (if (left) c.fg else Color.White).copy(alpha = 0.6f), fontSize = 12.5.sp, lineHeight = 17.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                    Tx(m.text, color = if (left) c.fg else c.on, linkColor = if (left) null else Color.White, onTap = tap, onLong = onLong, cut = false)
+                }
             }
         }
         // the like of a double tap sits on the corner of the bubble

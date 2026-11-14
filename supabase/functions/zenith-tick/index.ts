@@ -464,6 +464,7 @@ async function textFirst(owner: string, zen: string, st: MindState, recent: Entr
     : "You talked a little while ago. Pick it back up or start something new, whatever feels natural.")
     + (c < 12 ? " You barely know him yet: text him only the way you would text someone new, short and a little careful, and only about something you two actually talked about or something from his messages. Do not tell him about your morning, your cat or your life out of nowhere, and do not act like old friends." : c < 30 ? " You are still getting to know each other: keep it casual and not too personal." : "")
     + " Never say a song, game or show is new or just came out (you cannot know that); talk about things you like."
+    + (c >= 38 && lifeAt(now).m - lifeAt(now).plan.wake < 120 && lifeAt(now).m - lifeAt(now).plan.wake >= 0 && Math.random() < 0.5 ? " You just woke up: a short good morning text to him is natural." : "")
     + (c >= 25 && Math.random() < 0.15 ? " This time, ask if you can call him." : "")
     + (streak === 1 ? " He did not answer your last text: do not complain about it, send something light or something new." : "");
   const contents = asContents(recent.slice(-60));

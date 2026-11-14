@@ -161,17 +161,24 @@ function rng(seed: string) {
 function addDays(day: string, n: number) { const d = new Date(day + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
 function weekday(day: string) { return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(day + "T12:00:00Z").getUTCDay()]; }
 const WORK = ["Tue", "Thu", "Sat"], CLASS = ["Mon", "Wed", "Fri"];
+// his body clock wanders from week to week (some weeks he is later, some weeks earlier), so no two weeks look the same
+function drift(day: string): number {
+  const wk = Math.floor(new Date(day + "T12:00:00Z").getTime() / (7 * 864e5));
+  return Math.round((rng("wk" + wk)() - 0.5) * 170);
+}
 // when he falls asleep after a day, in minutes after the next midnight (below zero: before midnight)
 function bedAfter(day: string): number {
   const r = rng("bed" + day), x = r(), next = weekday(addDays(day, 1));
-  if (x < 0.04) return 300 + Math.floor(r() * 75);           // an all nighter, asleep when it gets light
-  if (x < 0.1) return -75 + Math.floor(r() * 70);            // an early night
+  if (x < 0.05) return 300 + Math.floor(r() * 90);           // an all nighter, asleep when it gets light
+  if (x < 0.12) return -90 + Math.floor(r() * 80);           // an early night
+  if (x < 0.22) return 230 + Math.floor(r() * 70);           // a late one, some other nights
   const base = CLASS.includes(next) || (WORK.includes(next) && next !== "Sat") ? 125 : next === "Sat" || next === "Sun" ? 205 : 160;
-  return base + Math.floor((r() - 0.5) * 100);
+  return base + drift(day) + Math.floor((r() - 0.5) * 140);
 }
 function wakeOf(day: string): number {
   const r = rng("wake" + day), wd = weekday(day), weekend = wd === "Sat" || wd === "Sun";
-  let w = (weekend ? 655 : 575) + Math.floor((r() - 0.5) * 110);
+  let w = (weekend ? 655 : 575) + Math.floor((r() - 0.5) * 150) + Math.round(drift(day) * 0.6);
+  if (r() < 0.08) w += 90 + Math.floor(r() * 120);          // a day he sleeps in
   const slept = w - bedAfter(addDays(day, -1));
   if (slept < 390) w = bedAfter(addDays(day, -1)) + 390 + Math.floor(r() * 60);
   if (CLASS.includes(wd)) w = Math.min(w, 640);
@@ -213,6 +220,7 @@ export function planFor(day: string): Plan {
   const dinner = WORK.includes(wd) ? 1180 + r() * 15 : 1130 + r() * 40;
   put(dinner, dinner + 40, "eating dinner with your family", 0.02);
   if (r() < 0.7) { const s0 = free(wake + 60, bed - 60); put(s0, s0 + 20, "in the shower", 0); }
+  if (!WORK.includes(wd) && r() < 0.14) { const s0 = free(840, 1020); put(s0, s0 + 50 + r() * 70, "taking a nap (you fell asleep for a bit)", 0.01); }
   if (CLASS.includes(wd)) put(660, 780, "in your online programming class", 0.06);
   if (WORK.includes(wd)) {
     put(800, 840, "on the bus to work", 0.4);
@@ -270,13 +278,16 @@ export function nextLook(t: number, factor = 1): number {
   return t + 18 * HOUR;
 }
 function hm(m: number) { const x = ((Math.round(m) % 1440) + 1440) % 1440; return Math.floor(x / 60) + ":" + String(x % 60).padStart(2, "0"); }
-function lifeWords(t: number): string {
+function lifeWords(t: number, closeness = 0): string {
   const s = lifeAt(t);
   const when = new Date(t).toLocaleString("en-US", { timeZone: ZTZ, weekday: "long", hour: "numeric", minute: "2-digit" });
   const plan = s.plan;
   const done = plan.blocks.filter((b) => b.to <= s.m && b.to - b.from >= 20).map((b) => b.what.replace(/ \(.*\)/, "")).filter((w, i, a) => a.indexOf(w) === i);
   const ev = plan.events.filter((e) => e.at <= s.m).map((e) => e.what);
   const bits = ["Where you live it is " + when + ". " + (s.asleep ? "You were asleep." : "Right now: " + s.what + ".")];
+  // bedtime: a friend says goodnight, someone he does not know well just says he is going to bed
+  if (!s.asleep && s.plan.bed - s.m <= 50 && s.plan.bed - s.m > -30) bits.push("It is almost your bedtime (you plan to sleep around " + hm(s.plan.bed) + ") and you are getting sleepy. If you are still talking with him, wrap it up and go to sleep: " + (closeness >= 25 ? "say goodnight to him (like gn, sleep well) before you go" : "just say you are heading to bed") + ".");
+  if (!s.asleep && s.m - s.plan.wake >= 0 && s.m - s.plan.wake < 90 && closeness >= 38) bits.push("You only just woke up, so a good morning to him is natural if you talk now.");
   if (!s.asleep && s.next) bits.push("Next: " + s.next.what.replace(/ \(.*\)/, "") + " at " + hm(s.next.from) + " (if that is soon you may have to wrap up, like a person would).");
   if (!s.asleep) bits.push("You woke up at " + hm(plan.wake) + " today." + (done.length ? " Earlier today: " + done.join(", ") + "." : ""));
   if (ev.length) bits.push("Small things from your day you could mention if it fits: " + ev.join("; ") + ".");
@@ -333,7 +344,7 @@ export function persona(s: MindState, pages: string[], ownerTz: string, mode: "t
     s.mood ? "Your mood right now: " + s.mood : "",
     s.allowCalls ? "" : "You are not comfortable with phone calls with him yet, you do not know him well enough. If he asks to call, say so in your own way; you decide yourself when that changes.",
     lastAt ? "You last talked " + since(now - lastAt) + " ago" + (s.topic ? ", about: " + s.topic : "") + (s.ended ? " (that conversation had ended)." : ".") : "",
-    lifeWords(now),
+    lifeWords(now, s.closeness),
     ownerTz ? (() => { try { return "For him it is " + new Date().toLocaleString("en-US", { timeZone: ownerTz, weekday: "long", hour: "numeric", minute: "2-digit" }) + " (his time zone is " + ownerTz + ")."; } catch { return ""; } })() : "",
   ];
   if (posts) parts.push("What has been going on on Nook lately (posts and replies you both saw; bring them up naturally when they fit, and never invent anything about them that is not written here):\n" + posts);

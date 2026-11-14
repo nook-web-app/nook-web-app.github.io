@@ -312,26 +312,28 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onDouble: (() -> U
         if (clog != null) Box(Modifier.padding(top = 4.dp)) { CallLogCard(clog.first, clog.second, whenText(m.t)) }
         else if (m.text.isNotEmpty() && m.mcard == null) {
             val shape = if (left) RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.bubble, Rad.xs) else RoundedCornerShape(Rad.bubble, Rad.bubble, Rad.xs, Rad.bubble)
+            val rp = m.reply
+            // the message this one answers: a small faded bubble tucked behind the top of the real one, so the real bubble stays as slim as any other
+            if (rp != null) {
+                val qShape = RoundedCornerShape(14.dp)
+                Text(
+                    androidx.compose.ui.text.buildAnnotatedString {
+                        withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.SemiBold)) { append(if (rp.ai) "Zenith" else "You") }
+                        append("  "); append(rp.text.replace(Regex("\\s+"), " "))
+                    },
+                    Modifier.padding(top = if (m.imgs.isNotEmpty() || url != null || m.rpost != null) 4.dp else 0.dp).widthIn(max = w * 0.7f).clip(qShape)
+                        .background(if (left) c.bg2.copy(alpha = 0.7f) else c.accent.copy(alpha = 0.3f)).padding(start = 11.dp, end = 11.dp, top = 5.dp, bottom = 15.dp),
+                    color = c.muted, fontSize = Fs.sm, lineHeight = 16.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
+            }
             Box(
-                Modifier.padding(top = if (m.imgs.isNotEmpty() || url != null || m.rpost != null) 4.dp else 0.dp).bubbleFx(fx, left).widthIn(max = w * 0.82f)
+                Modifier.padding(top = if (rp == null && (m.imgs.isNotEmpty() || url != null || m.rpost != null)) 4.dp else 0.dp)
+                    // the real bubble covers the lower part of the faded one
+                    .layout { mm, cc -> val p = mm.measure(cc); if (rp == null) layout(p.width, p.height) { p.place(0, 0) } else layout(p.width, p.height - 11.dp.roundToPx()) { p.place(0, -11.dp.roundToPx()) } }
+                    .bubbleFx(fx, left).widthIn(max = w * 0.82f)
                     .clip(shape).background(if (left) c.bg2 else c.accent).then(if (left) Modifier.border(1.dp, c.line, shape) else Modifier).padding(horizontal = 14.dp, vertical = 9.dp),
             ) {
-                // the quote of the message this one answers sits inside the bubble, as wide as the bubble
-                Column(Modifier.width(IntrinsicSize.Max)) {
-                    m.reply?.let { rp ->
-                        val ink = if (left) c.fg else Color.White
-                        val barColor = if (rp.ai) (if (left) c.accent else Color.White) else (if (left) c.muted else Color.White.copy(alpha = 0.85f))
-                        // one slim line: the bar, who, and the start of what was answered
-                        Row(Modifier.fillMaxWidth().padding(bottom = 5.dp).height(IntrinsicSize.Min).clip(RoundedCornerShape(8.dp)).background(if (left) c.bg.copy(alpha = 0.6f) else Color.Black.copy(alpha = 0.2f)).padding(vertical = 3.dp, horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.width(2.5.dp).fillMaxHeight().clip(CircleShape).background(barColor))
-                            Text(androidx.compose.ui.text.buildAnnotatedString {
-                                withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold, color = barColor)) { append(if (rp.ai) "Zenith" else "You") }
-                                append("  "); append(rp.text.replace(Regex("\\s+"), " "))
-                            }, Modifier.padding(start = 7.dp), color = ink.copy(alpha = 0.8f), fontSize = Fs.xs, lineHeight = 15.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                        }
-                    }
-                    Tx(m.text, color = if (left) c.fg else c.on, linkColor = if (left) null else Color.White, onTap = tap, onLong = onLong, cut = false)
-                }
+                Tx(m.text, color = if (left) c.fg else c.on, linkColor = if (left) null else Color.White, onTap = tap, onLong = onLong, cut = false)
             }
         }
         // the like of a double tap sits on the corner of the bubble

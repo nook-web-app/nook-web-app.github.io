@@ -357,7 +357,8 @@ private fun LikeHeart(liked: Boolean, left: Boolean) {
     // it sits on the bottom corner of the bubble and only takes a few dp of height, so a liked message does not leave a gap under it
     Box(Modifier.offset(x = if (left) 12.dp else (-12).dp).layout { m, c ->
         val p = m.measure(c)
-        layout(p.width, 6.dp.roundToPx()) { p.place(0, -(p.height - 8.dp.roundToPx())) }
+        // its middle is on the bottom edge of the bubble, and only 8dp of height is kept for it
+        layout(p.width, 8.dp.roundToPx()) { p.place(0, -(p.height - 12.dp.roundToPx())) }
     }.size(24.dp), contentAlignment = Alignment.Center) {
         if (burst.value in 0.01f..0.99f) NIcon("heart", 22.dp, pink.copy(alpha = 0.55f * (1f - burst.value)), fill = true, modifier = Modifier.graphicsLayer { scaleX = 1f + burst.value * 1.6f; scaleY = 1f + burst.value * 1.6f; translationY = -burst.value * 18.dp.toPx() })
         Box(Modifier.graphicsLayer { scaleX = pop; scaleY = pop; alpha = pop.coerceIn(0f, 1f) }, contentAlignment = Alignment.Center) {

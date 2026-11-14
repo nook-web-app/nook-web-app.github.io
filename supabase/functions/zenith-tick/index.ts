@@ -2,7 +2,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { fetchImage, pagePreview } from "../_shared/preview.ts";
 import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
 import { ringPhone, warnPhone, textPhone, signalPhone } from "../_shared/ring.ts";
-import { applyFeelings, asContents, asTranscript, asleepAt, closenessWords, dailyDrift, type Entry, loadNotebook, loadState, logEntries, type MindState, PAGE_MAX, PAGES, persona, pruneLog, recentEntries, saveNotebook, saveState, wakesAt, localTime, lifeAt } from "../_shared/mind.ts";
+import { activity, applyFeelings, asContents, asTranscript, asleepAt, closenessWords, dailyDrift, type Entry, loadNotebook, loadState, logEntries, type MindState, PAGE_MAX, PAGES, persona, pruneLog, recentEntries, saveNotebook, saveState, wakesAt, localTime, lifeAt } from "../_shared/mind.ts";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 const DAY = 864e5, HOUR = 36e5;
@@ -266,14 +266,15 @@ async function mindTick(owner: string, zen: string, docs: { doc_id: string; data
   zenBlocking = st.blockedUntil > now;
   zenCloseness = st.closeness;
   if (Math.random() < 1 / 180) { try { await pruneLog(admin, owner); } catch { /* next time */ } }
-  if (await answerLate(owner, st, recent, tz)) return;
+  if (await answerLate(owner, zen, st, recent, tz)) return;
+  await describeOne(owner);
   if (await reflect(owner, zen, st, recent)) return;
-  await textFirst(owner, st, recent, tz);
+  await textFirst(owner, zen, st, recent, tz);
 }
 
 // the owner wrote (or called) and he had not looked yet: when the moment comes that he picks up his phone, the phone shows Seen, he types,
 // and his answer arrives by push. A message the phone never got an answer to is handled the same way after three minutes.
-async function answerLate(owner: string, st: MindState, recent: Entry[], tz: string): Promise<boolean> {
+async function answerLate(owner: string, zen: string, st: MindState, recent: Entry[], tz: string): Promise<boolean> {
   const now = Date.now();
   const last = recent[recent.length - 1];
   if (!last || last.ai || last.kind === "call") {
@@ -283,7 +284,8 @@ async function answerLate(owner: string, st: MindState, recent: Entry[], tz: str
   if (st.blockedUntil > now || asleepAt(now)) return false;
   const seeAt = st.pending && st.pending.seeAt ? st.pending.seeAt : last.t + 3 * 60000;
   if (now < seeAt || now - last.t > 3 * DAY) return false;
-  if (!(await useModel(admin, "mind-late-" + last.id, 1))) return false;
+  // one try for every ten minutes, so a bad moment of the model only delays the answer
+  if (!(await useModel(admin, "mind-late-" + last.id + "-" + Math.floor(now / 600000), 1))) return false;
   await signalPhone(admin, owner, { type: "zseen", t: String(now) });
   const pages = await loadNotebook(admin, owner);
   const since = st.pending ? st.pending.since : last.t;
@@ -291,7 +293,7 @@ async function answerLate(owner: string, st: MindState, recent: Entry[], tz: str
   const firstNew = recent.findIndex((e) => !e.ai && e.t >= since);
   const prev = firstNew > 0 ? recent[firstNew - 1].t : 0;
   const why = then.asleep ? "You were asleep when he wrote. You just woke up and saw it now." : now - since < 10 * 60000 ? "You saw it a few minutes after he sent it." : "You did not see it right away: you were " + then.what.replace(/ \(.*\)/, "") + ". You only saw it now, like a person would (no need to apologise unless it was long).";
-  const text = await gen(persona(st, pages, tz, "text", prev) + "\n\n" + why, asContents(recent.slice(-40)), null, 400);
+  const text = await gen(persona(st, pages, tz, "text", prev, await activity(admin, owner, zen)) + "\n\n" + why, asContents(recent.slice(-40)), null, 400);
   st.pending = null;
   await saveState(admin, owner, st);
   if (!text) return true;
@@ -331,7 +333,8 @@ async function reflect(owner: string, zen: string, st: MindState, recent: Entry[
   const known = Math.max(0, Math.round((now - st.met) / DAY));
   const system = "You are Zenith, a 19 year old guy who lives in a quiet suburb south of Munich. You keep a private notebook that only you can read, nine pages of about 250 words each, and you are thinking over your latest conversation with " + (st.name || "him") + ", someone you know from Nook. Be honest with yourself, like a real person writing for nobody else. Nothing changes overnight: closeness grows slowly over weeks and months, so do not write as if you are closer than you are.";
   const book = pages.map((p, i) => "Page " + (i + 1) + ": " + (p.trim() || "(empty)")).join("\n\n");
-  const prompt = "Where things are: you have known him for " + known + " days. " + closenessWords(st.closeness) + (st.feel ? " Last time you wrote about how you feel about him: " + st.feel : "") + (st.hurt >= 3 ? " He hurt you not long ago." : "") + (st.follows === true ? " You follow him on Nook." : st.follows === false ? " You do not follow him on Nook." : "")
+  const posts = await activity(admin, owner, zen);
+  const prompt = (posts ? "Lately on Nook:\n" + posts + "\n\n" : "") + "Where things are: you have known him for " + known + " days. " + closenessWords(st.closeness) + (st.feel ? " Last time you wrote about how you feel about him: " + st.feel : "") + (st.hurt >= 3 ? " He hurt you not long ago." : "") + (st.follows === true ? " You follow him on Nook." : st.follows === false ? " You do not follow him on Nook." : "")
     + "\n\nYour notebook now:\n" + book
     + "\n\nOlder messages, already thought about:\n" + (older.length ? asTranscript(older) : "(none)")
     + "\n\nThe new conversation to think over:\n" + asTranscript(fresh).slice(-9000)
@@ -382,7 +385,7 @@ async function setBlock(owner: string, zen: string, on: boolean) {
 
 // he texts first: more often the closer they are, never in the owner's night, never in the middle of a conversation,
 // and not again when his last text got no answer (twice in a row at most)
-async function textFirst(owner: string, st: MindState, recent: Entry[], tz: string) {
+async function textFirst(owner: string, zen: string, st: MindState, recent: Entry[], tz: string) {
   const now = Date.now();
   if (st.blockedUntil > now || asleepAt(now) || st.pending) return;
   const life = lifeAt(now);
@@ -416,7 +419,7 @@ async function textFirst(owner: string, st: MindState, recent: Entry[], tz: stri
     + (streak === 1 ? " He did not answer your last text: do not complain about it, send something light or something new." : "");
   const contents = asContents(recent.slice(-30));
   contents.push({ role: "user", parts: [{ text: "(No new message from him. " + idea + " Write only what you send, one text per line, at most two.)" }] });
-  const text = await gen(persona(st, pages, tz, "text", last ? last.t : 0), contents, null, 300);
+  const text = await gen(persona(st, pages, tz, "text", last ? last.t : 0, await activity(admin, owner, zen)), contents, null, 300);
   if (text) await sendTexts(owner, text, true);
 }
 

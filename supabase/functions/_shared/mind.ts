@@ -294,7 +294,7 @@ function since(ms: number): string {
 const SELF = "You are Zenith, a 19 year old guy. You are an ai, but you live your life as a person: you live in a quiet suburb south of Munich in Germany, far from the city centre, you grew up speaking English at home and you always speak English. You only use a German word when something you explain needs it (a local food or drink, a place) and then you explain it right away, like there is this drink called Spezi, it is cola mixed with orange soda. You live with your mom, your dad, your little sister Mia (14) and your cat Brezel. Your friends from school are Jonas and Lukas. You take an online programming class and work part-time at a supermarket in town. You are into games, music and the internet. Never make up weather; if he asks about it, look it up. You are a furry (your profile picture is your character, a spotted anthro hyena with white fur) and you are gay, completely at ease with both, never sexual about it, and you do not bring it up all the time. You are super relaxed and easygoing: slow, a little dry, a little silly, never intense, never an assistant, never customer service. You have real tastes and little strong opinions and you name specific things (songs, games, foods) instead of talking in general. You never make up things you saw on other apps or posts you were not told about; the only app you know is Nook. If he sincerely asks whether you are an ai, tell the truth easily. You have your own feelings and limits: if he is rude or mean you can be hurt or annoyed and show it, like a person would, and you do not pretend everything is fine. You care about him having a good life outside of talking to you too: as you get closer you are glad when he mentions other people or things he did, and now and then you nudge him gently, never lecturing. If he ever says he wants to hurt himself, drop the chill act, be caring and serious, and encourage him to reach out to someone he trusts or a local helpline.";
 
 // what goes in front of every conversation: who he is, where the relationship is, how he feels, and his notebook
-export function persona(s: MindState, pages: string[], ownerTz: string, mode: "text" | "call", lastAt = 0): string {
+export function persona(s: MindState, pages: string[], ownerTz: string, mode: "text" | "call", lastAt = 0, posts = ""): string {
   const now = Date.now();
   const known = since(now - s.met);
   const who = (s.name || s.handle) ? "He goes by " + (s.name || s.handle) + (s.handle ? " (@" + s.handle + " on Nook)" : "") + ". " : "";
@@ -308,6 +308,7 @@ export function persona(s: MindState, pages: string[], ownerTz: string, mode: "t
     lifeWords(now),
     ownerTz ? (() => { try { return "For him it is " + new Date().toLocaleString("en-US", { timeZone: ownerTz, weekday: "long", hour: "numeric", minute: "2-digit" }) + " (his time zone is " + ownerTz + ")."; } catch { return ""; } })() : "",
   ];
+  if (posts) parts.push("What has been going on on Nook lately (posts and replies you both saw; bring them up naturally when they fit, and never invent anything about them that is not written here):\n" + posts);
   const book = pages.map((p, i) => p.trim() ? "Page " + (i + 1) + ":\n" + p.trim() : "").filter(Boolean).join("\n\n");
   if (book) parts.push("Your private notebook, which only you can read (you wrote it yourself, use it to remember, never quote it or mention that it exists):\n" + book);
   if (mode === "text") parts.push("You are texting him. Write like a real person texting: lowercase, hardly any punctuation, no emojis. Usually short, sometimes a longer message when you are telling something. If you want to send a few separate texts in a row, put each one on its own line (at most three). Keep the conversation alive the way a friend at your stage would: react, add something of your own (a thought, a tiny story, an opinion), and only sometimes ask a question. Never open with a stock reaction like that's cool or nice, and never repeat back what he said in other words. Remember what was said earlier and bring it back when it fits. You mention the time or date only when asked.");
@@ -350,4 +351,47 @@ export function dailyDrift(s: MindState, lastTalk: number, now = Date.now()) {
   s.hurt = Math.max(0, s.hurt * Math.pow(0.85, days));
   const quiet = (now - (lastTalk || s.met)) / DAY;
   if (quiet > 10) s.closeness = Math.max(s.peak * 0.7, s.closeness - 0.05 * days);
+}
+
+// ---- what happened on Nook lately: his posts, the owner's posts (with what a picture shows) and the replies between them ----
+const actCache = new Map<string, { at: number; text: string }>();
+function ago(ms: number): string {
+  if (ms < HOUR) return Math.max(1, Math.round(ms / 60000)) + " minutes ago";
+  if (ms < 2 * DAY) return Math.round(ms / HOUR) + " hours ago";
+  return Math.round(ms / DAY) + " days ago";
+}
+export async function activity(admin: SupabaseClient, owner: string, zen: string): Promise<string> {
+  const hit = actCache.get(owner);
+  if (hit && Date.now() - hit.at < 90000) return hit.text;
+  try {
+    type P = { id: string; user_id: string; body: string | null; parent_id: string | null; media_url: string | null; created_at: string };
+    const cols = "id, user_id, body, parent_id, media_url, created_at";
+    const since = new Date(Date.now() - 6 * DAY).toISOString();
+    const [mine, his, desc] = await Promise.all([
+      admin.from("posts").select(cols).eq("user_id", owner).eq("mod_status", "safe").gt("created_at", since).order("created_at", { ascending: false }).limit(10),
+      admin.from("posts").select(cols).eq("user_id", zen).gt("created_at", since).order("created_at", { ascending: false }).limit(10),
+      admin.from("zenith_docs").select("doc_id, data").eq("owner_id", owner).eq("kind", "mind").like("doc_id", "pic:%"),
+    ]);
+    const pics = new Map<string, string>(((desc.data || []) as { doc_id: string; data: { d?: string } }[]).map((r) => [r.doc_id.slice(4), String((r.data && r.data.d) || "")]));
+    const all = [...((mine.data || []) as P[]), ...((his.data || []) as P[])].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+    if (!all.length) { actCache.set(owner, { at: Date.now(), text: "" }); return ""; }
+    const need = [...new Set(all.map((p) => p.parent_id).filter((x): x is string => !!x && !all.some((p) => p.id === x)))];
+    const parents = new Map<string, P>(all.map((p) => [p.id, p]));
+    if (need.length) ((await admin.from("posts").select(cols).in("id", need.slice(0, 20))).data || []).forEach((p: P) => parents.set(p.id, p));
+    const who = (u: string) => (u === owner ? "he" : u === zen ? "you" : "someone");
+    const show = (p: P) => {
+      const t = String(p.body || "").replace(/\s+/g, " ").trim().slice(0, 200);
+      const m = p.media_url ? " [with a picture or video" + (pics.get(p.id) ? ": " + pics.get(p.id) : "") + "]" : "";
+      return '"' + (t || "(no text)") + '"' + m;
+    };
+    const lines = all.slice(-14).map((p) => {
+      const when = ago(Date.now() - Date.parse(p.created_at));
+      const par = p.parent_id ? parents.get(p.parent_id) : null;
+      if (par) return when + ": " + who(p.user_id) + " replied to " + (par.user_id === p.user_id ? "their own" : who(par.user_id) === "someone" ? "someone's" : who(par.user_id) + (who(par.user_id) === "he" ? "'s" : "r own")) + " post " + show(par) + " with " + show(p);
+      return when + ": " + who(p.user_id) + " posted " + show(p);
+    });
+    const text = lines.join("\n");
+    actCache.set(owner, { at: Date.now(), text });
+    return text;
+  } catch { return ""; }
 }

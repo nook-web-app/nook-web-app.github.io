@@ -3,7 +3,7 @@ import { fetchImage } from "../_shared/preview.ts";
 import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
 import { peekForSearch, type CallAsk } from "../_shared/chatstream.ts";
 import { ringPhone } from "../_shared/ring.ts";
-import { asleepAt, asContents, asTranscript, type Entry, lifeAt, loadNotebook, loadState, logEntries, nextLook, persona, recentEntries, saveState } from "../_shared/mind.ts";
+import { activity, asleepAt, asContents, asTranscript, type Entry, lifeAt, loadNotebook, loadState, logEntries, nextLook, persona, recentEntries, saveState } from "../_shared/mind.ts";
 // Zenith is the name of the owner-only AI; the moderation AI is called Aegis
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
@@ -263,6 +263,13 @@ async function gemini(key: string, system: unknown, history: unknown, stream: bo
   return { res: null, search: null, call: null };
 }
 
+let zenIdCache = "";
+async function zenId(): Promise<string> {
+  if (zenIdCache) return zenIdCache;
+  const { data } = await admin.from("accounts").select("id").eq("username", "zenith").maybeSingle();
+  zenIdCache = data ? (data.id as string) : "";
+  return zenIdCache;
+}
 // what he is told about calling in his own chat
 const CALL_HELP = "\n\nYou can phone him: you have a tool named call_me. Use it when he asks you to call him or says yes to a call you offered (minutes 1 for now or soon, or the number he said). Never say you cannot call and never promise a call without using the tool. You may offer a call yourself now and then when it fits how close you are, but only call after he says yes.";
 // his answer streams to the phone as it is, and what he wrote is kept in his memory when it is done
@@ -330,7 +337,7 @@ Deno.serve(async (req) => {
         const [st, pages, recent] = await Promise.all([loadState(admin, ownerId), loadNotebook(admin, ownerId), recentEntries(admin, ownerId, 24)]);
         if (st.blockedUntil > Date.now()) return json({ ok: false, why: "blocked" });
         const lastAt = recent.length ? recent[recent.length - 1].t : 0;
-        system = persona(st, pages, tz, "call", lastAt)
+        system = persona(st, pages, tz, "call", lastAt, await activity(admin, ownerId, await zenId()))
           + (recent.length ? "\n\nThe latest messages and calls between you two, for context only (never recite them):\n" + asTranscript(recent).slice(-5000) : "")
           + (asleepAt(Date.now()) ? "\n\nYou were asleep and this call woke you up: you sound sleepy at first." : "")
           + "\n\n" + CALL_RULES;
@@ -480,7 +487,7 @@ Deno.serve(async (req) => {
     if (!last || last.role !== "user") return json({ mode: "now", texts: [], wait: 0, calls });
     const pics = Array.isArray(body.parts) ? (body.parts as { inline_data?: unknown }[]).filter((p) => p && p.inline_data).slice(0, 2) : [];
     if (pics.length) last.parts.push(...pics);
-    const system = persona(st, pages, tz, "text", lastBefore) + SEARCH_HELP + (calls ? CALL_HELP : "");
+    const system = persona(st, pages, tz, "text", lastBefore, await activity(admin, owner, await zenId())) + SEARCH_HELP + (calls ? CALL_HELP : "");
     let got = await gemini(key, system, history, false, calls ? true : "search");
     if (got.call) {
       const mins = await planCall(got.call);
@@ -499,6 +506,8 @@ Deno.serve(async (req) => {
       text = parts.filter((p: { thought?: boolean }) => !p.thought).map((p: { text?: string }) => p.text || "").join("");
     } catch { /* no answer */ }
     const texts = text.split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 3);
+    // no words came back (the model had a bad moment): he tries again in a minute instead of leaving the message unanswered
+    if (!texts.length) { st.pending = { seeAt: Date.now() + 60000, since: st.pending ? st.pending.since : now }; await saveState(admin, owner, st); return json({ mode: "later", calls }); }
     const replyId = typeof body.replyId === "string" && /^[\w-]{6,64}$/.test(body.replyId) ? body.replyId : crypto.randomUUID();
     const ids = texts.map((_, i) => (i ? replyId + "-" + (i + 1) : replyId));
     if (texts.length) await logEntries(admin, owner, texts.map((x, i) => ({ id: ids[i], ai: true, text: x, t: Date.now() + i })));
@@ -551,7 +560,7 @@ Deno.serve(async (req) => {
     if (stream) {
       try {
         const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
-        if (o) { const [st, pages] = await Promise.all([loadState(admin, o.user_id as string), loadNotebook(admin, o.user_id as string)]); who = "\n\n" + persona(st, pages, "", "text") + "\n\nThis is one of his notes chats, where he calls you in with @zenith. Answer the last message that mentions you."; }
+        if (o) { const [st, pages] = await Promise.all([loadState(admin, o.user_id as string), loadNotebook(admin, o.user_id as string)]); who = "\n\n" + persona(st, pages, "", "text", 0, await activity(admin, o.user_id as string, await zenId())) + "\n\nThis is one of his notes chats, where he calls you in with @zenith. Answer the last message that mentions you."; }
       } catch { who = HUMAN_HELP; }
     }
     let got = await gemini(key, system + who + SEARCH_HELP, body.history, stream, true);

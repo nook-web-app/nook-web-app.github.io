@@ -161,23 +161,26 @@ function rng(seed: string) {
 function addDays(day: string, n: number) { const d = new Date(day + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
 function weekday(day: string) { return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(day + "T12:00:00Z").getUTCDay()]; }
 const WORK = ["Tue", "Thu", "Sat"], CLASS = ["Mon", "Wed", "Fri"];
-// his body clock wanders from week to week (some weeks he is later, some weeks earlier), so no two weeks look the same
-function drift(day: string): number {
-  const wk = Math.floor(new Date(day + "T12:00:00Z").getTime() / (7 * 864e5));
-  return Math.round((rng("wk" + wk)() - 0.5) * 170);
+// his body clock wanders slowly: today is close to yesterday (a mix of the last two weeks of small random pushes), so the times drift
+// a little at a time instead of jumping every day, but over weeks he still ends up somewhere quite different
+function wander(day: string, salt: string): number {
+  let sum = 0, norm = 0;
+  for (let k = 0; k < 24; k++) { const a = Math.pow(0.88, k); sum += a * (rng(salt + addDays(day, -k))() - 0.5) * 2; norm += a * a; }
+  return sum / Math.sqrt(norm);
 }
+function drift(day: string): number { return Math.round(wander(day, "bodyclock") * 150); }
 // when he falls asleep after a day, in minutes after the next midnight (below zero: before midnight)
 function bedAfter(day: string): number {
   const r = rng("bed" + day), x = r(), next = weekday(addDays(day, 1));
-  if (x < 0.05) return 300 + Math.floor(r() * 90);           // an all nighter, asleep when it gets light
-  if (x < 0.12) return -90 + Math.floor(r() * 80);           // an early night
-  if (x < 0.22) return 230 + Math.floor(r() * 70);           // a late one, some other nights
-  const base = CLASS.includes(next) || (WORK.includes(next) && next !== "Sat") ? 125 : next === "Sat" || next === "Sun" ? 205 : 160;
-  return base + drift(day) + Math.floor((r() - 0.5) * 140);
+  if (x < 0.025) return 300 + Math.floor(r() * 90);           // an all nighter, asleep when it gets light
+  if (x < 0.055) return -90 + Math.floor(r() * 80);           // an early night
+  if (x < 0.09) return 225 + Math.floor(r() * 60);           // a late one, some other nights
+  const base = CLASS.includes(next) || (WORK.includes(next) && next !== "Sat") ? 140 : next === "Sat" || next === "Sun" ? 185 : 155;
+  return base + drift(day) + Math.floor((r() - 0.5) * 52);
 }
 function wakeOf(day: string): number {
   const r = rng("wake" + day), wd = weekday(day), weekend = wd === "Sat" || wd === "Sun";
-  let w = (weekend ? 655 : 575) + Math.floor((r() - 0.5) * 150) + Math.round(drift(day) * 0.6);
+  let w = (weekend ? 655 : 575) + Math.floor((r() - 0.5) * 50) + Math.round(drift(day) * 0.6);
   if (r() < 0.08) w += 90 + Math.floor(r() * 120);          // a day he sleeps in
   const slept = w - bedAfter(addDays(day, -1));
   if (slept < 390) w = bedAfter(addDays(day, -1)) + 390 + Math.floor(r() * 60);

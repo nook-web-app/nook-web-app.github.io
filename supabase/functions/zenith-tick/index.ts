@@ -345,6 +345,9 @@ async function reflect(owner: string, zen: string, st: MindState, recent: Entry[
     if (i >= 0 && i < PAGES && typeof e.text === "string") { pages[i] = e.text.trim().slice(0, PAGE_MAX); changed = true; }
   }
   if (changed) await saveNotebook(admin, owner, pages);
+  // what the chat changed while he was thinking (a message he still has to look at, a call) is kept
+  const cur = await loadState(admin, owner);
+  st.pending = cur.pending; st.lastDialAt = cur.lastDialAt; st.name = cur.name; st.handle = cur.handle;
   applyFeelings(st, Number(r.warmth) || 0, Number(r.depth) || 0, Number(r.hurt) || 0, now);
   if (typeof r.mood === "string") st.mood = r.mood.slice(0, 160);
   if (typeof r.feel === "string") st.feel = r.feel.slice(0, 400);

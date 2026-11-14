@@ -88,11 +88,17 @@ fun ChatsScreen() {
         }
     }
     val convos = (dm.inbox ?: emptyList()).filter { it.other !in dm.hideSet }.sortedByDescending { if (it.other in s.dmPins) 1 else 0 }
-    val local = s.chats.sortedByDescending { c -> c.msgs.lastOrNull()?.t ?: c.t }
+    val local = s.chats.filter { it.id != ZDM }.sortedByDescending { c -> c.msgs.lastOrNull()?.t ?: c.t }
     Page({ Bar("Chats", { Lead() }) }, fab = { Fab("plus") { app.newChat() } }) {
         LazyColumn(Modifier.fillMaxSize(), state = app.listStateFor(LocalPage.current), contentPadding = PaddingValues(bottom = 88.dp)) {
             // rows of the same shape as the chats shimmer until the real ones are drawn, so the page never looks empty
             if (dm.inbox == null && on.me != null) items((Cache.read("inbox-n")?.v as? Int ?: 1).coerceIn(1, 6)) { SkelRow() }
+            // Zenith's own chat, pinned on top (the owner only)
+            if (zOn()) item(key = "zdm") {
+                val last = s.chats.firstOrNull { it.id == ZDM }?.msgs?.lastOrNull()
+                val sub = when { last == null -> "Say hi"; callLogOf(last.text) != null -> "Call"; last.text.isEmpty() -> "Sent a photo"; else -> last.text }
+                LRow({ ZenAv(48.dp) }, "Zenith", sub, last?.let { ago(it.t) }) { app.zenDm(); app.go(Route.Conv(ZDM)) }
+            }
             items(convos, key = { "d" + it.other }) { cv -> ConvoRow(cv) }
             if ((dm.inbox != null || on.me == null) && convos.isEmpty() && s.chats.isEmpty() && inboxFailed) item { Empty("smile", "Could not load your chats. Pull to try again, or check the connection.") }
             else if ((dm.inbox != null || on.me == null) && convos.isEmpty() && s.chats.isEmpty()) item { Empty("smile", "Say hi to yourself.") { Pill("New chat") { app.newChat() } } }

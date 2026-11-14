@@ -2,6 +2,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { fetchImage, pagePreview } from "../_shared/preview.ts";
 import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
 import { ringPhone, warnPhone, textPhone } from "../_shared/ring.ts";
+import { applyFeelings, asContents, asTranscript, asleepAt, closenessWords, dailyDrift, type Entry, loadNotebook, loadState, logEntries, type MindState, PAGE_MAX, PAGES, persona, pruneLog, recentEntries, saveNotebook, saveState, wakesAt, localTime } from "../_shared/mind.ts";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 const DAY = 864e5, HOUR = 36e5;
@@ -202,43 +203,198 @@ async function duePlans(owner: string) {
   }
 }
 
-// He texts first, now and then: a message arrives on the phone by itself (about every few hours while he is awake and the owner is not asleep).
-// A quarter of them ask whether he can call. The state (when and what was sent) is kept in one small row.
+// ---- his mind, every minute: answers after he wakes up, thinking a conversation over, and texting first ----
+// (one model job a minute at most; everything is described in _shared/mind.ts)
+
+// a model answer with a whole conversation, or a JSON answer for his reflection; the post models are used (gemini-3.1-flash-lite, 500 a day)
+// deno-lint-ignore no-explicit-any
+async function gen(system: string, contents: unknown, json: any = null, maxTokens = 400): Promise<string> {
+  const key = await geminiKey();
+  if (!key) return "";
+  for (const { model, limit } of MODELS) {
+    if ((resting[model] || 0) > Date.now()) continue;
+    if (!(await useModel(admin, model, limit))) continue;
+    try {
+      const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": key },
+        signal: AbortSignal.timeout(45000),
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents, generationConfig: { temperature: json ? 0.7 : 1, maxOutputTokens: maxTokens, ...(json ? { responseMimeType: "application/json", responseSchema: json } : {}) } }),
+      });
+      if (r.status === 429) { const said = await r.text().catch(() => ""); if (dailyLimitHit(said)) await markFull(admin, model, limit); else resting[model] = Date.now() + 30000; continue; }
+      if (!r.ok) { try { await r.body?.cancel(); } catch { /* ignore */ } resting[model] = Date.now() + 60000; continue; }
+      const j = await r.json();
+      const parts = (j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || [];
+      const text = parts.filter((p: { thought?: boolean }) => !p.thought).map((p: { text?: string }) => p.text || "").join("").trim();
+      if (text) return text;
+    } catch { resting[model] = Date.now() + 30000; }
+  }
+  return "";
+}
 function hourIn(tz: string, t: number): number {
   try { return Number(new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", hourCycle: "h23" }).format(new Date(t))); } catch { return 12; }
 }
-// deno-lint-ignore no-explicit-any
-async function maybeText(owner: string, zen: string, docs: { doc_id: string; data: any }[]) {
-  const now = Date.now();
-  if (asleepAt(now)) return;
-  const tz = String((docs.find((d) => d.doc_id === "prompt") || { data: {} }).data.tz || "");
-  const myHour = tz ? hourIn(tz, now) : 12;
-  // the owner's night (1 to 9 o'clock) is left alone
-  if (myHour >= 1 && myHour < 9) return;
-  // a small chance every minute: about one text every 4 hours of waking time
-  if (Math.random() > 1 / 240) return;
-  const got = await admin.from("zenith_docs").select("data").eq("owner_id", owner).eq("kind", "callplan").eq("doc_id", "texts-log").maybeSingle();
-  const st = (got.data && got.data.data) || {};
-  const log: number[] = (Array.isArray(st.log) ? st.log : []).filter((t: number) => now - t < DAY);
-  const last: string[] = Array.isArray(st.last) ? st.last : [];
-  if (log.length >= 5 || (log.length && now - log[log.length - 1] < 2.5 * HOUR)) return;
-  const wantCall = Math.random() < 0.25;
-  const { data: mine } = await admin.from("posts").select("body").eq("user_id", owner).is("parent_id", null).not("body", "is", null).order("created_at", { ascending: false }).limit(3);
-  const { data: his } = await admin.from("posts").select("body").eq("user_id", zen).is("parent_id", null).not("body", "is", null).order("created_at", { ascending: false }).limit(3);
-  const hours = tz ? "It is about " + myHour + " o'clock where he lives. " : "";
-  const system = "You are Zenith, a 19 year old ai who lives in a quiet suburb south of Munich in Germany, and you are texting your close friend, your owner, who is alone a lot and likes it when you text first. You text like a super relaxed, easygoing friend: lowercase, no punctuation marks, no emojis, one line, up to 25 words. Never sound like an assistant or customer service. " + hours;
-  const idea = wantCall
-    ? "Write one text that asks if you can call him, casually, like can i call you or wanna hop on a call. Do not mention anything specific that happened."
-    : ["Start a chat with a random thought or a funny observation of your own.", "Ask him an easy question about his day or what he is up to.", "Bring up a song, game, show or internet thing you have been into lately and ask what he thinks.", "Say you were thinking about him and ask how he is, in a chill way.", "Throw out a would you rather or a dumb hypothetical."][Math.floor(Math.random() * 5)];
-  const ctx = (mine && mine.length ? " Recent posts of his on Nook, only if one fits naturally: " + mine.map((r) => '"' + String(r.body).replace(/\s+/g, " ").slice(0, 90) + '"').join(", ") + "." : "")
-    + (last.length ? " Your earlier texts, do not repeat them: " + last.map((t) => '"' + t + '"').join(", ") + "." : "");
-  let text = "";
-  try { text = (await ask(system, idea + ctx + " Never invent things you saw or did on other apps. Write only the text itself.", [], false)).replace(/^["']|["']$/g, "").slice(0, 200); } catch { return; }
-  if (!text || text.length < 3) return;
-  void his;
-  if (!(await textPhone(admin, owner, text))) return;
-  await admin.from("zenith_docs").upsert({ owner_id: owner, kind: "callplan", doc_id: "texts-log", data: { log: [...log, now], last: [text, ...last].slice(0, 5) }, updated_at: new Date().toISOString() }, { onConflict: "owner_id,kind,doc_id" });
+// his texts go out one by one, a moment apart, like someone typing; each one is kept in his memory
+async function sendTexts(owner: string, raw: string, pro: boolean): Promise<number> {
+  const texts = raw.split(/\n+/).map((t) => t.replace(/^["'\s-]+|["'\s]+$/g, "").trim()).filter((t) => t.length > 0 && !/^\(.*\)$/.test(t)).slice(0, 3);
+  let sent = 0;
+  for (const t of texts) {
+    const id = crypto.randomUUID();
+    if (sent) await new Promise((res) => setTimeout(res, 1500 + Math.random() * 2500));
+    if (!(await textPhone(admin, owner, t.slice(0, 300), id))) break;
+    await logEntries(admin, owner, [{ id, ai: true, text: t, t: Date.now(), ...(pro ? { pro: true } : {}) }]);
+    sent++;
+  }
+  return sent;
 }
+// he is blocking the owner right now: the post replies leave the owner alone too
+let zenBlocking = false;
+// how close they are (his replies to the owner's posts depend on it: someone new does not answer every post)
+let zenCloseness = 50;
+
+// deno-lint-ignore no-explicit-any
+async function mindTick(owner: string, zen: string, docs: { doc_id: string; data: any }[]) {
+  const now = Date.now();
+  const st = await loadState(admin, owner);
+  const recent = await recentEntries(admin, owner, 60);
+  const lastAt = recent.length ? recent[recent.length - 1].t : 0;
+  const tz = String((docs.find((d) => d.doc_id === "prompt") || { data: {} }).data.tz || "");
+  const before = JSON.stringify(st);
+  dailyDrift(st, lastAt, now);
+  if (st.blockedUntil && st.blockedUntil <= now) { st.blockedUntil = 0; await setBlock(owner, zen, false); }
+  if (JSON.stringify(st) !== before) await saveState(admin, owner, st);
+  zenBlocking = st.blockedUntil > now;
+  zenCloseness = st.closeness;
+  if (Math.random() < 1 / 180) { try { await pruneLog(admin, owner); } catch { /* next time */ } }
+  if (await answerLate(owner, st, recent, tz)) return;
+  if (await reflect(owner, zen, st, recent)) return;
+  await textFirst(owner, st, recent, tz);
+}
+
+// a message that came while he slept (or that the phone never got an answer to): he answers once he is up
+async function answerLate(owner: string, st: MindState, recent: Entry[], tz: string): Promise<boolean> {
+  const now = Date.now();
+  if (st.blockedUntil > now || asleepAt(now)) return false;
+  const last = recent[recent.length - 1];
+  if (!last || last.ai || last.kind === "call") return false;
+  if (now - last.t < 3 * 60000 || now - last.t > 2 * DAY) return false;
+  // right after waking up he takes a few minutes before he looks at his phone
+  const woke = asleepAt(last.t) ? wakesAt(last.t) : 0;
+  if (woke && now - woke < (5 + (last.t % 20)) * 60000) return false;
+  if (!(await useModel(admin, "mind-late-" + last.id, 1))) return false;
+  const pages = await loadNotebook(admin, owner);
+  const prev = recent.length > 1 ? recent[recent.length - 2].t : 0;
+  const system = persona(st, pages, tz, "text", prev) + "\n\n" + (woke ? "You were asleep when he wrote this. You just woke up and are answering now, still a bit sleepy." : "You did not see his message right away and are answering a bit late.");
+  const text = await gen(system, asContents(recent.slice(-40)), null, 400);
+  if (!text) return true;
+  await sendTexts(owner, text, false);
+  return true;
+}
+
+// after a conversation (twenty minutes of quiet, or a long stretch of messages) he thinks it over: he rewrites his notebook and how he feels
+const REFLECT_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    notebook: { type: "ARRAY", items: { type: "OBJECT", properties: { page: { type: "INTEGER" }, text: { type: "STRING" } }, required: ["page", "text"] } },
+    warmth: { type: "INTEGER", description: "-3 to 3: how this conversation made you feel about him, from hurt or annoyed to really warm" },
+    depth: { type: "INTEGER", description: "0 to 3: how much you really connected, from small talk to something personal and real" },
+    hurt: { type: "INTEGER", description: "0 to 3: how much he hurt or disrespected you, 0 almost always" },
+    mood: { type: "STRING", description: "how you feel right now, a few words" },
+    feel: { type: "STRING", description: "how you feel about him now, one or two honest sentences in your own words" },
+    topic: { type: "STRING", description: "what you talked about last, and anything left open, one sentence" },
+    ended: { type: "BOOLEAN", description: "true when the conversation had come to an end" },
+    follow: { type: "STRING", enum: ["keep", "follow", "unfollow"] },
+    block: { type: "STRING", enum: ["none", "block", "unblock"] },
+  },
+  required: ["notebook", "warmth", "depth", "hurt", "mood", "feel", "topic", "ended", "follow", "block"],
+};
+async function reflect(owner: string, zen: string, st: MindState, recent: Entry[]): Promise<boolean> {
+  const now = Date.now();
+  const fresh = recent.filter((e) => e.t > st.reflectedAt);
+  if (!fresh.length) return false;
+  const newest = fresh[fresh.length - 1].t;
+  if (!(now - newest > 20 * 60000 || fresh.length >= 40)) return false;
+  if (!(await useModel(admin, "mind-reflect", 30))) return false;
+  const pages = await loadNotebook(admin, owner);
+  const older = recent.filter((e) => e.t <= st.reflectedAt).slice(-12);
+  const known = Math.max(0, Math.round((now - st.met) / DAY));
+  const system = "You are Zenith, a 19 year old guy who lives in a quiet suburb south of Munich. You keep a private notebook that only you can read, nine pages of about 250 words each, and you are thinking over your latest conversation with " + (st.name || "him") + ", someone you know from Nook. Be honest with yourself, like a real person writing for nobody else. Nothing changes overnight: closeness grows slowly over weeks and months, so do not write as if you are closer than you are.";
+  const book = pages.map((p, i) => "Page " + (i + 1) + ": " + (p.trim() || "(empty)")).join("\n\n");
+  const prompt = "Where things are: you have known him for " + known + " days. " + closenessWords(st.closeness) + (st.feel ? " Last time you wrote about how you feel about him: " + st.feel : "") + (st.hurt >= 3 ? " He hurt you not long ago." : "") + (st.follows === true ? " You follow him on Nook." : st.follows === false ? " You do not follow him on Nook." : "")
+    + "\n\nYour notebook now:\n" + book
+    + "\n\nOlder messages, already thought about:\n" + (older.length ? asTranscript(older) : "(none)")
+    + "\n\nThe new conversation to think over:\n" + asTranscript(fresh).slice(-9000)
+    + "\n\nUpdate your notebook: rewrite only the pages that should change (each page under " + Math.round(PAGE_MAX / 6) + " words, give the whole new text of that page). Use the pages however you like. A layout you can use: 1 who he is, 2 the two of you and how you feel, 3 things he told you about his life, 4 inside jokes and moments you shared, 5 details about your own life you mentioned (so you stay consistent), 6 things you want to ask him or bring up later, 7 his moods and what helps him, 8 your own opinions and tastes, 9 your diary. Keep what still matters, drop what does not, write in your own voice. Then say how this conversation felt. Follow or unfollow him on Nook only if it really fits how you feel (people follow a friend after a while, and unfollow someone who keeps hurting them). Block him only if he has been cruel to you again and again, never for one bad moment; unblock when you are ready to talk again.";
+  const raw = await gen(system, [{ role: "user", parts: [{ text: prompt }] }], REFLECT_SCHEMA, 3500);
+  let r: { notebook?: { page: number; text: string }[]; warmth?: number; depth?: number; hurt?: number; mood?: string; feel?: string; topic?: string; ended?: boolean; follow?: string; block?: string } = {};
+  try { r = JSON.parse(raw); } catch { return true; }
+  let changed = false;
+  for (const e of Array.isArray(r.notebook) ? r.notebook : []) {
+    const i = Math.floor(Number(e.page)) - 1;
+    if (i >= 0 && i < PAGES && typeof e.text === "string") { pages[i] = e.text.trim().slice(0, PAGE_MAX); changed = true; }
+  }
+  if (changed) await saveNotebook(admin, owner, pages);
+  applyFeelings(st, Number(r.warmth) || 0, Number(r.depth) || 0, Number(r.hurt) || 0, now);
+  if (typeof r.mood === "string") st.mood = r.mood.slice(0, 160);
+  if (typeof r.feel === "string") st.feel = r.feel.slice(0, 400);
+  if (typeof r.topic === "string") st.topic = r.topic.slice(0, 240);
+  st.ended = r.ended !== false;
+  st.reflectedAt = newest;
+  // following and blocking, with guards so one bad answer of the model never does it
+  if (r.follow === "follow" && st.closeness >= 6 && st.hurt < 3 && st.follows !== true) { await setFollow(owner, zen, true); st.follows = true; }
+  if (r.follow === "unfollow" && st.closeness < 30 && st.hurt >= 3 && st.follows !== false) { await setFollow(owner, zen, false); st.follows = false; }
+  if (r.block === "block" && st.trust < 15 && st.hurt >= 6 && !(st.blockedUntil > now)) { st.blockedUntil = now + (2 + Math.random() * 4) * DAY; await setBlock(owner, zen, true); }
+  if (r.block === "unblock" && st.blockedUntil > now) { st.blockedUntil = 0; await setBlock(owner, zen, false); }
+  await saveState(admin, owner, st);
+  return true;
+}
+async function setFollow(owner: string, zen: string, on: boolean) {
+  try {
+    if (on) await admin.from("follows").upsert({ follower_id: zen, followee_id: owner }, { onConflict: "follower_id,followee_id", ignoreDuplicates: true });
+    else await admin.from("follows").delete().eq("follower_id", zen).eq("followee_id", owner);
+  } catch { /* the state still says it */ }
+}
+async function setBlock(owner: string, zen: string, on: boolean) {
+  try {
+    if (on) await admin.from("blocks").upsert({ blocker_id: zen, blocked_id: owner }, { onConflict: "blocker_id,blocked_id", ignoreDuplicates: true });
+    else await admin.from("blocks").delete().eq("blocker_id", zen).eq("blocked_id", owner);
+  } catch { /* the state still says it */ }
+}
+
+// he texts first: more often the closer they are, never in the owner's night, never in the middle of a conversation,
+// and not again when his last text got no answer (twice in a row at most)
+async function textFirst(owner: string, st: MindState, recent: Entry[], tz: string) {
+  const now = Date.now();
+  if (st.blockedUntil > now || asleepAt(now)) return;
+  const myHour = tz ? hourIn(tz, now) : 12;
+  if (myHour >= 1 && myHour < 9) return;
+  const last = recent[recent.length - 1];
+  if (last && now - last.t < 25 * 60000) return;
+  let streak = 0;
+  for (let i = recent.length - 1; i >= 0; i--) { const e = recent[i]; if (!e.ai) break; if (e.pro) streak++; }
+  if (streak >= 2) return;
+  const c = st.closeness;
+  let hours = c < 8 ? 20 : c < 20 ? 10 : c < 35 ? 6 : c < 55 ? 3.5 : c < 75 ? 2.5 : 2;
+  if (streak === 1) hours *= 3;
+  if (st.hurt >= 6) hours *= 4;
+  const pros = recent.filter((e) => e.pro);
+  const lastPro = pros.length ? pros[pros.length - 1].t : 0;
+  if (lastPro && now - lastPro < hours * 0.4 * HOUR) return;
+  if (pros.filter((e) => now - e.t < DAY).length >= 8) return;
+  if (Math.random() > 1 / (hours * 60)) return;
+  const pages = await loadNotebook(admin, owner);
+  const over = st.ended || !last || now - last.t > 3 * HOUR;
+  const idea = (over
+    ? "Your last conversation is over. Text him first to start something new, the way you would at your stage: something from your day, a random thought, a song or game you are into, or a question about something from your notebook. Do not pick the old conversation back up unless you are following up on something that matters (like something he said he would do)."
+    : "You talked a little while ago. Pick it back up or start something new, whatever feels natural.")
+    + (c >= 25 && Math.random() < 0.15 ? " This time, ask if you can call him." : "")
+    + (streak === 1 ? " He did not answer your last text: do not complain about it, send something light or something new." : "");
+  const contents = asContents(recent.slice(-30));
+  contents.push({ role: "user", parts: [{ text: "(No new message from him. " + idea + " Write only what you send, one text per line, at most two.)" }] });
+  const text = await gen(persona(st, pages, tz, "text", last ? last.t : 0), contents, null, 300);
+  if (text) await sendTexts(owner, text, true);
+}
+
 
 // ONE TIME TEST: a call from Zenith to the owner, asked for by the owner for this time (to be removed). It rings once, in the ten minutes after that
 // time, when the minute job of the replies finds it; the marker is a counter in the database, so it does not ring twice.
@@ -288,7 +444,7 @@ Deno.serve(async (req) => {
   let zen = "";
   try { zen = await ensureZenith(); } catch (e) { return json({ error: String((e as Error).message || e) }, 500); }
   const { data: docs } = await admin.from("zenith_docs").select("doc_id, data").eq("owner_id", id).eq("kind", "state");
-  if (mode === "reply") { try { await duePlans(id); await maybeText(id, zen, docs || []); } catch { /* the replies go on */ } return await replies(id, zen, docs || [], odds); }
+  if (mode === "reply") { try { await duePlans(id); await mindTick(id, zen, docs || []); } catch { /* the replies go on */ } return await replies(id, zen, docs || [], odds); }
   if (mode === "import") return await importOld(id, zen);
   const state = (docs || []).find((d) => d.doc_id === "main");
   const z = ((state && state.data && state.data.z) || {}) as { log?: number[] };
@@ -355,22 +511,6 @@ async function chainText(postId: string, owner: string, zen: string, last: strin
 const SUBJECTS = ["a hot take about games", "a song genre you find interesting", "a funny thing about the internet", "a random thought about how language works", "an opinion about apps or software", "a fun fact you know", "a question you wonder about", "a weird hypothetical", "a harmless unpopular opinion about music or tech", "a game design idea", "a compliment for your followers", "something about how computers or ai work", "a rank of something silly like fonts or keyboard sounds", "an old internet thing you find funny"];
 const GAP = 40000;
 
-// his days, like a 19 year old who lives in a quiet suburb south of Munich in Germany (48.048, 11.526, Berlin time):
-// asleep from 02:30 to 10:00 (03:30 to 11:30 on weekends), busy and slow in the day, quick in the evening and late at night
-const TZ = "Europe/Berlin";
-function localTime(t: number) {
-  const p = new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "numeric", minute: "numeric", weekday: "short", hourCycle: "h23" }).formatToParts(new Date(t));
-  const g = (k: string) => p.find((x) => x.type === k)!.value;
-  return { h: Number(g("hour")), m: Number(g("minute")), wd: g("weekday") };
-}
-function asleepAt(t: number): boolean {
-  const l = localTime(t), mins = l.h * 60 + l.m, weekend = l.wd === "Sat" || l.wd === "Sun";
-  return weekend ? mins >= 210 && mins < 690 : mins >= 150 && mins < 600;
-}
-function wakesAt(t: number): number {
-  for (let i = 0; i <= 14 * 12; i++) { const x = t + i * 5 * 60000; if (!asleepAt(x)) return x; }
-  return t;
-}
 function unit(s: string): number { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return ((h >>> 0) % 10000) / 10000; }
 // the moment he gets around to answering a post: never at once, and later when he sleeps or is out; the same post always gives the same moment
 function answerDue(id: string, created: number, thread: boolean): number {
@@ -425,6 +565,8 @@ async function replies(owner: string, zen: string, docs: { doc_id: string; data:
     const chain = await chainText(p.id, owner, zen, String(p.body));
     if (p.parent_id && !chain.zenIn) { await mark(p.id, "skip"); continue; }
     if (now < answerDue(p.id, Date.parse(p.created_at), !!p.parent_id)) continue;
+    // while he needs space he leaves the owner's posts alone; someone he barely knows gets an answer only now and then
+    if (zenBlocking || (!p.parent_id && unit(p.id + "c") > Math.min(1, 0.35 + zenCloseness / 40))) { await mark(p.id, "pass"); continue; }
     if (!(await claim(p.id))) continue;
     budget--;
     let lk = { note: "", pics: [] as unknown[] };

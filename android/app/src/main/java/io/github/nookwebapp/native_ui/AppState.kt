@@ -248,7 +248,10 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
         runCatching {
             val chat = zenChat()
             val t = System.currentTimeMillis()
-            chat.msgs.add(LMsg(uid(), callLogText(c.seconds, c.log), t, emptyList()))
+            val m = LMsg(uid(), callLogText(c.seconds, c.log), t, emptyList())
+            chat.msgs.add(m)
+            // he remembers the call too
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { Sb.fn("zenith", org.json.JSONObject().put("action", "log").put("entries", org.json.JSONArray().put(entryOf(m)))) } }
             chat.t = maxOf(chat.t, t)
             persist()
             on.zenSyncSoon()

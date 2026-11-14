@@ -144,7 +144,20 @@ class CallSession(private val scope: CoroutineScope? = null, private val onLive:
     // every line of the call, for the log that is saved in the chat afterwards
     val log = ArrayList<Cap>()
     private var lastSayAt = 0L
+    // the person's line written live on the phone: finished pieces stay, the piece being said is replaced as it changes
+    private var userLine: Cap? = null
+    private var userDone = ""
+    fun userLive(text: String, final: Boolean) {
+        val last = lines.lastOrNull()
+        val line = if (last != null && last === userLine) last else Cap(++ids, "You", "").also { lines.add(it); log.add(it); while (lines.size > 6) lines.removeAt(0); userLine = it; userDone = "" }
+        val shown = (userDone + " " + text).trim()
+        line.text = shown
+        if (final) userDone = shown
+        lastSayAt = System.currentTimeMillis()
+    }
+
     fun say(who: String, text: String, fresh: Boolean) {
+        if (who != "You") userLine = null
         val now = System.currentTimeMillis()
         val last = lines.lastOrNull()
         // the same person keeps one line while they talk, a short pause inside it does not cut it in two

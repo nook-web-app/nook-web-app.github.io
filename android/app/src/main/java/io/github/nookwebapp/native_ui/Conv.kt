@@ -51,6 +51,8 @@ fun ConvScreen(id: String) {
     val s = app.store
     val chat = s.chats.firstOrNull { it.id == id }
     if (chat == null) { LaunchedEffect(Unit) { app.pop() }; return }
+    // his own chat: his picture and name on top, the call button, and every message goes to him
+    val isZ = chat.id == ZDM
     val fill = remember(chat.id) { arrayOfNulls<(String) -> Unit>(1) }
     // opening a chat wakes Zenith's server up, so the first answer does not wait for it
     LaunchedEffect(chat.id) { if (zOn()) runCatching { Sb.fn("zenith", org.json.JSONObject().put("action", "ping")) } }
@@ -83,15 +85,15 @@ fun ConvScreen(id: String) {
         Row(Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.width(44.dp).offset(x = (-10).dp)) { IB("back") { app.pop() } }
             Row(Modifier.weight(1f).padding(start = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                MyAvatar(36.dp)
+                if (isZ) ZenAv(36.dp) else MyAvatar(36.dp)
                 Column {
-                    T(chat.name, Fs.lg, FontWeight.Bold, maxLines = 1, lineHeight = (16 * 1.2).sp)
-                    T("@" + s.profile.handle, Fs.sm, color = c.muted, maxLines = 1, lineHeight = (13 * 1.2).sp)
+                    T(if (isZ) "Zenith" else chat.name, Fs.lg, FontWeight.Bold, maxLines = 1, lineHeight = (16 * 1.2).sp)
+                    T("@" + (if (isZ) s.zen.optString("handle").ifEmpty { "zenith" } else s.profile.handle), Fs.sm, color = c.muted, maxLines = 1, lineHeight = (13 * 1.2).sp)
                 }
             }
             // the call with Zenith: only the owner has it
-            if (zOn()) Box(Modifier.width(44.dp)) { IB("phone") { app.callChatId = chat.id; app.startCall() } }
-            Box(Modifier.width(44.dp)) {
+            if (zOn() && isZ) Box(Modifier.width(44.dp)) { IB("phone") { app.startCall() } }
+            if (!isZ) Box(Modifier.width(44.dp)) {
                 IB("dots") {
                     app.open(listOf(
                         SheetItem("Rename chat", "edit") { app.panels.add(Panel.RenameChat(chat)) },
@@ -107,12 +109,12 @@ fun ConvScreen(id: String) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
         ToBottomButton(list, unread, Modifier.align(Alignment.BottomEnd).padding(end = 10.dp).zIndex(2f))
         LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), state = list, verticalArrangement = Arrangement.Bottom, contentPadding = PaddingValues(top = 14.dp, bottom = 8.dp)) {
-            if (chat.msgs.isEmpty()) item { Empty("smile", "Nothing here yet. Say something to yourself.", iconSize = 48.dp) }
+            if (chat.msgs.isEmpty()) item { Empty("smile", if (isZ) "Say hi to Zenith." else "Nothing here yet. Say something to yourself.", iconSize = 48.dp) }
             if (shownFrom > 0) item { Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) { Pill("Show earlier messages", Btn.Ghost) { shownFrom = maxOf(0, shownFrom - 80) } } }
             items(chat.msgs.drop(shownFrom), key = { it.id }) { m ->
                 // pulling one of Zenith's messages to the right starts an answer to him
                 val anim = remember(m.id) { if (m.id in had || m.id in app.zenNoAnim) MsgAnim.None else if (m.ai) MsgAnim.In else MsgAnim.Send }
-                FoldAway(m.leaving) { Box(Modifier.padding(bottom = 6.dp).msgIn(anim, !m.ai)) { SwipeReply(m.ai, { fill[0]?.invoke("@zenith ") }) { Bubble(m, open == m.id, onTap = { open = if (open == m.id) null else m.id }) {
+                FoldAway(m.leaving) { Box(Modifier.padding(bottom = 6.dp).msgIn(anim, !m.ai)) { SwipeReply(m.ai && !isZ, { fill[0]?.invoke("@zenith ") }) { Bubble(m, open == m.id, onTap = { open = if (open == m.id) null else m.id }) {
                     app.open(listOfNotNull(
                         if (m.text.isNotEmpty()) SheetItem("Copy message", "copy") { app.clipboard(m.text) } else null,
                         SheetItem("Delete message", "trash", danger = true) {
@@ -141,6 +143,7 @@ fun ConvScreen(id: String) {
 private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
     val app = LocalApp.current
     val c = LocalNook.current
+    val isZ = chat.id == ZDM
     // the text and where the cursor is: a word put in by the app (Zenith's name) leaves the cursor after it
     var tv by remember(chat.id) { mutableStateOf(TextFieldValue(chat.draft, TextRange(chat.draft.length))) }
     val text = tv.text
@@ -151,7 +154,7 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
     fill[0] = { pre -> val cur = tv.text; if (!cur.startsWith(pre.trim(), true)) setText(pre + cur); runCatching { focus.requestFocus() } }
     // .cdock: the pending photos and the text box with its photo and send buttons
     Column(Modifier.fillMaxWidth().background(c.bg).lineAbove(c.line).navigationBarsPadding().padding(bottom = 10.dp)) {
-        ZenPopHost(zOn() && zenHint(text)) { setText(text.replace(ZEN_AT, "@zenith ")) }
+        if (!isZ) ZenPopHost(zOn() && zenHint(text)) { setText(text.replace(ZEN_AT, "@zenith ")) }
         if (pend.isNotEmpty()) Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             pend.forEachIndexed { i, src ->
                 Box(Modifier.size(64.dp).clip(RoundedCornerShape(Rad.s))) {
@@ -175,7 +178,7 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
                 // "/media <link>" in a note: the card of the video is made instead of a message with the words
                 // (any chat of the notes list, also one that holds an answer of Zenith: earlier messages never stop the command)
                 val cmd = MediaGrab.normalize(text)
-                val links = if (pend.isEmpty()) MediaGrab.commandLinks(cmd) else null
+                val links = if (pend.isEmpty() && !isZ) MediaGrab.commandLinks(cmd) else null
                 if (links != null) {
                     val audio = MediaGrab.isAudio(cmd)
                     val folder = MediaGrab.folder(cmd)
@@ -222,7 +225,7 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>) {
                 val m = LMsg(uid(), cleanText(text.trim()), Clock.now(), pend.toList())
                 chat.msgs.add(m)
                 pend.clear(); setText("")
-                app.on.zAsk(chat, m)
+                if (isZ) app.on.zDm(chat, m) else app.on.zAsk(chat, m)
             }, contentAlignment = Alignment.Center) { NIcon("send", 20.dp, c.on) }
         }
     }

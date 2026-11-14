@@ -72,6 +72,8 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
     @Volatile private var useOther = false
     private var quietLoop = false
     @Volatile private var hanging = false
+    // captions of the person written on the phone while they talk
+    private var caps: LocalCaptions? = null
     @Volatile private var greetAt = 0L
     @Volatile private var greetDone = false
 
@@ -83,6 +85,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
         open = false
         runCatching { ws?.close(1000, "bye") }
         ws = null
+        caps?.stop(); caps = null
         out.clear()
         // the threads see `stopped` and release the sound devices themselves; the audio mode goes back at once
         runCatching { micThread?.interrupt() }
@@ -110,7 +113,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
         if (!r.ok || !r.body.optBoolean("ok") || tok.isEmpty() || setup == null) {
             Log.w("nook", "live token failed " + r.status + " " + r.body.optString("why"))
             // another model; when none is left the call cannot start
-            if (!open && modelIdx < models - 1) { modelIdx++; connect() } else fail(if (r.status == 0) "No connection. Try the call again" else "The call could not start" + r.body.optString("why").takeIf { it.isNotEmpty() }?.let { " (" + it.take(120) + ")" }.orEmpty())
+            if (!open && modelIdx < models - 1) { modelIdx++; connect() } else fail(if (r.body.optString("why") == "blocked") "Zenith didn't pick up" else if (r.status == 0) "No connection. Try the call again" else "The call could not start" + r.body.optString("why").takeIf { it.isNotEmpty() }?.let { " (" + it.take(120) + ")" }.orEmpty())
             return
         }
         val client = Sb.http.newBuilder().readTimeout(0, TimeUnit.MILLISECONDS).pingInterval(20, TimeUnit.SECONDS).build()
@@ -162,7 +165,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
                 if (d.optString("mimeType").startsWith("audio/")) speak(d.optString("data"))
             }
         }
-        sc.optJSONObject("inputTranscription")?.optString("text")?.takeIf { it.isNotEmpty() }?.let { nudges = 0; lastActivity = System.currentTimeMillis(); caption("You", it) }
+        sc.optJSONObject("inputTranscription")?.optString("text")?.takeIf { it.isNotEmpty() }?.let { nudges = 0; lastActivity = System.currentTimeMillis(); if (caps?.working != true) caption("You", it) }
         sc.optJSONObject("outputTranscription")?.optString("text")?.takeIf { it.isNotEmpty() }?.let { caption("Zenith", it) }
         if (sc.optBoolean("interrupted")) { flush(); ui { s.phase = CallPhase.Listening }; closed = true }
         if (sc.optBoolean("turnComplete")) { greetDone = true; lastActivity = System.currentTimeMillis(); closed = true; ui { if (s.phase == CallPhase.Speaking || s.phase == CallPhase.Thinking) s.phase = CallPhase.Listening } }
@@ -214,9 +217,8 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
         val why = s.reason
         val base = if (why == null) "The call just connected. You speak first: say a quick casual hey, like a friend picking up the phone, nothing more, then wait."
         else "You called your friend and they just picked up. Say a quick casual hey and say why you called: " + (why.ifBlank { "no real reason, you just felt like talking" }) + ". Keep it short, like a real friend would, then wait."
-        // the end of the chat (and of earlier calls) goes along, so he is not starting from nothing
-        val background = runCatching { callContext(app) }.getOrDefault("")
-        val text = base + if (background.isBlank()) "" else "\n\nBackground for you only, never recite it and never mention it: the end of your recent text chat with him and earlier calls, to use naturally when it fits:\n" + background
+        // what they talked about before is in his memory on the server (it goes into the call when the token is made)
+        val text = base
         if (other) useOther = true
         else greetAt = System.currentTimeMillis()
         sendText(text)
@@ -307,6 +309,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
     // ---- sound ----
 
     private fun startAudio() {
+        if (caps == null) app.ctx?.let { c -> caps = LocalCaptions(c.applicationContext) { t, fin -> if (!hanging) ui { s.userLive(t, fin) } }.also { it.start() } }
         if (audioOn || stopped) return
         if (app.ctx == null) return
         runCatching {
@@ -385,6 +388,7 @@ class LiveEngine(private val app: AppState, private val s: CallSession, hold: Bo
                     if (s.speaker && System.currentTimeMillis() < playUntil + 450) continue
                     val msg = "{\"realtimeInput\":{\"audio\":{\"data\":\"" + Base64.encodeToString(buf, 0, n, Base64.NO_WRAP) + "\",\"mimeType\":\"audio/pcm;rate=16000\"}}}"
                     ws?.send(msg)
+                    caps?.feed(buf, n)
                 }
                 runCatching { r.stop() }; runCatching { r.release() }
             }.apply { name = "nook-call-in"; isDaemon = true; start() }

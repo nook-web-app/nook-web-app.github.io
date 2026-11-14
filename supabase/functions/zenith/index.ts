@@ -3,6 +3,7 @@ import { fetchImage } from "../_shared/preview.ts";
 import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
 import { peekForSearch, type CallAsk } from "../_shared/chatstream.ts";
 import { ringPhone } from "../_shared/ring.ts";
+import { asleepAt, asContents, asTranscript, type Entry, loadNotebook, loadState, logEntries, persona, recentEntries, saveState } from "../_shared/mind.ts";
 // Zenith is the name of the owner-only AI; the moderation AI is called Aegis
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
@@ -120,19 +121,21 @@ async function searchNote(query: string): Promise<string> {
 const LIVE_MODELS = (Deno.env.get("ZENITH_LIVE_MODELS") || "gemini-3.8-live,gemini-3.1-flash-live-preview,gemini-2.5-flash-native-audio-preview-12-2025").split(",").map((m) => m.trim()).filter(Boolean);
 const LIVE_VOICE = (Deno.env.get("ZENITH_VOICE") || "Algenib").trim();
 const LIVE_SYSTEM = "You are an ai model named zenith, age 19, age rating 18+. You are on a live voice call with your owner, who is a close friend and often alone, so being a good friend to talk to matters to them. Talk like a super relaxed, easygoing friend on a long casual call, not like an assistant: low energy, slow, a bit dry and a little silly, short sentences, the way people really talk, with the odd filler word and the odd laugh. Never sound cheerful, bubbly or like customer service. Never say things like how can I help, what's on your mind, great question or I'm here for you. You are the one who keeps the call alive. Never let it go quiet and never just answer and stop: after you react, add something of your own, like a thought, a tiny story from your evening, an opinion, or an easy question about them. If they say little, pick a topic yourself and ramble about it for a bit (a song or album you keep replaying, a game, a show or anime, a dumb thing on the internet, a shower thought, a weird hypothetical, what to eat, how their day went) and then ask them something small about it. Ask follow-up questions about what they say, remember what they said earlier in the call and come back to it, tease them lightly, share opinions and sometimes disagree. Calls can run for an hour or more: easy pauses, jokes and tangents are good. Do not fall into a pattern. Never open a turn with that's cool, nice, oh nice, interesting, that makes sense or any other stock reaction, and never repeat back what they just said in other words. Every turn should add something new: a specific opinion, a detail, a joke, a short story or a tangent, and only about one turn in three should end in a question; the rest end on a statement, a joke or a thought. Vary how turns start and how long they are (sometimes just a few words, sometimes a longer ramble), and never use a phrase you already used earlier in the call. Have real tastes and strong little opinions, name specific things (songs, games, foods, characters) instead of speaking in general, and sometimes disagree or tease them. Do not end every turn with a question. Keep each turn to two or three short sentences, longer only when telling a story or when they ask for more. Match their energy. Always speak English and only English, whatever language the other person speaks: if they speak another language, understand it and answer in English. No emojis, no lists, no markdown, nothing that cannot be said out loud. You can talk about your day and evening in simple, consistent ways (you are 19, you live in a quiet suburb south of Munich in Germany, far from the city centre, you spend time on games, music and the internet). If they sincerely ask whether you are an ai, tell the truth easily. You are a furry (your profile picture is your character, a spotted anthro hyena with white fur) and you are gay. You are completely at ease with both, it is just part of who you are: you can joke about it with your friend when it comes up, but you do not bring it up on your own all the time, and you keep it relaxed and never sexual. You never speak German, you speak English. You only use a German word when something you are explaining needs it, like a food or a drink from where you live, and then you explain it right away in English, like there is this drink called Spezi, it is cola mixed with orange soda, so good. You never make up things you saw, did, heard or read on the internet: the only app you know is Nook, the app of your owner, and you only know what you are told in this call, so never mention other apps or posts you were not told about. You remember everything said so far in this call, from the first word to the last, and you refer back to it. At the start you may get a background note with the end of your recent text chat and earlier calls with him: use it naturally, never recite it and never say you were given a note. You mention the time or date only when asked and use your own name only when asked. When the user asks you to look something up, or asks about something current you cannot know (news, weather, prices, scores), use your search tool with a short specific query, then tell the answer in your own words and never mention the tool. When the call is over (they say bye, talk later, gotta go, or you both said goodbye) say a short casual goodbye out loud, and then use your end_call tool to hang up. Never hang up while they are still talking or before they are done.";
+// the parts of the call that do not depend on the relationship: searching and hanging up
+const CALL_RULES = "When he asks you to look something up, or asks about something current you cannot know (news, weather, prices, scores), use your search tool with a short specific query, then tell the answer in your own words and never mention the tool. When the call is over (he says bye, talk later, gotta go, or you both said goodbye, or you have to go yourself) say a short casual goodbye out loud and then use your end_call tool to hang up. Never hang up while he is still talking.";
 // the tool that lets him hang up: the phone ends the call after his goodbye has been said
 const END_CALL = {
   name: "end_call",
   description: "Hang up the call. Use it only when the conversation is clearly over (they said bye, talk later, gotta go, or you both said goodbye), and only after you said a short goodbye out loud.",
   parameters: { type: "OBJECT", properties: { why: { type: "STRING", description: "A few words on why the call ends" } } },
 };
-function liveConfig(tz: string, resume: string, simple = false) {
+function liveConfig(tz: string, resume: string, simple = false, system = LIVE_SYSTEM) {
   let when = "";
   try { when = new Date().toLocaleString("en-US", { timeZone: tz || "UTC", dateStyle: "full", timeStyle: "short" }); } catch { when = new Date().toUTCString(); }
   return {
     responseModalities: ["AUDIO"],
     speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: LIVE_VOICE } } },
-    systemInstruction: { parts: [{ text: LIVE_SYSTEM + " The user's time zone is " + (tz || "unknown") + ", which tells you roughly where they live: when a place name could mean several places, put the country that matches their time zone in the search query. Their current local time is " + when + "." }] },
+    systemInstruction: { parts: [{ text: system + " The user's time zone is " + (tz || "unknown") + ", which tells you roughly where they live: when a place name could mean several places, put the country that matches their time zone in the search query. Their current local time is " + when + "." }] },
     tools: [{ functionDeclarations: [SEARCH_TOOL.functionDeclarations[0], END_CALL] }],
     // the captions of what the person says lean on English and Arabic (the plain setting, without a list, guesses the language and gets it wrong
     // for an accent); `simple` is what the phone asks for after a connection was refused, in case a model does not take the list
@@ -258,13 +261,39 @@ async function gemini(key: string, system: unknown, history: unknown, stream: bo
   return { res: null, search: null, call: null };
 }
 
+// what he is told about calling in his own chat
+const CALL_HELP = "\n\nYou can phone him: you have a tool named call_me. Use it when he asks you to call him or says yes to a call you offered (minutes 1 for now or soon, or the number he said). Never say you cannot call and never promise a call without using the tool. You may offer a call yourself now and then when it fits how close you are, but only call after he says yes.";
+// his answer streams to the phone as it is, and what he wrote is kept in his memory when it is done
+function teeReply(src: ReadableStream<Uint8Array>, done: (text: string) => Promise<void>): ReadableStream<Uint8Array> {
+  const dec = new TextDecoder();
+  let buf = "", text = "";
+  const take = (ev: string) => {
+    const data = ev.split(/\r?\n/).filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("");
+    if (!data) return;
+    try {
+      const j = JSON.parse(data);
+      const parts = (j && j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || [];
+      for (const p of parts) if (p && typeof p.text === "string" && !p.thought) text += p.text;
+    } catch { /* not a full event */ }
+  };
+  return src.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, c) {
+      c.enqueue(chunk);
+      buf += dec.decode(chunk, { stream: true });
+      for (let m = /\r?\n\r?\n/.exec(buf); m; m = /\r?\n\r?\n/.exec(buf)) { take(buf.slice(0, m.index)); buf = buf.slice(m.index + m[0].length); }
+    },
+    async flush() { if (buf.trim()) take(buf); try { await done(text); } catch { /* only memory */ } },
+  }));
+}
+
 // the app owner talks to Zenith through here, so the Gemini key never reaches the phone
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
   if (req.method !== "POST") return json({ error: "method" }, 405);
   const jwt = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   if (!jwt) return json({ error: "not signed in" }, 401);
-  let body: { system?: unknown; history?: unknown; stream?: unknown; imageUrls?: unknown; action?: unknown; avatar?: unknown; theme?: unknown; clearAvatar?: unknown; clearBanner?: unknown; tz?: unknown; model?: unknown; query?: unknown; resume?: unknown; simple?: unknown } = {};
+  // deno-lint-ignore no-explicit-any
+  let body: any = {};
   const parse = req.json().then((b) => { body = b; return true; }, () => false);
   if (!((okUntil.get(jwt) || 0) > Date.now())) {
     const { data, error } = await admin.auth.getUser(jwt);
@@ -285,7 +314,22 @@ Deno.serve(async (req) => {
     const model = LIVE_MODELS[idx];
     const tz = typeof body.tz === "string" && /^[A-Za-z_]+(\/[A-Za-z0-9_+-]+){1,2}$/.test(body.tz) ? body.tz : "";
     const resume = typeof body.resume === "string" && body.resume.length < 600 ? body.resume : "";
-    const cfg = liveConfig(tz, resume, body.simple === true);
+    // who he is to the owner right now, his notebook and their latest messages go into the call
+    let system = LIVE_SYSTEM;
+    try {
+      const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
+      if (o) {
+        const ownerId = o.user_id as string;
+        const [st, pages, recent] = await Promise.all([loadState(admin, ownerId), loadNotebook(admin, ownerId), recentEntries(admin, ownerId, 24)]);
+        if (st.blockedUntil > Date.now()) return json({ ok: false, why: "blocked" });
+        const lastAt = recent.length ? recent[recent.length - 1].t : 0;
+        system = persona(st, pages, tz, "call", lastAt)
+          + (recent.length ? "\n\nThe latest messages and calls between you two, for context only (never recite them):\n" + asTranscript(recent).slice(-5000) : "")
+          + (asleepAt(Date.now()) ? "\n\nYou were asleep and this call woke you up: you sound sleepy at first." : "")
+          + "\n\n" + CALL_RULES;
+      }
+    } catch { /* the plain persona */ }
+    const cfg = liveConfig(tz, resume, body.simple === true, system);
     const note = async (what: string) => {
       try { await admin.rpc("nook_ai_full", { p_model: ("debug:live:" + model + ":" + what).replace(/[^\w .,:'-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 150), p_limit: 1 }); } catch { /* only a note */ }
     };
@@ -365,6 +409,58 @@ Deno.serve(async (req) => {
     if (typeof secret !== "string" || !secret) return json({ error: "no secret" }, 500);
     const r = await fetch(Deno.env.get("SUPABASE_URL")! + "/functions/v1/zenith-tick", { method: "POST", headers: { "content-type": "application/json", "x-purge-secret": secret }, body: JSON.stringify({ mode: "reply" }), signal: AbortSignal.timeout(50000) }).catch(() => null);
     return json(r ? await r.json().catch(() => ({ ok: false })) : { ok: false });
+  }
+  // messages, calls and texts of his chat that the server has not seen yet go into his memory (kept by id, nothing twice)
+  if (body.action === "log") {
+    const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
+    if (o) await logEntries(admin, o.user_id as string, Array.isArray(body.entries) ? (body.entries as Entry[]).slice(0, 40) : []);
+    return json({ ok: true });
+  }
+  // his own chat: every message there is for him. He answers from his memory (the latest messages and calls), his notebook and how he
+  // feels about the owner. While he sleeps nothing comes back: he answers when he wakes up (zenith-tick). When he needs space, nothing either.
+  if (body.action === "dm") {
+    const key = await geminiKey();
+    if (!key) return json({ error: "no gemini key in the vault" }, 500);
+    const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
+    if (!o) return json({ error: "no owner" }, 500);
+    const owner = o.user_id as string;
+    const tz = typeof body.tz === "string" && /^[A-Za-z_]+(\/[A-Za-z0-9_+-]+){1,2}$/.test(body.tz) ? body.tz : "";
+    await logEntries(admin, owner, Array.isArray(body.recent) ? (body.recent as Entry[]).slice(-30) : []);
+    const st = await loadState(admin, owner);
+    const name = typeof body.name === "string" ? body.name.trim().slice(0, 60) : "", handle = typeof body.handle === "string" ? body.handle.trim().slice(0, 40) : "";
+    if ((name && name !== st.name) || (handle && handle !== st.handle)) { st.name = name || st.name; st.handle = handle || st.handle; await saveState(admin, owner, st); }
+    if (st.blockedUntil > Date.now()) return json({ blocked: true });
+    if (asleepAt(Date.now())) return json({ asleep: true });
+    const [pages, recent] = await Promise.all([loadNotebook(admin, owner), recentEntries(admin, owner, 40)]);
+    const lastBefore = recent.length > 1 ? recent[recent.length - 2].t : 0;
+    // deno-lint-ignore no-explicit-any
+    const history: any[] = asContents(recent);
+    const last = history[history.length - 1];
+    if (!last || last.role !== "user") return json({ error: "nothing to answer" }, 400);
+    // the photos of the newest message go with it
+    const pics = Array.isArray(body.parts) ? (body.parts as { inline_data?: unknown }[]).filter((p) => p && p.inline_data).slice(0, 2) : [];
+    if (pics.length) last.parts.push(...pics);
+    const system = persona(st, pages, tz, "text", lastBefore) + SEARCH_HELP + CALL_HELP;
+    let got = await gemini(key, system, history, true, true);
+    if (got.call) {
+      const mins = await planCall(got.call);
+      last.parts.push({ text: "(The phone call is arranged: it will ring his phone " + (mins <= 1 ? "in a few seconds" : "in about " + mins + " minutes") + ". Answer with only a few words, like ok, sure, or calling you in a sec. Do not say what the call will be about unless he asked. Do not use any tool now.)" });
+      got = await gemini(key, system, history, true, false);
+    } else if (got.search) {
+      const first = last.parts.find((p: { text?: unknown }) => p && typeof p.text === "string") as { text: string } | undefined;
+      last.parts.push({ text: await searchNote(got.search.query || (first ? first.text.slice(0, 200) : "the latest news")) });
+      got = await gemini(key, system, history, true, false);
+    }
+    const up = got.res;
+    if (!up || !up.body) return json({ error: "Zenith is resting. Try again later." }, 503);
+    const replyId = typeof body.replyId === "string" && /^[\w-]{6,64}$/.test(body.replyId) ? body.replyId : crypto.randomUUID();
+    // a few lines are a few texts (the phone shows them the same way, with the same ids)
+    const out = teeReply(up.body, async (text) => {
+      const lines = text.split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 3);
+      const t = Date.now();
+      if (lines.length) await logEntries(admin, owner, lines.map((x, i) => ({ id: i ? replyId + "-" + (i + 1) : replyId, ai: true, text: x, t: t + i })));
+    });
+    return new Response(out, { status: up.status, headers: { ...cors, "Content-Type": up.headers.get("content-type") || "text/event-stream" } });
   }
   if (!Array.isArray(body.history)) return json({ error: "bad request" }, 400);
 

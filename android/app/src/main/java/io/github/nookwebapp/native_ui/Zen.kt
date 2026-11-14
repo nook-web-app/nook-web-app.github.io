@@ -217,14 +217,14 @@ suspend fun Online.zenPull(): Boolean {
     if (!isOwner()) return false
     var sig = ""
     runCatching {
-        val nw = Sb.get(Q("zenith_docs").select("updated_at").eq("owner_id", me).order("updated_at", false).limit(1))
-        val ct = Sb.count(Q("zenith_docs").select("doc_id").eq("owner_id", me))
+        val nw = Sb.get(Q("zenith_docs").select("updated_at").eq("owner_id", me).neq("kind", "mindlog").neq("kind", "mind").order("updated_at", false).limit(1))
+        val ct = Sb.count(Q("zenith_docs").select("doc_id").eq("owner_id", me).neq("kind", "mindlog").neq("kind", "mind"))
         if (nw.ok && ct.ok) sig = me + "|" + (nw.one?.optString("updated_at") ?: "") + "|" + ct.count
     }
     if (sig.isNotEmpty() && sig == zenPullSig && System.currentTimeMillis() - zenPullAt < 300_000) return false
     val incr = zenPulledIso.isNotEmpty() && System.currentTimeMillis() - zenFullAt < 600_000
     var changed = zenApplyDeleted()
-    val r = Sb.pageAll { Q("zenith_docs").select("kind, doc_id, data, updated_at").eq("owner_id", me).apply { if (incr) gte("updated_at", zenPulledIso) }.order("kind").order("doc_id") }
+    val r = Sb.pageAll { Q("zenith_docs").select("kind, doc_id, data, updated_at").eq("owner_id", me).neq("kind", "mindlog").neq("kind", "mind").apply { if (incr) gte("updated_at", zenPulledIso) }.order("kind").order("doc_id") }
     if (!r.ok) return changed
     var newest = if (incr) zenPulledIso else ""
     r.rows.forEach { if (it.optString("updated_at") > newest) newest = it.optString("updated_at") }
@@ -467,10 +467,71 @@ fun AppState.importZenTexts(): String? {
     return chat.id
 }
 
-// the chat Zenith's own messages and call logs go to: the newest one he is in, else the newest chat, else a new one called Zenith
-fun AppState.zenChat(): LChat {
-    store.chats.firstOrNull { it.id == callChatId }?.let { return it }
-    var chat = store.chats.filter { it.zc || it.msgs.any { m -> m.ai } }.maxByOrNull { it.t } ?: store.chats.maxByOrNull { it.t }
-    if (chat == null) { chat = LChat(uid(), "Zenith", System.currentTimeMillis()); store.chats.add(chat) }
-    return chat
+// his own chat: every message in it is for him, his calls and the texts he sends first are kept there (the call is only in this chat).
+// A fixed id, so it is the same chat on every phone.
+const val ZDM = "5e417700-0000-4000-8000-000000000001"
+fun AppState.zenDm(): LChat {
+    store.chats.firstOrNull { it.id == ZDM }?.let { return it }
+    val c = LChat(ZDM, "Zenith", System.currentTimeMillis()).also { it.zc = true }
+    store.chats.add(c); persist()
+    return c
+}
+fun AppState.zenChat(): LChat = zenDm()
+
+// a message of his chat as his memory on the server keeps it (a call is kept as what was said in it)
+fun entryOf(m: LMsg): JSONObject {
+    val log = callLogOf(m.text)
+    val text = if (log != null) log.second.joinToString("\n") { (if (it.mine) "Him: " else "You: ") + it.text } else m.text.ifEmpty { if (m.imgs.isNotEmpty()) "(sent a photo)" else "" }
+    return JSONObject().put("id", m.id).put("ai", m.ai).put("text", text.take(4000)).put("t", m.t).put("kind", if (log != null) "call" else "text")
+}
+
+// zDm(): a message in his own chat. The server answers from his memory and how he feels about the owner. While he sleeps nothing
+// comes back (he answers by himself when he wakes up), and when he needs space the message is not delivered.
+fun Online.zDm(chat: LChat, m: LMsg) {
+    if (!zOn()) return
+    app.scope.launch {
+        val recent = JSONArray()
+        chat.msgs.takeLast(20).forEach { recent.put(entryOf(it)) }
+        val parts = JSONArray()
+        withContext(kotlinx.coroutines.Dispatchers.IO) { m.imgs.takeLast(2).mapNotNull { inline(it) } }.forEach { parts.put(it) }
+        val replyId = uid()
+        val body = JSONObject().put("action", "dm").put("recent", recent).put("parts", parts).put("replyId", replyId)
+            .put("tz", java.util.TimeZone.getDefault().id).put("name", app.store.profile.name).put("handle", app.store.profile.handle)
+        val ai = LMsg(replyId, "", System.currentTimeMillis(), emptyList(), ai = true)
+        var done = false
+        // he reads it first: the typing dots show after a moment, not at once
+        val dots = app.scope.launch { kotlinx.coroutines.delay(1200); if (!done) { app.zenTyping[chat.id] = ai; app.zenVersion++ } }
+        var full = ""
+        val res = runCatching {
+            Keep.around(app.ctx) {
+                Sb.fnRaw("zenith", body, 90) { ln ->
+                    if (!ln.startsWith("data:")) return@fnRaw
+                    val t = partsText(runCatching { JSONObject(ln.substring(5)) }.getOrNull())
+                    if (t.isNotEmpty()) { full += t; if (app.zenTyping[chat.id] == null) app.zenTyping[chat.id] = ai; ai.text = full.replace(Regex("\\s*\\n+\\s*"), " ") }
+                }
+            }
+        }
+        done = true; dots.cancel()
+        app.zenTyping.remove(chat.id)
+        val (code, all) = res.getOrElse { 0 to "" }
+        val j = if (all.trimStart().startsWith("{")) runCatching { JSONObject(all) }.getOrNull() else null
+        when {
+            j?.optBoolean("asleep") == true -> {}
+            j?.optBoolean("blocked") == true -> app.say("Not delivered")
+            code !in 200..299 || full.isBlank() -> app.say("Zenith is not reachable right now. Try again")
+            else -> {
+                // a few lines are a few texts, one after the other
+                val texts = full.split(Regex("\\n+")).map { it.trim() }.filter { it.isNotEmpty() }.take(3)
+                val now = System.currentTimeMillis()
+                texts.forEachIndexed { i, t ->
+                    val msg = if (i == 0) ai.also { it.text = t; it.t = now } else LMsg(replyId + "-" + (i + 1), t, now + i, emptyList(), ai = true)
+                    app.zenNoAnim.add(msg.id)
+                    chat.msgs.add(msg)
+                }
+                app.persist(); zenSyncSoon()
+                app.ctx?.let { c -> if (!app.foreground) Notify.show(c, "Zenith", texts.first().take(180), "ztext", replyId.hashCode()) }
+            }
+        }
+        app.zenVersion++
+    }
 }

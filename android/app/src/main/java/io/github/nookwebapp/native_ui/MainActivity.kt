@@ -346,17 +346,18 @@ class MainActivity : ComponentActivity() {
     private fun getUpdate(quiet: Boolean = false) {
         // one bar for both parts: the download fills the first 80 percent, the install the rest
         app.updBusy = true
-        if (!quiet) { app.updPhase = "Downloading the update"; app.updProgress = 0f }
+        // the bar shows for an automatic update too (only the error messages are left out then): the app restarts when it is installed
+        app.updPhase = "Downloading the update"; app.updProgress = 0f
         Thread {
             // a try that fails (a slow start, a cut line) is made once more before it is called a failure
             var f: File? = null
             for (n in 0 until 2) {
                 if (f != null) break
-                f = runCatching { Updater.download(this) { p -> if (!quiet) runOnUiThread { app.updProgress = if (p < 0f) -1f else p * 0.8f } } }.getOrNull()
+                f = runCatching { Updater.download(this) { p -> runOnUiThread { app.updProgress = if (p < 0f) -1f else p * 0.8f } } }.getOrNull()
                 if (f == null && n == 0) Thread.sleep(1500)
             }
             if (f == null) { runOnUiThread { app.updProgress = null; app.updBusy = false; if (!quiet) app.say("Could not download the update. Try again") }; return@Thread }
-            if (!quiet) runOnUiThread { app.updPhase = "Installing the update"; app.updProgress = 0.8f; creepInstall() }
+            runOnUiThread { app.updPhase = "Installing the update"; app.updProgress = 0.8f; creepInstall() }
             // the apk is written into the installer on this thread, not on the screen's, so the bar keeps moving meanwhile
             val ok = runCatching { Updater.install(this, f) }.getOrDefault(false)
             if (!ok) runOnUiThread { app.updProgress = null; app.updBusy = false; app.say("Allow Nook to install the update, then tap Update now again") }

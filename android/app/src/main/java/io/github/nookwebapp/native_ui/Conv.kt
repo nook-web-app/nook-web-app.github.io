@@ -336,7 +336,9 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onDouble: (() -> U
             val glow by androidx.compose.animation.core.animateFloatAsState(if (flash) 1f else 0f, tween(if (flash) 220 else 700), label = "glow")
             Box(
                 Modifier.padding(top = if (m.imgs.isNotEmpty() || url != null || m.rpost != null) 4.dp else 0.dp).bubbleFx(fx, left).widthIn(max = w * 0.82f)
-                    .graphicsLayer { val k = 1f + 0.035f * glow; scaleX = k; scaleY = k }.clip(shape).background(if (left) c.bg2 else c.accent).then(if (left) Modifier.border(1.dp, c.line, shape) else Modifier).border(2.dp, (if (left) c.accent else Color.White).copy(alpha = 0.9f * glow), shape).padding(start = 14.dp, end = 14.dp, top = if (rp != null) 6.dp else 9.dp, bottom = 9.dp),
+                    .clip(shape).background(if (left) c.bg2 else c.accent)
+                    // one border for both: his has its thin line, and the highlight grows it to 2dp in the accent colour; mine grows from nothing to 2dp in white
+                    .border((if (left) 1f + glow else 2f * glow).dp, if (left) androidx.compose.ui.graphics.lerp(c.line, c.accent, glow) else Color.White.copy(alpha = glow), shape).padding(start = 14.dp, end = 14.dp, top = if (rp != null) 6.dp else 9.dp, bottom = 9.dp),
             ) {
                 Column {
                     // the message this one answers: one faded line, a tap takes you to it

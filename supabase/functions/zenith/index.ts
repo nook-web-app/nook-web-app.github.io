@@ -1,5 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { fetchImage } from "../_shared/preview.ts";
+import { fetchImage, pagePreview } from "../_shared/preview.ts";
 import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
 import { peekForSearch, type CallAsk } from "../_shared/chatstream.ts";
 import { ringPhone } from "../_shared/ring.ts";
@@ -208,7 +208,7 @@ async function chatFailed(model: string, status: number, said: string) {
 }
 // the answer of the first model that gives one (or its request for a search). Whatever goes wrong with a model (used up, refuses, not found,
 // bad request, broken, no words in its answer) hands over to the next one; null only when every model is out
-async function gemini(key: string, system: unknown, history: unknown, stream: boolean, tools: boolean | "search" = false, budgetMs = 60000, chain = CHAIN, firstMs = 15000): Promise<{ res: Response | null; search: { query: string } | null; call: CallAsk | null }> {
+async function gemini(key: string, system: unknown, history: unknown, stream: boolean, tools: boolean | "search" = false, budgetMs = 60000, chain = CHAIN, firstMs = 15000, think0 = "minimal"): Promise<{ res: Response | null; search: { query: string } | null; call: CallAsk | null }> {
   // the whole chain gives up after 60 seconds, and one model after 15 seconds without its first words, so a slow model never holds the chat for minutes
   const deadline = Date.now() + budgetMs;
   for (const { model, limit } of chain) {
@@ -239,7 +239,7 @@ async function gemini(key: string, system: unknown, history: unknown, stream: bo
       // a 400 may mean the model takes no tools or does not take that thinking level: it is asked again without the tool first, then with a
       // lower thinking level, and what was learned is kept for the next messages
       let tl = tools && !noTools.has(model);
-      let lv = level[model] === undefined ? "minimal" : level[model];
+      let lv = level[model] === undefined ? think0 : level[model];
       let r = await call(lv, tl);
       if (!r) continue;
       if (r.status === 400 && tl) { noTools.add(model); tl = false; r = await call(lv, false); if (!r) continue; }
@@ -272,7 +272,27 @@ async function zenId(): Promise<string> {
 }
 // his chat is answered by the quick models first (a slow one that does not answer in 9 seconds is skipped), so a message is not left waiting;
 // the big ones come last as a fallback. Changeable with the secret ZENITH_DM_MODELS ("model:limit,model:limit").
-const DM_CHAIN = parseChain(Deno.env.get("ZENITH_DM_MODELS") || "gemini-3.5-flash-lite:500,gemini-3.6-flash:20,gemini-3.8-flash:20");
+const DM_CHAIN = parseChain(Deno.env.get("ZENITH_DM_MODELS") || "gemini-3.6-flash:20,gemini-3.5-flash-lite:500,gemini-3.8-flash:20");
+// links in his chat: what the page says (title, description, its picture) is read for him, so he knows what he was sent. A link that cannot be
+// read (a private reel, a login wall) is said so, and he is told not to pretend. Big videos and files are not opened.
+async function linkNotes(text: string): Promise<{ note: string; pics: unknown[] }> {
+  const urls = [...new Set((text.match(/https?:\/\/[^\s<>"]+/gi) || []).map((u) => u.replace(/[.,!?)\]]+$/, "")))].slice(0, 2);
+  if (!urls.length) return { note: "", pics: [] };
+  const notes: string[] = [], pics: unknown[] = [];
+  await Promise.all(urls.map(async (u) => {
+    let host = "";
+    try { host = new URL(u).hostname.replace(/^www\./, ""); } catch { return; }
+    if (/\.(mp4|mov|mkv|webm|avi|zip|rar|7z|apk|exe|iso)(\?|#|$)/i.test(u)) { notes.push("(He sent a link to a file or a video (" + host + ") that you cannot open or watch. Say so if it matters.)"); return; }
+    if (/\.(jpe?g|png|webp|gif)(\?|#|$)/i.test(u)) { const p = await fetchPic(u).catch(() => null); if (p) { pics.push(p); notes.push("(He sent a link to a picture (" + host + "), it is attached.)"); } return; }
+    const pv = await Promise.race([pagePreview(u).catch(() => null), new Promise<null>((res) => setTimeout(() => res(null), 7000))]);
+    const t = pv ? [pv.title, pv.description].filter(Boolean).join(" - ").replace(/\s+/g, " ").slice(0, 500) : "";
+    const blocked = !t || /^(log ?in|sign ?in|instagram|facebook|tiktok)$/i.test((pv && pv.title) || "") || /(log in|login|sign up|are you a robot|enable javascript)/i.test(t.slice(0, 120));
+    if (blocked) { notes.push("(He sent a link (" + host + ") that could not be opened (probably a login wall), so you do NOT know what is in it. Do not pretend you saw it: say you cannot open it and ask him what it is.)"); return; }
+    notes.push("(He sent a link to " + ((pv && pv.site) || host) + ". The page says: " + t + ". You only know this much, not the whole video or page, so do not invent more.)");
+    if (pv && pv.image) { const p = await fetchPic(pv.image).catch(() => null); if (p) pics.push(p); }
+  }));
+  return { note: notes.join(" "), pics };
+}
 // how many messages he reads when he answers in his chat: 100 normally; when the model is slow (a long context makes it slower) the number
 // goes down until it is fast again, and it comes back up when the answers are quick. The notebook keeps what the older messages said.
 let dmCtx = 100;
@@ -528,17 +548,19 @@ Deno.serve(async (req) => {
       if (!last || last.role !== "user") return json({ mode: "now", texts: [], wait: 0, calls });
       const pics = Array.isArray(body.parts) ? (body.parts as { inline_data?: unknown }[]).filter((p) => p && p.inline_data).slice(0, 2) : [];
       if (pics.length) last.parts.push(...pics);
+      // the links of his newest message are read for him
+      try { const ln = await linkNotes(String(newest && !newest.ai ? newest.text : "")); if (ln.note) last.parts.push({ text: ln.note }); if (ln.pics.length) last.parts.push(...ln.pics); } catch { /* no link info */ }
       const system = persona(st, pages, tz, "text", lastBefore, act) + SEARCH_HELP + REPLY_HELP + (calls ? CALL_HELP : "");
       const t0 = Date.now();
-      let got = await gemini(key, system, history, false, calls ? true : "search", 28000, DM_CHAIN, 9000);
+      let got = await gemini(key, system, history, false, calls ? true : "search", 28000, DM_CHAIN, 9000, "low");
       if (got.call) {
         const mins = await planCall(got.call);
         last.parts.push({ text: mins < 0 ? "(You do not want to call him yet. Tell him in your own way.)" : "(The phone call is arranged: it will ring his phone " + (mins <= 1 ? "in a few seconds" : "in about " + mins + " minutes") + ". Answer with only a few words, like ok, sure, or calling you in a sec. Do not say what the call will be about unless he asked. Do not use any tool now.)" });
-        got = await gemini(key, system, history, false, false, 28000, DM_CHAIN, 9000);
+        got = await gemini(key, system, history, false, false, 28000, DM_CHAIN, 9000, "low");
       } else if (got.search) {
         const first = last.parts.find((p: { text?: unknown }) => p && typeof p.text === "string") as { text: string } | undefined;
         last.parts.push({ text: await searchNote(got.search.query || (first ? first.text.slice(0, 200) : "the latest news")) });
-        got = await gemini(key, system, history, false, false, 28000, DM_CHAIN, 9000);
+        got = await gemini(key, system, history, false, false, 28000, DM_CHAIN, 9000, "low");
       }
       tuneCtx(Date.now() - t0);
       // every model is busy right now: he is not "unreachable", he just answers a little later (the minute job does it)
@@ -550,7 +572,9 @@ Deno.serve(async (req) => {
         text = parts.filter((p: { thought?: boolean }) => !p.thought).map((p: { text?: string }) => p.text || "").join("");
       } catch { /* no answer */ }
       // he decides how many texts he sends (up to 8)
-      const all = text.split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 10).map((x) => pickReply(x, recent));
+      // a lone ~ means he has nothing to say to that (the chat is over, a plain ok): nothing is sent
+      const silent = /^~+$/.test(text.trim());
+      const all = silent ? [] : text.split(/\n+/).map((x) => x.trim()).filter((x) => x && !/^~+$/.test(x)).slice(0, 10).map((x) => pickReply(x, recent));
       const parsed = all.filter((x) => x.text).slice(0, 8);
       const texts = parsed.map((x) => x.text);
       // likes he gave to his messages: kept in the memory of the chat too
@@ -560,6 +584,7 @@ Deno.serve(async (req) => {
         if (src) await admin.from("zenith_docs").update({ data: { ai: false, text: src.text, t: src.t, kind: src.kind || "text", liked: true }, updated_at: new Date().toISOString() }).eq("owner_id", owner).eq("kind", "state").eq("doc_id", "ml:" + lid);
       }
       // no words came back (the model had a bad moment): he tries again in a minute instead of leaving the message unanswered
+      if (silent) { st.pending = null; await saveState(admin, owner, st); return json({ mode: "now", wait: 0, texts: [], ids: [], likes: [], cps: typingCps(now), calls }); }
       if (!texts.length && likes.length) return json({ mode: "now", wait: Math.max(0, seeAt - now), texts: [], ids: [], likes, cps: typingCps(now), calls });
       if (!texts.length) { st.pending = { seeAt: Date.now() + 60000, since: st.pending ? st.pending.since : now }; await saveState(admin, owner, st); return json({ mode: "later", calls }); }
       const replyId = typeof body.replyId === "string" && /^[\w-]{6,40}$/.test(body.replyId) ? body.replyId : crypto.randomUUID();

@@ -119,7 +119,7 @@ fun cutText(text: String, n: Int): String {
 
 // .tx: the words of a post; taps on a link or a tag open it, a tap anywhere else falls through to the post
 @Composable
-fun Tx(text: String, big: Boolean = false, modifier: Modifier = Modifier, onTap: (() -> Unit)? = null, onLong: (() -> Unit)? = null, color: Color? = null, linkColor: Color? = null, cut: Boolean = true, edited: Boolean = false) {
+fun Tx(text: String, big: Boolean = false, modifier: Modifier = Modifier, onTap: (() -> Unit)? = null, onLong: (() -> Unit)? = null, color: Color? = null, linkColor: Color? = null, cut: Boolean = true, edited: Boolean = false, onDouble: (() -> Unit)? = null) {
     val app = LocalApp.current
     val c = LocalNook.current
     val uri = LocalUriHandler.current
@@ -139,7 +139,7 @@ fun Tx(text: String, big: Boolean = false, modifier: Modifier = Modifier, onTap:
     Column(modifier) {
         Text(
             ann, Modifier.pointerInput(ann) {
-                detectTapGestures(onLongPress = { onLong?.invoke() }) { pos ->
+                detectTapGestures(onLongPress = { onLong?.invoke() }, onDoubleTap = onDouble?.let { d -> { _: androidx.compose.ui.geometry.Offset -> d() } }) { pos ->
                     val l = layout ?: return@detectTapGestures
                     val o = l.getOffsetForPosition(pos)
                     ann.getStringAnnotations("tag", o, o).firstOrNull()?.let { app.go(Route.Tag(it.item)); return@detectTapGestures }

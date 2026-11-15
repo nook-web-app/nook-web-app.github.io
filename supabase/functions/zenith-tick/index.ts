@@ -236,7 +236,7 @@ function hourIn(tz: string, t: number): number {
 }
 // his texts go out one by one, a moment apart, like someone typing; each one is kept in his memory
 async function sendTexts(owner: string, raw: string, pro: boolean, recent: Entry[] = [], max = 8): Promise<number> {
-  const texts = raw.split(/\n+/).map((t) => t.replace(/^["'\s-]+|["'\s]+$/g, "").trim()).filter((t) => t.length > 0 && !/^\(.*\)$/.test(t)).slice(0, max).map((t) => pickReply(t, recent)).filter((t) => t.text);
+  const texts = raw.split(/\n+/).map((t) => t.replace(/^["'\s-]+|["'\s]+$/g, "").trim()).filter((t) => t.length > 0 && !/^\(.*\)$/.test(t) && !/^~+$/.test(t)).slice(0, max).map((t) => pickReply(t, recent)).filter((t) => t.text);
   let sent = 0;
   for (const t of texts) {
     const id = crypto.randomUUID();
@@ -257,6 +257,14 @@ let zenCloseness = 50;
 // deno-lint-ignore no-explicit-any
 async function mindTick(owner: string, zen: string, docs: { doc_id: string; data: any }[]) {
   const now = Date.now();
+  // ONE TIME (asked by the owner): his memory starts over. It is done once for good: a row says it was done (a daily counter would repeat it)
+  const done3 = await admin.from("zenith_docs").select("doc_id").eq("owner_id", owner).eq("kind", "state").eq("doc_id", "reset3").maybeSingle();
+  if (!done3.error && !done3.data) {
+    for (const pre of ["ml:%", "pic:%", "cp:%"]) await admin.from("zenith_docs").delete().eq("owner_id", owner).eq("kind", "state").like("doc_id", pre);
+    await admin.from("zenith_docs").delete().eq("owner_id", owner).eq("kind", "state").in("doc_id", ["mind", "notebook"]);
+    await setFollow(owner, zen, false); await setBlock(owner, zen, false);
+    await admin.from("zenith_docs").upsert({ owner_id: owner, kind: "state", doc_id: "reset3", data: { at: Date.now() }, updated_at: new Date().toISOString() }, { onConflict: "owner_id,kind,doc_id" });
+  }
   // once a day: files in storage that nothing uses any more are put in quarantine for 14 days (and the quarantine is emptied)
   if (await useModel(admin, "sweep-day", 1)) sweepStorage().catch(() => {});
   const st = await loadState(admin, owner);

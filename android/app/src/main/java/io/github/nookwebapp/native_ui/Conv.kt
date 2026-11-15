@@ -169,7 +169,7 @@ private fun ConvScreenBody(id: String) {
             items(chat.msgs.drop(shownFrom), key = { it.id }) { m ->
                 // pulling one of Zenith's messages to the right starts an answer to him
                 val anim = remember(m.id) { if (m.id in had || m.id in app.zenNoAnim) MsgAnim.None else if (m.ai) MsgAnim.In else MsgAnim.Send }
-                FoldAway(m.leaving) { Box(Modifier.padding(bottom = 6.dp).msgIn(anim, !m.ai)) { SwipeBubble(left = m.ai, canReply = m.ai, onReply = { if (isZ) replyHook[0]?.invoke(m) else fill[0]?.invoke("@zenith ") }, onTime = { open = if (open == m.id) null else m.id }) { Bubble(m, open == m.id, onTap = {}, flash = flashId == m.id, onQuote = { rid -> jumpTo(rid) }, onDouble = if (isZ && m.ai) ({ m.liked = !m.liked; app.persist(); app.scope.launch { runCatching { Sb.fn("zenith", org.json.JSONObject().put("action", "like").put("id", m.id).put("on", m.liked)) } } }) else null) {
+                FoldAway(m.leaving) { Box(Modifier.padding(bottom = 6.dp).msgIn(anim, !m.ai)) { SwipeBubble(left = m.ai, canReply = m.ai, onReply = { if (isZ) replyHook[0]?.invoke(m) else fill[0]?.invoke("@zenith ") }, onTime = { open = if (open == m.id) null else m.id }) { Bubble(m, open == m.id, onTap = {}, flash = flashId == m.id, onQuote = { rid -> jumpTo(rid) }, onDouble = if (isZ) ({ m.liked = !m.liked; app.persist(); app.scope.launch { runCatching { Sb.fn("zenith", org.json.JSONObject().put("action", "like").put("id", m.id).put("on", m.liked)) } } }) else null) {
                     app.open(listOfNotNull(
                         if (isZ) SheetItem("Reply", "reply") { replyHook[0]?.invoke(m) } else null,
                         if (m.text.isNotEmpty()) SheetItem("Copy message", "copy") { app.clipboard(m.text) } else null,
@@ -364,7 +364,7 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onDouble: (() -> U
                         Modifier.padding(bottom = 1.dp).widthIn(max = 230.dp).clip(RoundedCornerShape(4.dp)).then(if (onQuote != null) Modifier.pointerInput(rp.id) { detectTapGestures(onTap = { onQuote(rp.id) }) } else Modifier),
                         color = (if (left) c.fg else Color.White).copy(alpha = 0.6f), fontSize = 12.5.sp, lineHeight = 17.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     )
-                    Tx(m.text, color = if (left) c.fg else c.on, linkColor = if (left) null else Color.White, onTap = tap, onLong = onLong, cut = false)
+                    Tx(m.text, color = if (left) c.fg else c.on, linkColor = if (left) null else Color.White, onTap = tap, onLong = onLong, cut = false, onDouble = onDouble)
                 }
             }
         }

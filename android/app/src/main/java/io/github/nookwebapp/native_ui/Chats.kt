@@ -1,5 +1,6 @@
 package io.github.nookwebapp.native_ui
 
+import androidx.compose.foundation.gestures.animateScrollBy
 import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.rotate
@@ -293,6 +294,16 @@ fun rememberAtBottom(list: androidx.compose.foundation.lazy.LazyListState): Stat
 
 // keeps the view on the newest message while the new one (or the typing row, or a message folding away) changes its height,
 // so the chat moves once, smoothly, and not "to the place, stop, a little more"
+// the way down to the newest message is one smooth glide: a far one is first brought near (at once), then it eases the rest of the way
+suspend fun androidx.compose.foundation.lazy.LazyListState.glideToBottom() {
+    val n = layoutInfo.totalItemsCount
+    if (n == 0) return
+    if (n - 1 - firstVisibleItemIndex > 8) scrollToItem(maxOf(0, n - 7))
+    val last = layoutInfo.visibleItemsInfo.lastOrNull()
+    val remaining = if (last != null && last.index == n - 1) (last.offset + last.size - layoutInfo.viewportEndOffset).toFloat() else 1500f
+    if (remaining > 0f) animateScrollBy(remaining, tween(420, easing = androidx.compose.animation.core.FastOutSlowInEasing))
+    pinBottom(120)
+}
 suspend fun androidx.compose.foundation.lazy.LazyListState.pinBottom(ms: Long = 380) {
     val end = System.nanoTime() + ms * 1_000_000
     while (System.nanoTime() < end) {
@@ -319,25 +330,16 @@ fun ToBottomButton(list: androidx.compose.foundation.lazy.LazyListState, unread:
     }
     var show by remember { mutableStateOf(false) }
     LaunchedEffect(list) { snapshotFlow { far }.collectLatest { f -> if (f) { kotlinx.coroutines.delay(400); show = true } else show = false } }
-    androidx.compose.animation.AnimatedVisibility(show, modifier = modifier,
-        enter = fadeIn(tween(180)) + androidx.compose.animation.scaleIn(androidx.compose.animation.core.spring(androidx.compose.animation.core.Spring.DampingRatioMediumBouncy, androidx.compose.animation.core.Spring.StiffnessMedium), 0.4f) + androidx.compose.animation.slideInVertically(androidx.compose.animation.core.spring(androidx.compose.animation.core.Spring.DampingRatioLowBouncy, androidx.compose.animation.core.Spring.StiffnessMediumLow)) { it / 2 },
-        exit = fadeOut(tween(140)) + androidx.compose.animation.scaleOut(tween(160), 0.6f) + androidx.compose.animation.slideOutVertically(tween(160)) { it / 3 }) {
+    androidx.compose.animation.AnimatedVisibility(show, modifier = modifier, enter = fadeIn(tween(160)) + androidx.compose.animation.scaleIn(tween(160), 0.8f), exit = fadeOut(tween(140)) + androidx.compose.animation.scaleOut(tween(140), 0.8f)) {
         Box(Modifier.padding(end = 6.dp, bottom = 10.dp)) {
             Box(
                 Modifier.size(44.dp).shadow(14.dp, CircleShape, ambientColor = Color(0x38000000), spotColor = Color(0x38000000)).clip(CircleShape).background(c.bg2).border(1.dp, c.line, CircleShape)
                     .pressTap(CircleShape) {
-                        scope.launch {
-                            val n = list.layoutInfo.totalItemsCount
-                            if (n - 1 - list.firstVisibleItemIndex > 8) list.scrollToItem(maxOf(0, n - 6))
-                            list.animateScrollToItem(maxOf(0, n - 1))
-                            list.pinBottom(250)
-                        }
+                        scope.launch { list.glideToBottom() }
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                // the arrow bobs a little, so it is noticed
-                val bob by androidx.compose.animation.core.rememberInfiniteTransition(label = "bob").animateFloat(0f, 3f, androidx.compose.animation.core.infiniteRepeatable(tween(750), androidx.compose.animation.core.RepeatMode.Reverse), label = "bobv")
-                NIcon("back", 22.dp, c.fg, modifier = Modifier.rotate(-90f).graphicsLayer { translationY = bob.dp.toPx() })
+                NIcon("back", 22.dp, c.fg, modifier = Modifier.rotate(-90f))
             }
             if (unread > 0) Box(
                 Modifier.align(Alignment.BottomEnd).offset(x = 6.dp, y = 6.dp).defaultMinSize(minWidth = 22.dp, minHeight = 22.dp).clip(CircleShape).background(c.accent).padding(horizontal = 6.dp),

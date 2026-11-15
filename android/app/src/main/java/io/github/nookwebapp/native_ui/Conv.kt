@@ -123,7 +123,7 @@ private fun ConvScreenBody(id: String) {
         if (grew && !mine && !atBottom) unread += added
         // what I send always takes the view down; an answer or a delete only follows when the view is at the bottom already
         if (grew && mine) { list.scrollToItem(chat.msgs.size - shownFrom + 1); list.pinBottom() }
-        else if (atBottom) { if (grew) list.scrollToItem(chat.msgs.size - shownFrom + 1); list.pinBottom() }
+        else if (atBottom) { if (grew) list.glideToBottom() else list.pinBottom() }
     }
     KeepAtBottom(list)
     Page({

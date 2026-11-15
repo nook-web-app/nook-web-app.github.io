@@ -575,7 +575,8 @@ Deno.serve(async (req) => {
       // a lone ~ means he has nothing to say to that (the chat is over, a plain ok): nothing is sent
       const silent = /^~+$/.test(text.trim());
       const all = silent ? [] : text.split(/\n+/).map((x) => x.trim()).filter((x) => x && !/^~+$/.test(x)).slice(0, 10).map((x) => pickReply(x, recent));
-      const parsed = all.filter((x) => x.text).slice(0, 8);
+      // someone he barely knows gets one text, maybe two
+      const parsed = all.filter((x) => x.text).slice(0, st.closeness < 12 ? 1 : st.closeness < 25 ? 2 : 8);
       const texts = parsed.map((x) => x.text);
       // likes he gave to his messages: kept in the memory of the chat too
       const likes = [...new Set(all.map((x) => x.like).filter((x): x is string => !!x))];

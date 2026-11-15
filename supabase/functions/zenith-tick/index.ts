@@ -358,7 +358,7 @@ async function answerLate(owner: string, zen: string, st: MindState, recent: Ent
   if (!text) { st.pending = { seeAt: Date.now() + 120000, since }; await saveState(admin, owner, st); return true; }
   // the time it takes to type it
   await new Promise((res) => setTimeout(res, Math.min(12000, 1500 + text.length * 120)));
-  await sendTexts(owner, text, false, recent, 8);
+  await sendTexts(owner, text, false, recent, st.closeness < 12 ? 1 : st.closeness < 25 ? 2 : 8);
   return true;
 }
 

@@ -505,9 +505,9 @@ Deno.serve(async (req) => {
     const lastAi = [...recent].reverse().find((e) => e.ai);
     const life = lifeAt(now);
     // how eager he is about this person: someone new waits longer, and when he is hurt he takes his time
-    const eager = (0.6 + Math.min(1, st.closeness / 60) * 0.6) * (st.hurt >= 6 ? 0.3 : 1);
-    const engaged = !!lastAi && now - lastAi.t < 8 * 60000 && !life.asleep && life.att >= 0.02;
-    let seeAt = st.pending && st.pending.seeAt ? st.pending.seeAt : engaged ? now + (3 + Math.random() * 25) * 1000 : nextLook(now, eager);
+    const eager = (0.9 + Math.min(1, st.closeness / 60) * 0.6) * (st.hurt >= 6 ? 0.3 : 1);
+    const engaged = !!lastAi && now - lastAi.t < 15 * 60000 && !life.asleep && life.att >= 0.02;
+    let seeAt = st.pending && st.pending.seeAt ? st.pending.seeAt : engaged ? now + (1.5 + Math.random() * 7) * 1000 : nextLook(now, eager);
     if (seeAt < now) seeAt = now + 2000;
     if (seeAt - now > 45000) {
       st.pending = { seeAt, since: st.pending ? st.pending.since : now };

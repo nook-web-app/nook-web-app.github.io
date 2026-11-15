@@ -528,9 +528,9 @@ fun AppState.importZenTextsPolite() {
 // how long a text takes to type: at his speed (characters a second, from the server: it is slower when he is tired), a short moment to start,
 // and now and then a stall, like someone who stops to think
 fun typeMs(len: Int, cps: Double): Long {
-    val speed = if (cps > 0.5) cps else 2.6 + kotlin.random.Random.nextDouble() * 2.2
-    val stall = if (kotlin.random.Random.nextFloat() < 0.12f) 1500L + (kotlin.random.Random.nextFloat() * 2500).toLong() else 0L
-    return (700L + (len / speed * 1000).toLong() + stall).coerceAtMost(16_000L)
+    val speed = if (cps > 0.5) cps else 3.8 + kotlin.random.Random.nextDouble() * 2.4
+    val stall = if (kotlin.random.Random.nextFloat() < 0.06f) 1200L + (kotlin.random.Random.nextFloat() * 1800).toLong() else 0L
+    return (450L + (len / speed * 1000).toLong() + stall).coerceAtMost(12_000L)
 }
 private val zQueue = kotlinx.coroutines.sync.Mutex()
 suspend fun AppState.zenDeliver(items: List<JSONObject>) {
@@ -543,7 +543,9 @@ suspend fun AppState.zenDeliver(items: List<JSONObject>) {
             val text = e.optString("text")
             if (text.isBlank() || chat.msgs.any { it.id == id }) continue
             val ai = LMsg(id, "", System.currentTimeMillis(), emptyList(), ai = true)
-            if (foreground) {
+            // the dots only show for a text that is new: one that was written an hour ago and is only now found (the chat was opened) just appears
+            val fresh = e.optLong("t", 0L).let { it == 0L || System.currentTimeMillis() - it < 90_000L }
+            if (foreground && fresh) {
                 zenTyping[chat.id] = ai; zenVersion++
                 kotlinx.coroutines.delay(typeMs(text.length, e.optDouble("cps", 0.0)))
                 zenTyping.remove(chat.id)
@@ -555,7 +557,7 @@ suspend fun AppState.zenDeliver(items: List<JSONObject>) {
             zenNoAnim.add(id)
             chat.msgs.add(ai); chat.t = maxOf(chat.t, ai.t); any = true
             persist(); zenVersion++
-            if (foreground && i < items.lastIndex) kotlinx.coroutines.delay(500L + (kotlin.random.Random.nextFloat() * 1300).toLong())
+            if (foreground && fresh && i < items.lastIndex) kotlinx.coroutines.delay(300L + (kotlin.random.Random.nextFloat() * 700).toLong())
         }
         if (any) {
             chat.zc = true

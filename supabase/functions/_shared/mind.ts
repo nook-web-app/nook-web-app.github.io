@@ -122,11 +122,11 @@ export const REPLY_HELP = "\n\nHis newest messages are numbered like [#3]. When 
 // or half asleep, and it wobbles from text to text
 export function typingCps(t: number): number {
   const l = lifeAt(t), hour = localTime(t).h + localTime(t).m / 60;
-  let cps = 4.2;
+  let cps = 5.6;
   if (hour >= 1.5 && hour < 6 || hour >= 0 && hour < 1.5) cps *= 0.8;
   if (!l.asleep && l.m - l.plan.wake >= 0 && l.m - l.plan.wake < 75) cps *= 0.72;
   if (l.what.indexOf("bus") >= 0 || l.what.indexOf("walk") >= 0) cps *= 0.8;
-  return Math.max(1.6, cps * (0.72 + Math.random() * 0.6));
+  return Math.max(2.4, cps * (0.75 + Math.random() * 0.5));
 }
 export function asContents(list: Entry[], labels?: Map<string, number>): { role: string; parts: { text: string }[] }[] {
   const out: { role: string; parts: { text: string }[] }[] = [];

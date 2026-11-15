@@ -581,9 +581,12 @@ fun Online.zDm(chat: LChat, m: LMsg) {
         withContext(kotlinx.coroutines.Dispatchers.IO) { m.imgs.takeLast(2).mapNotNull { inline(it) } }.forEach { parts.put(it) }
         val body = JSONObject().put("action", "dm").put("recent", recent).put("parts", parts).put("replyId", uid())
             .put("tz", java.util.TimeZone.getDefault().id).put("name", app.store.profile.name).put("handle", app.store.profile.handle)
-        val r = runCatching { Keep.around(app.ctx) { Sb.fn("zenith", body, timeoutS = 90) } }.getOrNull()
+        // a failed try is made once more after a moment, quietly; only a missing connection is said out loud (a server hiccup is not shown: the
+        // message is saved, he answers it a little later and the chat fetches the answer)
+        var r = runCatching { Keep.around(app.ctx) { Sb.fn("zenith", body, timeoutS = 60) } }.getOrNull()
+        if (r == null || !r.ok || !r.body.has("mode")) { kotlinx.coroutines.delay(2500); r = runCatching { Keep.around(app.ctx) { Sb.fn("zenith", body, timeoutS = 60) } }.getOrNull() }
         val j = r?.body
-        if (r == null || !r.ok || j == null || !j.has("mode")) { app.say("Zenith is not reachable right now. Try again"); return@launch }
+        if (r == null || !r.ok || j == null || !j.has("mode")) { if (r == null || r.status == 0) app.say("Could not reach Zenith. Check your connection"); return@launch }
         if (j.has("calls")) { app.zCalls = j.optBoolean("calls"); app.saveZ() }
         when (j.optString("mode")) {
             "blocked" -> { app.zUndelivered = m.t; app.saveZ() }

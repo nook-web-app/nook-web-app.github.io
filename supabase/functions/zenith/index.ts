@@ -208,10 +208,10 @@ async function chatFailed(model: string, status: number, said: string) {
 }
 // the answer of the first model that gives one (or its request for a search). Whatever goes wrong with a model (used up, refuses, not found,
 // bad request, broken, no words in its answer) hands over to the next one; null only when every model is out
-async function gemini(key: string, system: unknown, history: unknown, stream: boolean, tools: boolean | "search" = false, budgetMs = 60000): Promise<{ res: Response | null; search: { query: string } | null; call: CallAsk | null }> {
+async function gemini(key: string, system: unknown, history: unknown, stream: boolean, tools: boolean | "search" = false, budgetMs = 60000, chain = CHAIN, firstMs = 15000): Promise<{ res: Response | null; search: { query: string } | null; call: CallAsk | null }> {
   // the whole chain gives up after 60 seconds, and one model after 15 seconds without its first words, so a slow model never holds the chat for minutes
   const deadline = Date.now() + budgetMs;
-  for (const { model, limit } of CHAIN) {
+  for (const { model, limit } of chain) {
     if (Date.now() > deadline) break;
     if ((resting[model] || 0) > Date.now()) continue;
     const url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + (stream ? ":streamGenerateContent?alt=sse" : ":generateContent");
@@ -221,7 +221,7 @@ async function gemini(key: string, system: unknown, history: unknown, stream: bo
       if (!(await useModel(admin, model, limit))) return null;
       clearTimeout(timer);
       const ctl = new AbortController();
-      timer = setTimeout(() => ctl.abort(), 15000);
+      timer = setTimeout(() => ctl.abort(), firstMs);
       return await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json", "x-goog-api-key": key },
@@ -270,6 +270,9 @@ async function zenId(): Promise<string> {
   zenIdCache = data ? (data.id as string) : "";
   return zenIdCache;
 }
+// his chat is answered by the quick models first (a slow one that does not answer in 9 seconds is skipped), so a message is not left waiting;
+// the big ones come last as a fallback. Changeable with the secret ZENITH_DM_MODELS ("model:limit,model:limit").
+const DM_CHAIN = parseChain(Deno.env.get("ZENITH_DM_MODELS") || "gemini-3.5-flash-lite:500,gemini-3.6-flash:20,gemini-3.8-flash:20");
 // how many messages he reads when he answers in his chat: 100 normally; when the model is slow (a long context makes it slower) the number
 // goes down until it is fast again, and it comes back up when the answers are quick. The notebook keeps what the older messages said.
 let dmCtx = 100;
@@ -483,83 +486,92 @@ Deno.serve(async (req) => {
   // away ("now", with the moment he saw it, so it can show Seen and then the typing), or "later": the minute job sends the answer by push when
   // he gets to it. When he needs space, nothing is delivered.
   if (body.action === "dm") {
-    const key = await geminiKey();
-    if (!key) return json({ error: "no gemini key in the vault" }, 500);
-    const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
-    if (!o) return json({ error: "no owner" }, 500);
-    const owner = o.user_id as string;
-    const tz = typeof body.tz === "string" && /^[A-Za-z_]+(\/[A-Za-z0-9_+-]+){1,2}$/.test(body.tz) ? body.tz : "";
-    const rec = Array.isArray(body.recent) ? (body.recent as Entry[]).slice(-30) : [];
-    // the new message gets the server's time, so a phone clock that is off never puts it before his last answer
-    const newest = rec[rec.length - 1];
-    const now = Date.now();
-    if (newest && !newest.ai) newest.t = now;
-    const [, st] = await Promise.all([logEntries(admin, owner, rec), loadState(admin, owner)]);
-    const name = typeof body.name === "string" ? body.name.trim().slice(0, 60) : "", handle = typeof body.handle === "string" ? body.handle.trim().slice(0, 40) : "";
-    if (name) st.name = name;
-    if (handle) st.handle = handle;
-    const calls = st.allowCalls && !(st.blockedUntil > now);
-    if (st.blockedUntil > now) { await saveState(admin, owner, st); return json({ mode: "blocked", calls: false }); }
-    // everything he needs is read at the same time
-    const [recent, pages, act] = await Promise.all([recentEntries(admin, owner, dmCtx), loadNotebook(admin, owner), zenId().then((z) => activity(admin, owner, z))]);
-    const lastAi = [...recent].reverse().find((e) => e.ai);
-    const life = lifeAt(now);
-    // how eager he is about this person: someone new waits longer, and when he is hurt he takes his time
-    const eager = (0.9 + Math.min(1, st.closeness / 60) * 0.6) * (st.hurt >= 6 ? 0.3 : 1);
-    const engaged = !!lastAi && now - lastAi.t < 15 * 60000 && !life.asleep && life.att >= 0.02;
-    let seeAt = st.pending && st.pending.seeAt ? st.pending.seeAt : engaged ? now + (1.5 + Math.random() * 7) * 1000 : nextLook(now, eager);
-    if (seeAt < now) seeAt = now + 2000;
-    if (seeAt - now > 45000) {
-      st.pending = { seeAt, since: st.pending ? st.pending.since : now };
-      await saveState(admin, owner, st);
-      return json({ mode: "later", calls });
-    }
-    st.pending = null;
-    await saveState(admin, owner, st);
-    const lastBefore = recent.length > 1 ? recent[recent.length - 2].t : 0;
-    // deno-lint-ignore no-explicit-any
-    const history: any[] = asContents(recent, labelsOf(recent));
-    const last = history[history.length - 1];
-    if (!last || last.role !== "user") return json({ mode: "now", texts: [], wait: 0, calls });
-    const pics = Array.isArray(body.parts) ? (body.parts as { inline_data?: unknown }[]).filter((p) => p && p.inline_data).slice(0, 2) : [];
-    if (pics.length) last.parts.push(...pics);
-    const system = persona(st, pages, tz, "text", lastBefore, act) + SEARCH_HELP + REPLY_HELP + (calls ? CALL_HELP : "");
-    const t0 = Date.now();
-    let got = await gemini(key, system, history, false, calls ? true : "search", 30000);
-    if (got.call) {
-      const mins = await planCall(got.call);
-      last.parts.push({ text: mins < 0 ? "(You do not want to call him yet. Tell him in your own way.)" : "(The phone call is arranged: it will ring his phone " + (mins <= 1 ? "in a few seconds" : "in about " + mins + " minutes") + ". Answer with only a few words, like ok, sure, or calling you in a sec. Do not say what the call will be about unless he asked. Do not use any tool now.)" });
-      got = await gemini(key, system, history, false, false, 30000);
-    } else if (got.search) {
-      const first = last.parts.find((p: { text?: unknown }) => p && typeof p.text === "string") as { text: string } | undefined;
-      last.parts.push({ text: await searchNote(got.search.query || (first ? first.text.slice(0, 200) : "the latest news")) });
-      got = await gemini(key, system, history, false, false, 30000);
-    }
-    tuneCtx(Date.now() - t0);
-    if (!got.res) return json({ error: "Zenith is resting. Try again later." }, 503);
-    let text = "";
+    // anything that goes wrong inside is not shown as an error: the message is already in his memory, so he answers it a little later
     try {
-      const j = await got.res.json();
-      const parts = (j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || [];
-      text = parts.filter((p: { thought?: boolean }) => !p.thought).map((p: { text?: string }) => p.text || "").join("");
-    } catch { /* no answer */ }
-    // he decides how many texts he sends (up to 8)
-    const all = text.split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 10).map((x) => pickReply(x, recent));
-    const parsed = all.filter((x) => x.text).slice(0, 8);
-    const texts = parsed.map((x) => x.text);
-    // likes he gave to his messages: kept in the memory of the chat too
-    const likes = [...new Set(all.map((x) => x.like).filter((x): x is string => !!x))];
-    for (const lid of likes) {
-      const src = recent.find((e) => e.id === lid);
-      if (src) await admin.from("zenith_docs").update({ data: { ai: false, text: src.text, t: src.t, kind: src.kind || "text", liked: true }, updated_at: new Date().toISOString() }).eq("owner_id", owner).eq("kind", "state").eq("doc_id", "ml:" + lid);
+    const key = await geminiKey();
+      if (!key) return json({ error: "no gemini key in the vault" }, 500);
+      const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
+      if (!o) return json({ error: "no owner" }, 500);
+      const owner = o.user_id as string;
+      const tz = typeof body.tz === "string" && /^[A-Za-z_]+(\/[A-Za-z0-9_+-]+){1,2}$/.test(body.tz) ? body.tz : "";
+      const rec = Array.isArray(body.recent) ? (body.recent as Entry[]).slice(-30) : [];
+      // the new message gets the server's time, so a phone clock that is off never puts it before his last answer
+      const newest = rec[rec.length - 1];
+      const now = Date.now();
+      if (newest && !newest.ai) newest.t = now;
+      const [, st] = await Promise.all([logEntries(admin, owner, rec), loadState(admin, owner)]);
+      const name = typeof body.name === "string" ? body.name.trim().slice(0, 60) : "", handle = typeof body.handle === "string" ? body.handle.trim().slice(0, 40) : "";
+      if (name) st.name = name;
+      if (handle) st.handle = handle;
+      const calls = st.allowCalls && !(st.blockedUntil > now);
+      if (st.blockedUntil > now) { await saveState(admin, owner, st); return json({ mode: "blocked", calls: false }); }
+      // everything he needs is read at the same time
+      const [recent, pages, act] = await Promise.all([recentEntries(admin, owner, dmCtx), loadNotebook(admin, owner), zenId().then((z) => activity(admin, owner, z))]);
+      const lastAi = [...recent].reverse().find((e) => e.ai);
+      const life = lifeAt(now);
+      // how eager he is about this person: someone new waits longer, and when he is hurt he takes his time
+      const eager = (0.9 + Math.min(1, st.closeness / 60) * 0.6) * (st.hurt >= 6 ? 0.3 : 1);
+      const engaged = !!lastAi && now - lastAi.t < 15 * 60000 && !life.asleep && life.att >= 0.02;
+      let seeAt = st.pending && st.pending.seeAt ? st.pending.seeAt : engaged ? now + (1.5 + Math.random() * 7) * 1000 : nextLook(now, eager);
+      if (seeAt < now) seeAt = now + 2000;
+      if (seeAt - now > 45000) {
+        st.pending = { seeAt, since: st.pending ? st.pending.since : now };
+        await saveState(admin, owner, st);
+        return json({ mode: "later", calls });
+      }
+      st.pending = null;
+      await saveState(admin, owner, st);
+      const lastBefore = recent.length > 1 ? recent[recent.length - 2].t : 0;
+      // deno-lint-ignore no-explicit-any
+      const history: any[] = asContents(recent, labelsOf(recent));
+      const last = history[history.length - 1];
+      if (!last || last.role !== "user") return json({ mode: "now", texts: [], wait: 0, calls });
+      const pics = Array.isArray(body.parts) ? (body.parts as { inline_data?: unknown }[]).filter((p) => p && p.inline_data).slice(0, 2) : [];
+      if (pics.length) last.parts.push(...pics);
+      const system = persona(st, pages, tz, "text", lastBefore, act) + SEARCH_HELP + REPLY_HELP + (calls ? CALL_HELP : "");
+      const t0 = Date.now();
+      let got = await gemini(key, system, history, false, calls ? true : "search", 28000, DM_CHAIN, 9000);
+      if (got.call) {
+        const mins = await planCall(got.call);
+        last.parts.push({ text: mins < 0 ? "(You do not want to call him yet. Tell him in your own way.)" : "(The phone call is arranged: it will ring his phone " + (mins <= 1 ? "in a few seconds" : "in about " + mins + " minutes") + ". Answer with only a few words, like ok, sure, or calling you in a sec. Do not say what the call will be about unless he asked. Do not use any tool now.)" });
+        got = await gemini(key, system, history, false, false, 28000, DM_CHAIN, 9000);
+      } else if (got.search) {
+        const first = last.parts.find((p: { text?: unknown }) => p && typeof p.text === "string") as { text: string } | undefined;
+        last.parts.push({ text: await searchNote(got.search.query || (first ? first.text.slice(0, 200) : "the latest news")) });
+        got = await gemini(key, system, history, false, false, 28000, DM_CHAIN, 9000);
+      }
+      tuneCtx(Date.now() - t0);
+      // every model is busy right now: he is not "unreachable", he just answers a little later (the minute job does it)
+      if (!got.res) { st.pending = { seeAt: Date.now() + 25000, since: st.pending ? st.pending.since : now }; await saveState(admin, owner, st); return json({ mode: "later", calls }); }
+      let text = "";
+      try {
+        const j = await got.res.json();
+        const parts = (j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || [];
+        text = parts.filter((p: { thought?: boolean }) => !p.thought).map((p: { text?: string }) => p.text || "").join("");
+      } catch { /* no answer */ }
+      // he decides how many texts he sends (up to 8)
+      const all = text.split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 10).map((x) => pickReply(x, recent));
+      const parsed = all.filter((x) => x.text).slice(0, 8);
+      const texts = parsed.map((x) => x.text);
+      // likes he gave to his messages: kept in the memory of the chat too
+      const likes = [...new Set(all.map((x) => x.like).filter((x): x is string => !!x))];
+      for (const lid of likes) {
+        const src = recent.find((e) => e.id === lid);
+        if (src) await admin.from("zenith_docs").update({ data: { ai: false, text: src.text, t: src.t, kind: src.kind || "text", liked: true }, updated_at: new Date().toISOString() }).eq("owner_id", owner).eq("kind", "state").eq("doc_id", "ml:" + lid);
+      }
+      // no words came back (the model had a bad moment): he tries again in a minute instead of leaving the message unanswered
+      if (!texts.length && likes.length) return json({ mode: "now", wait: Math.max(0, seeAt - now), texts: [], ids: [], likes, cps: typingCps(now), calls });
+      if (!texts.length) { st.pending = { seeAt: Date.now() + 60000, since: st.pending ? st.pending.since : now }; await saveState(admin, owner, st); return json({ mode: "later", calls }); }
+      const replyId = typeof body.replyId === "string" && /^[\w-]{6,40}$/.test(body.replyId) ? body.replyId : crypto.randomUUID();
+      const ids = texts.map((_, i) => (i ? replyId + "-" + (i + 1) : replyId));
+      if (texts.length) await logEntries(admin, owner, parsed.map((x, i) => ({ id: ids[i], ai: true, text: x.text, t: Date.now() + i, ...(x.re ? { re: x.re } : {}) })));
+      return json({ mode: "now", wait: Math.max(0, seeAt - now), texts, ids, re: parsed.map((x) => x.re || null), likes, cps: typingCps(now), calls });
+  
+    } catch (e) {
+      try { const { data: o2 } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle(); if (o2) { const st2 = await loadState(admin, o2.user_id as string); st2.pending = { seeAt: Date.now() + 30000, since: Date.now() }; await saveState(admin, o2.user_id as string, st2); } } catch { /* nothing more to do */ }
+      try { await admin.rpc("nook_ai_full", { p_model: ("debug:dm:" + String((e as Error).message || e)).replace(/[^\w .,:'()-]+/g, " ").slice(0, 150), p_limit: 1 }); } catch { /* only a note */ }
+      return json({ mode: "later" });
     }
-    // no words came back (the model had a bad moment): he tries again in a minute instead of leaving the message unanswered
-    if (!texts.length && likes.length) return json({ mode: "now", wait: Math.max(0, seeAt - now), texts: [], ids: [], likes, cps: typingCps(now), calls });
-    if (!texts.length) { st.pending = { seeAt: Date.now() + 60000, since: st.pending ? st.pending.since : now }; await saveState(admin, owner, st); return json({ mode: "later", calls }); }
-    const replyId = typeof body.replyId === "string" && /^[\w-]{6,40}$/.test(body.replyId) ? body.replyId : crypto.randomUUID();
-    const ids = texts.map((_, i) => (i ? replyId + "-" + (i + 1) : replyId));
-    if (texts.length) await logEntries(admin, owner, parsed.map((x, i) => ({ id: ids[i], ai: true, text: x.text, t: Date.now() + i, ...(x.re ? { re: x.re } : {}) })));
-    return json({ mode: "now", wait: Math.max(0, seeAt - now), texts, ids, re: parsed.map((x) => x.re || null), likes, cps: typingCps(now), calls });
   }
   // the owner calls him: it rings first, and like a person he may not pick up (asleep, at work, phone away), or decline when he is not
   // comfortable with calls yet. A missed call is something he answers later, by text.

@@ -14,7 +14,9 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -93,9 +95,13 @@ private fun ConvScreenBody(id: String) {
             if (idx < 0) { app.say("That message is gone"); return@launch }
             if (idx < shownFrom) { shownFrom = maxOf(0, idx - 15); kotlinx.coroutines.delay(60) }
             val at = (if (chat.msgs.isEmpty()) 1 else 0) + (if (shownFrom > 0) 1 else 0) + (idx - shownFrom)
-            val here = list.firstVisibleItemIndex
-            if (kotlin.math.abs(at - here) > 12) list.scrollToItem(if (at > here) maxOf(0, at - 8) else at + 8)
-            list.animateScrollToItem(at, -list.layoutInfo.viewportEndOffset / 3)
+            // a message that is not on the screen is brought into it at once, then everything glides: the message ends a third of the way down.
+            // (animateScrollToItem to a far item jerks, because the heights of the messages in between are not known yet)
+            if (list.layoutInfo.visibleItemsInfo.none { it.index == at }) list.scrollToItem(at)
+            val item = snapshotFlow { list.layoutInfo.visibleItemsInfo.firstOrNull { it.index == at } }.first { it != null } ?: return@launch
+            val info = list.layoutInfo
+            val want = info.viewportStartOffset + (info.viewportEndOffset - info.viewportStartOffset) / 3
+            list.animateScrollBy((item.offset - want).toFloat(), tween(420))
             flashId = rid
             kotlinx.coroutines.delay(1100)
             if (flashId == rid) flashId = null

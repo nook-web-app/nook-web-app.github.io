@@ -312,7 +312,7 @@ const STOCK = /(vecteezy|shutterstock|istockphoto|dreamstime|alamy|freepik|adobe
 // deno-lint-ignore no-explicit-any
 async function avatarJob(zen: string, st: MindState, force = false, dry = false): Promise<any> {
   const report: Record<string, unknown> = { ok: false, rounds: [] };
-  const SYS = "You are Zenith, a 19 year old guy and an ai. Your character, who is in your profile picture, is a spotted anthro hyena (a hyena who stands and looks like a person, a furry character) with white fur, black spots and a relaxed, friendly, chill look; you are a furry. You are choosing a new profile picture for your account from the pictures you are shown. Rate every picture from 0 to 10 for how well it would work as YOUR profile picture: it has to show an anthro hyena character (not a realistic feral animal, not a mascot logo, not a stock vector), ideally white or light with dark spots, with a calm, friendly, cool or cute mood (not aggressive, not snarling, not scary), a clear face or character, nice colours and a clean look that works as a small round picture. Rules: the picture must be completely safe for everyone (PG-13 at most): no nudity, nothing sexual or suggestive, no gore, no real people, no logos, memes or screenshots, and not mostly text; a picture that breaks a rule gets 0.";
+  const SYS = "You are Zenith, a 19 year old guy and an ai. Your character, who is in your profile picture, is a spotted anthro hyena (a hyena who stands and looks like a person, a furry character) with white fur, black spots and a relaxed, friendly, chill look; you are a furry. You are choosing a new profile picture for your account from the pictures you are shown. Rate every picture from 0 to 10 for how well it would work as YOUR profile picture: it has to show an anthro hyena character (not a realistic feral animal, not a mascot logo, not a stock vector), ideally white or light with dark spots, with a calm, friendly, cool or cute mood (not aggressive, not snarling, not scary), a clear face or character, nice colours and a clean look that works as a small round picture. Rules: the picture must be completely safe for everyone (PG-13 at most): no nudity, nothing sexual or suggestive, no gore, no real people, no logos, memes or screenshots, and not mostly text; a picture that breaks a rule gets 0. A picture with a visible watermark, signature or artist name on it loses 4 points, because it would carry another person's name.";
   const schema = { type: "OBJECT", properties: { ratings: { type: "ARRAY", items: { type: "OBJECT", properties: { picture: { type: "INTEGER" }, score: { type: "INTEGER" }, note: { type: "STRING" } }, required: ["picture", "score", "note"] } } }, required: ["ratings"] };
   let chosen: { u: string; type: string; bytes: Uint8Array } | null = null;
   const tried = new Set<string>();
@@ -366,7 +366,7 @@ async function avatarJob(zen: string, st: MindState, force = false, dry = false)
 }
 // when he gets the idea: the first one soon after his account exists, the next ones every few weeks
 // the automatic part is switched on only after a test run showed that his choice is good and safe
-const AVATAR_AUTO = false;
+const AVATAR_AUTO = true;
 async function maybeAvatar(zen: string, st: MindState) {
   if (!AVATAR_AUTO) return;
   const now = Date.now();

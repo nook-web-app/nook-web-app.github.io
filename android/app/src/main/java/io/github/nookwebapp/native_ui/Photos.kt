@@ -223,19 +223,23 @@ fun Pic(path: String?, modifier: Modifier = Modifier, want: Int = 1280, scale: C
     )
 }
 
+// the round pictures that were shown at least once (by the hash of the address, so a long inline picture is not kept in memory)
+private val shownPics: MutableSet<Int> = java.util.Collections.synchronizedSet(HashSet<Int>())
+
 // a round picture (a profile photo): the color behind it is only drawn while there is no photo, so no ring of that
 // color shows through the photo's smoothed edge
 @Composable
 fun RoundPic(src: String?, size: androidx.compose.ui.unit.Dp, bg: androidx.compose.ui.graphics.Brush, modifier: Modifier = Modifier, letter: @Composable () -> Unit) {
     // the picture that was shown last stays under the new one until the new one is in, so a changed picture never flashes the plain colour and letter
-    var shownSrc by remember { mutableStateOf<String?>(null) }
+    // (a picture that has been shown before is already known when the page opens again, so the letter never flashes while a moving picture is made ready)
+    var shownSrc by remember { mutableStateOf<String?>(src?.takeIf { it.hashCode() in shownPics }) }
     LaunchedEffect(src) { if (src == null) shownSrc = null }
     val ok = shownSrc != null && src != null
     Box(modifier.size(size).clip(androidx.compose.foundation.shape.CircleShape).then(if (ok) Modifier else Modifier.background(bg)), contentAlignment = androidx.compose.ui.Alignment.Center) {
         if (!ok) letter()
         val old = shownSrc
         if (src != null && old != null && old != src) PicBare(old, Modifier.matchParentSize())
-        if (src != null) PicBare(src, Modifier.matchParentSize()) { shownSrc = src }
+        if (src != null) PicBare(src, Modifier.matchParentSize()) { shownSrc = src; shownPics.add(src.hashCode()) }
     }
 }
 

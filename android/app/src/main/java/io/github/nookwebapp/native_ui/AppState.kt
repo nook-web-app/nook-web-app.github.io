@@ -446,7 +446,11 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     }
 
     fun newChat() {
-        val c = LChat(uid(), if (store.chats.isNotEmpty()) "Chat " + (store.chats.size + 1) else "Notes to self", System.currentTimeMillis())
+        // every new chat here is a notes chat: the first is "Notes to self", the next ones get a number so they can be told apart
+        val taken = store.chats.map { it.name }.toSet()
+        var nn = 1
+        while (true) { val nm = if (nn == 1) "Notes to self" else "Notes to self $nn"; if (nm !in taken) break; nn++ }
+        val c = LChat(uid(), if (nn == 1) "Notes to self" else "Notes to self $nn", System.currentTimeMillis())
         store.chats.add(c); persist(); go(Route.Conv(c.id))
     }
 

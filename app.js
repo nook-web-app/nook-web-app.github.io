@@ -305,7 +305,7 @@ const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.sta
 
 // the hint for Zenith's name shows while "@zen..." is typed, not once "@zenith" is complete
 const zenHint = v => { const m = /@\w*$/.exec(v); return !!m && m[0].toLowerCase() !== "@zenith"; };
-const APP_VERSION = "3.49.32";
+const APP_VERSION = "3.49.33";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2093,7 +2093,10 @@ function chatV() {
 
 const lastT = c => (c.msgs.length ? c.msgs[c.msgs.length - 1].t : c.t || 0);
 function newChat() {
-  const c = { id: uid(), name: S.chats.length ? "Chat " + (S.chats.length + 1) : "Notes to self", msgs: [], t: Date.now() };
+  // every new chat here is a notes chat: the first is "Notes to self", the next ones get a number so they can be told apart
+  const taken = new Set(S.chats.map(x => x.name));
+  let nn = 1; while (taken.has(nn === 1 ? "Notes to self" : "Notes to self " + nn)) nn++;
+  const c = { id: uid(), name: nn === 1 ? "Notes to self" : "Notes to self " + nn, msgs: [], t: Date.now() };
   S.chats.push(c);
   persist();
   go({ r: "conv", id: c.id });

@@ -328,12 +328,14 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>, replyHook: A
                             app.say("Getting media...")
                             app.scope.launch {
                                 // every link is read at the same time; the cards come in the order the links were pasted (the command shows on the first card only)
-                                val done = links.map { link -> async { runCatching { MediaGrab.resolveAll(link, if (audio || MediaGrab.site(link) == "youtube") qtext else "") } } }.awaitAll()
-                                val t0 = Clock.now(); var k = 0; var failed: Throwable? = null
+                                // (at most 4 at a time, so a long list is not refused by the sites for asking too much at once)
+                                val gate = kotlinx.coroutines.sync.Semaphore(4)
+                                val done = links.map { link -> async { gate.acquire(); try { runCatching { MediaGrab.resolveAll(link, if (audio || MediaGrab.site(link) == "youtube") qtext else "") } } finally { gate.release() } } }.awaitAll()
+                                val t0 = Clock.now(); var k = 0; var failed: Throwable? = null; var failN = 0
                                 val cmdText = (if (audio) "/audio " else "/media " + (if (links.any { MediaGrab.site(it) == "youtube" } && qtext.isNotEmpty()) "/$qtext " else "")) + (if (folder.isNotEmpty()) "/folder/$folder " else "") + links.joinToString(" ")
                                 done.forEachIndexed { li, r ->
                                     val items = r.getOrNull()
-                                    if (items == null) { failed = failed ?: r.exceptionOrNull(); return@forEachIndexed }
+                                    if (items == null) { failN++; failed = failed ?: r.exceptionOrNull(); return@forEachIndexed }
                                     val link = links[li]
                                     val qual = if (audio || MediaGrab.site(link) == "youtube") qtext else ""
                                     items.forEachIndexed { n, it ->
@@ -346,7 +348,7 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>, replyHook: A
                                     }
                                 }
                                 if (k > 0) app.persist() else setText(typed)
-                                failed?.let { e -> app.say(if (e is MediaGrab.Fail) e.message ?: "Could not get it" else "Could not get it (" + (e.message ?: e.javaClass.simpleName).lineSequence().first().take(80) + ")") }
+                                failed?.let { e -> app.say((if (failN > 1) "$failN links failed. " else "") + (if (e is MediaGrab.Fail) e.message ?: "Could not get it" else "Could not get it (" + (e.message ?: e.javaClass.simpleName).lineSequence().first().take(80) + ")")) }
                             }
                         }
                     }
@@ -378,7 +380,8 @@ private fun Bubble(m: LMsg, open: Boolean, onTap: () -> Unit, onDouble: (() -> U
     val opened by rememberUpdatedState(open)
     val tap = { if (!opened) fx.pop(); onTap() }
     // the touch area is the message itself (the row is as wide as its widest part), so a tap beside a message does nothing
-    Column(Modifier.fillMaxWidth().wrapContentWidth(if (left) Alignment.Start else Alignment.End).pointerInput(m.id) { detectTapGestures(onTap = { tap() }, onDoubleTap = if (onDouble != null) { _ -> onDouble() } else null, onLongPress = { AppState.current?.buzz(); onLong() }) }, horizontalAlignment = if (left) Alignment.Start else Alignment.End) {
+    // (a /media message keeps the whole width: its command is on the right and its cards on the left)
+    Column(Modifier.fillMaxWidth().let { if (m.mcard != null) it else it.wrapContentWidth(if (left) Alignment.Start else Alignment.End) }.pointerInput(m.id) { detectTapGestures(onTap = { tap() }, onDoubleTap = if (onDouble != null) { _ -> onDouble() } else null, onLongPress = { AppState.current?.buzz(); onLong() }) }, horizontalAlignment = if (left) Alignment.Start else Alignment.End) {
         if (m.imgs.isNotEmpty()) Box(Modifier.width(minOf(w * 0.82f, 320.dp)).clip(RoundedCornerShape(Rad.bubble))) { ImgGrid(m.imgs, whenText(m.t), framed = false) }
         // "/media link": the command stays in view with its link shortened, and the card of the video answers on the left
         m.mcard?.let { card ->

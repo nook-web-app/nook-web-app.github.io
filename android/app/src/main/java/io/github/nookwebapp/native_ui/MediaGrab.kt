@@ -71,7 +71,7 @@ object MediaGrab {
     // every link of a "/media" message (several links may be pasted at once); empty when none; null when the text is not that command
     fun commandLinks(text: String): List<String>? {
         val rest = CMD.find(text.trim())?.groupValues?.get(2) ?: AUD.find(text.trim())?.groupValues?.get(1) ?: return null
-        return rest.trim().split(Regex("\\s+")).filter { it.isNotEmpty() && !FOLDER.matches(it) }.distinct().take(10)
+        return rest.trim().split(Regex("\\s+")).filter { it.isNotEmpty() && !FOLDER.matches(it) }.distinct().take(60)
     }
     // "/folder/download": where the file goes (download, music, movies, pictures or dcim); "" when none was typed, so the usual folder of its kind is used
     private val FOLDER = Regex("^/folder/(\\w+)$", RegexOption.IGNORE_CASE)

@@ -311,16 +311,40 @@ const b64 = (b: Uint8Array) => { let bin = ""; for (let i = 0; i < b.length; i +
 const STOCK = /(vecteezy|shutterstock|istockphoto|dreamstime|alamy|freepik|adobe|depositphotos|123rf|gettyimages|pngtree|pngwing|clipart|stockvault|pinimg)/i;
 // a picture made small: a 512 pixel square jpeg (null when this kind of file cannot be read here, like webp)
 let squareErr = "";
+// (pure code only: the usual image library needs a platform feature this runtime does not have)
 async function makeSquare(bytes: Uint8Array): Promise<Uint8Array | null> {
   try {
-    // loaded only here, so a problem with the library can never stop the rest of his day
-    const { Image } = await import("npm:imagescript@1.3.0");
-    const img = await Image.decode(bytes);
-    const side = Math.min(img.width, img.height);
-    const sq = img.crop(Math.floor((img.width - side) / 2), Math.floor((img.height - side) / 2), side, side).resize(512, 512);
-    const flat = new Image(512, 512).fill(0xffffffff);
-    flat.composite(sq);
-    return await flat.encodeJPEG(86);
+    // loaded only here, so a problem with a library can never stop the rest of his day
+    let w = 0, h = 0, rgba: Uint8Array | null = null;
+    if (bytes[0] === 0x89 && bytes[1] === 0x50) {
+      const { PNG } = await import("npm:pngjs@7.0.0");
+      const { Buffer } = await import("node:buffer");
+      const png = PNG.sync.read(Buffer.from(bytes));
+      w = png.width; h = png.height; rgba = new Uint8Array(png.data);
+    } else if (bytes[0] === 0xff && bytes[1] === 0xd8) {
+      const jpeg = await import("npm:jpeg-js@0.4.4");
+      const d = jpeg.decode(bytes, { useTArray: true, formatAsRGBA: true, maxMemoryUsageInMB: 256 });
+      w = d.width; h = d.height; rgba = d.data as Uint8Array;
+    } else { squareErr = "not a png or jpeg"; return null; }
+    if (!rgba || w * h > 16_000_000 || w < 16 || h < 16) { squareErr = "too big or too small"; return null; }
+    // the middle square is taken, and made 512 pixels wide by averaging blocks (on white where it is see-through)
+    const side = Math.min(w, h), x0 = Math.floor((w - side) / 2), y0 = Math.floor((h - side) / 2), N = Math.min(512, side), k = side / N;
+    const out = new Uint8Array(N * N * 4);
+    for (let y = 0; y < N; y++) {
+      const sy0 = Math.floor(y * k), sy1 = Math.max(sy0 + 1, Math.floor((y + 1) * k));
+      for (let x = 0; x < N; x++) {
+        const sx0 = Math.floor(x * k), sx1 = Math.max(sx0 + 1, Math.floor((x + 1) * k));
+        let r = 0, g = 0, b = 0, n = 0;
+        for (let yy = sy0; yy < sy1; yy++) {
+          let i = ((y0 + yy) * w + x0 + sx0) * 4;
+          for (let xx = sx0; xx < sx1; xx++, i += 4) { const a = rgba[i + 3] / 255; r += rgba[i] * a + 255 * (1 - a); g += rgba[i + 1] * a + 255 * (1 - a); b += rgba[i + 2] * a + 255 * (1 - a); n++; }
+        }
+        const o = (y * N + x) * 4;
+        out[o] = r / n; out[o + 1] = g / n; out[o + 2] = b / n; out[o + 3] = 255;
+      }
+    }
+    const jpeg = await import("npm:jpeg-js@0.4.4");
+    return jpeg.encode({ data: out, width: N, height: N }, 86).data as Uint8Array;
   } catch (e) { squareErr = String((e as Error).message || e).slice(0, 160); return null; }
 }
 // his current picture is made small (once; a picture that is already small is left alone)

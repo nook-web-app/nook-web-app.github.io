@@ -36,7 +36,8 @@
 (function () {
   // every place is a server that answers a plain request; Seoul is your real database, the others are cloud servers in the cities Supabase can use
   var places = [
-    { id: "seoul", name: "Seoul (your database now)", url: "https://cimyolsipjdpibzaebmx.supabase.co/auth/v1/health" },
+    // a real question to the database (it has to travel to Seoul and back); the key is the public one that is inside the app anyway
+    { id: "seoul", name: "Seoul (your database now)", url: "https://cimyolsipjdpibzaebmx.supabase.co/rest/v1/accounts?select=id&limit=1", db: "sb_publishable_BzsW9TXvMRjUQf5BZj3pLg_197wdNpq" },
     { id: "mumbai", name: "Mumbai", url: "https://dynamodb.ap-south-1.amazonaws.com/" },
     { id: "singapore", name: "Singapore", url: "https://dynamodb.ap-southeast-1.amazonaws.com/" },
     { id: "frankfurt", name: "Frankfurt", url: "https://dynamodb.eu-central-1.amazonaws.com/" },
@@ -52,10 +53,12 @@
     list.appendChild(d);
     rows[p.id] = d;
   });
-  function one(url) {
-    var t0 = performance.now();
-    return fetch(url + (url.indexOf("?") < 0 ? "?" : "&") + "t=" + Date.now() + Math.random(), { mode: "no-cors", cache: "no-store" })
-      .then(function () { return performance.now() - t0; });
+  function one(p) {
+    var t0 = performance.now(), url = p.url + (p.url.indexOf("?") < 0 ? "?" : "&") + "t=" + Date.now() + Math.random();
+    var req = p.db
+      ? fetch(url, { cache: "no-store", headers: { apikey: p.db } }).then(function (r) { return r.text(); })
+      : fetch(url, { mode: "no-cors", cache: "no-store" });
+    return req.then(function () { return performance.now() - t0; });
   }
   function median(a) { var s = a.slice().sort(function (x, y) { return x - y; }); return s[Math.floor(s.length / 2)]; }
   async function measure(p) {
@@ -63,8 +66,8 @@
     var times = [];
     try {
       // the first request also builds the connection (name lookup, secure handshake): it is thrown away; the next seven are what a real tap costs
-      await one(p.url);
-      for (var i = 0; i < 7; i++) { note.textContent = "measuring " + (i + 1) + " of 7"; times.push(await one(p.url)); }
+      await one(p);
+      for (var i = 0; i < 7; i++) { note.textContent = "measuring " + (i + 1) + " of 7"; times.push(await one(p)); }
     } catch (e) { note.textContent = "could not reach it"; return null; }
     var m = median(times);
     rows[p.id].querySelector(".ms").textContent = Math.round(m) + " ms";

@@ -44,7 +44,8 @@ fun AuthorAv(a: Author, size: Dp, modifier: Modifier = Modifier) = RAv(a.name, a
 fun ZenAv(size: Dp, modifier: Modifier = Modifier) {
     val app = LocalApp.current
     app.zenVersion
-    val pfp = app.store.zen.optStr("pfp")
+    // the one the owner chose on this phone, else the one he picked himself (on his public account)
+    val pfp = app.store.zen.optStr("pfp") ?: app.store.zen.optStr("sAvatar")
     RoundPic(pfp, size, Brush.linearGradient(listOf(Color(0xFF14466F), Color(0xFF208BFE))), modifier) {
         if (pfp == null) T("Z", size = (size.value * 0.5f).roundToInt().sp, weight = FontWeight.Bold, color = Color.White, lineHeight = (size.value * 0.6f).sp)
     }

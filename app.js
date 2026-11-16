@@ -305,7 +305,7 @@ const ownMedia = u => typeof u === "string" && (/^data:image\//.test(u) || u.sta
 
 // the hint for Zenith's name shows while "@zen..." is typed, not once "@zenith" is complete
 const zenHint = v => { const m = /@\w*$/.exec(v); return !!m && m[0].toLowerCase() !== "@zenith"; };
-const APP_VERSION = "3.49.30";
+const APP_VERSION = "3.49.31";
 const PH = ["What's up?", "What's on your mind?", "Quick update", "What's new today?", "Jot down a thought", "Note to future self", "Today I learned", "Something that made you laugh", "Something you love right now", "Favorite song this week", "What are you listening to?", "What did you dream about?", "What are you eating?", "Weird thought of the day", "Dump your brain here", "Idea for later", "Sketch a quick thought", "Log today's mood", "Small win today", "Brag a little", "How's your day going?", "Random thought", "Pin a reminder", "Something you're looking forward to", "What are you watching?", "Write something nice to yourself"];
 let S = null;
 let zenSyncOn = false, zenTimer = null, zenBusySync = false;
@@ -2609,7 +2609,7 @@ const ZEN_SVG = '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><
 let zenAvTpl = null;
 function zenAv(size) {
   const a = h("div", { class: "av zenav" });
-  if (S && S.zen && S.zen.pfp) { const im = h("img", { alt: "", decoding: "async" }); im.src = S.zen.pfp; a.append(im); }
+  if (S && S.zen && (S.zen.pfp || S.zen.sAvatar)) { const im = h("img", { alt: "", decoding: "async" }); im.src = S.zen.pfp || S.zen.sAvatar; a.append(im); }
   else {
     if (!zenAvTpl) { zenAvTpl = document.createElement("div"); zenAvTpl.innerHTML = ZEN_SVG; }
     zenAvTpl.childNodes.forEach(n => a.append(n.cloneNode(true)));
@@ -2954,6 +2954,8 @@ async function zenStart() {
   // his account is looked up each time, so a remade account is never mixed up with the old one; the profile picture goes up again for a new one
   sb.from("accounts").select("id, avatar").eq("username", "zenith").maybeSingle().then(({ data }) => {
     if (!data) return;
+    // the picture he picked himself (on his public account) shows everywhere he is shown
+    if ((data.avatar || null) !== (S.zen.sAvatar || null)) { S.zen.sAvatar = data.avatar || null; persist(); document.querySelectorAll(".zenav").forEach(n => { if (!n.querySelector("img") && S.zen.sAvatar) { const im = h("img", { alt: "", decoding: "async" }); im.src = S.zen.sAvatar; n.textContent = ""; n.append(im); } }); }
     // his public picture is empty while this browser still has it: it goes up again
     if (data.id === S.zen.id) { if (!data.avatar && S.zen.pfp && S.zen.pfpPushed !== -1) { S.zen.pfpPushed = -1; persist(); zenPushProfile(); } return; }
     S.zen.id = data.id; S.zen.pfpPushed = -1; persist();

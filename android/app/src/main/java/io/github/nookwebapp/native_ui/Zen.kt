@@ -374,10 +374,30 @@ suspend fun Online.zenStart() {
     zenPull()
     zenSyncOn = true
     zenSync()
-    val r = Sb.get(Q("accounts").select("id").eq("username", "zenith"))
+    val r = Sb.get(Q("accounts").select("id, avatar").eq("username", "zenith"))
     r.one?.optString("id")?.let { id -> if (id != zenId()) { s.zen.put("id", id); s.zen.put("pfpPushed", -1); app.persist(); if (s.zen.has("pfp") || s.zen.has("bnr")) zenPushProfile() } }
+    zenServerPic(r.one?.optString("avatar"))
     if ((s.zen.has("pfp") || s.zen.has("bnr")) && s.zen.optLong("pfpPushed", -1) != s.zen.optLong("pfpAt", 0)) zenPushProfile()
-    app.scope.launch { while (uid != null && zenSyncOn) { delay(45_000); if (app.foreground) runCatching { if (zenPull()) app.zenVersion++ } } }
+    app.scope.launch {
+        var n = 0
+        while (uid != null && zenSyncOn) {
+            delay(45_000)
+            if (app.foreground) runCatching {
+                if (zenPull()) app.zenVersion++
+                // the picture he chose himself on the server is looked up again now and then
+                if (++n % 8 == 0) zenServerPic(Sb.get(Q("accounts").select("id, avatar").eq("username", "zenith")).one?.optString("avatar"))
+            }
+        }
+    }
+}
+
+// zenServerPic(): the picture on his public account (the one he picked himself) is kept, so every place that shows him can use it
+fun Online.zenServerPic(url: String?) {
+    val now = url?.takeIf { it.isNotEmpty() && it != "null" && Photos.ownMedia(it) }
+    if (now == s.zen.optStr("sAvatar")) return
+    if (now == null) s.zen.remove("sAvatar") else s.zen.put("sAvatar", now)
+    app.persist()
+    app.zenVersion++
 }
 fun zenStop() { zenSyncOn = false; zenSeen.clear(); zenPullSig = ""; zenPulledIso = ""; zenEncDone.clear() }
 

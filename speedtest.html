@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Nook speed test</title>
+<style>
+  :root { --bg:#161e27; --bg2:#1f2a37; --line:#2b3846; --fg:#f1f3f5; --mut:#8d9bae; --acc:#208bfe; --good:#2dc653; }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--fg); font: 16px/1.4 system-ui, sans-serif; padding: 20px 16px 40px; max-width: 520px; margin: 0 auto; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  p.sub { color: var(--mut); font-size: 14px; margin-bottom: 18px; }
+  button { background: var(--acc); color: #fff; border: 0; border-radius: 999px; padding: 12px 26px; font: 600 16px system-ui; width: 100%; }
+  button:disabled { opacity: .5; }
+  .row { background: var(--bg2); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin-top: 10px; }
+  .top { display: flex; justify-content: space-between; align-items: baseline; }
+  .name { font-weight: 600; }
+  .ms { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 20px; }
+  .bar { height: 6px; border-radius: 3px; background: var(--line); margin-top: 8px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--acc); width: 0; transition: width .4s; }
+  .row.seoul .bar > i { background: #f0516f; }
+  .row.best .bar > i { background: var(--good); }
+  .note { color: var(--mut); font-size: 12.5px; margin-top: 4px; }
+  #verdict { margin-top: 18px; padding: 14px; border-radius: 14px; background: var(--bg2); border: 1px solid var(--line); display: none; }
+  #verdict b { color: var(--good); }
+</style>
+</head>
+<body>
+<h1>Speed test</h1>
+<p class="sub">How long one request takes from <b>your phone</b> to each place, in milliseconds (lower is faster). Use your normal connection, not a VPN.</p>
+<button id="go">Start the test</button>
+<div id="list"></div>
+<div id="verdict"></div>
+<script>
+(function () {
+  // every place is a server that answers a plain request; Seoul is your real database, the others are cloud servers in the cities Supabase can use
+  var places = [
+    { id: "seoul", name: "Seoul (your database now)", url: "https://cimyolsipjdpibzaebmx.supabase.co/auth/v1/health" },
+    { id: "mumbai", name: "Mumbai", url: "https://dynamodb.ap-south-1.amazonaws.com/" },
+    { id: "singapore", name: "Singapore", url: "https://dynamodb.ap-southeast-1.amazonaws.com/" },
+    { id: "frankfurt", name: "Frankfurt", url: "https://dynamodb.eu-central-1.amazonaws.com/" },
+    { id: "tokyo", name: "Tokyo", url: "https://dynamodb.ap-northeast-1.amazonaws.com/" }
+  ];
+  var list = document.getElementById("list"), go = document.getElementById("go"), verdict = document.getElementById("verdict");
+  var rows = {};
+  places.forEach(function (p) {
+    var d = document.createElement("div");
+    d.className = "row" + (p.id === "seoul" ? " seoul" : "");
+    d.innerHTML = '<div class="top"><span class="name"></span><span class="ms">-</span></div><div class="bar"><i></i></div><div class="note">waiting</div>';
+    d.querySelector(".name").textContent = p.name;
+    list.appendChild(d);
+    rows[p.id] = d;
+  });
+  function one(url) {
+    var t0 = performance.now();
+    return fetch(url + (url.indexOf("?") < 0 ? "?" : "&") + "t=" + Date.now() + Math.random(), { mode: "no-cors", cache: "no-store" })
+      .then(function () { return performance.now() - t0; });
+  }
+  function median(a) { var s = a.slice().sort(function (x, y) { return x - y; }); return s[Math.floor(s.length / 2)]; }
+  async function measure(p) {
+    var note = rows[p.id].querySelector(".note");
+    var times = [];
+    try {
+      // the first request also builds the connection (name lookup, secure handshake): it is thrown away; the next seven are what a real tap costs
+      await one(p.url);
+      for (var i = 0; i < 7; i++) { note.textContent = "measuring " + (i + 1) + " of 7"; times.push(await one(p.url)); }
+    } catch (e) { note.textContent = "could not reach it"; return null; }
+    var m = median(times);
+    rows[p.id].querySelector(".ms").textContent = Math.round(m) + " ms";
+    note.textContent = "fastest " + Math.round(Math.min.apply(null, times)) + " ms, slowest " + Math.round(Math.max.apply(null, times)) + " ms";
+    return m;
+  }
+  go.onclick = async function () {
+    go.disabled = true; verdict.style.display = "none";
+    var res = {};
+    for (var i = 0; i < places.length; i++) { res[places[i].id] = await measure(places[i]); }
+    var ok = places.filter(function (p) { return res[p.id] != null; });
+    var max = Math.max.apply(null, ok.map(function (p) { return res[p.id]; }));
+    var best = ok.slice().sort(function (a, b) { return res[a.id] - res[b.id]; })[0];
+    ok.forEach(function (p) {
+      rows[p.id].querySelector(".bar > i").style.width = Math.max(4, res[p.id] / max * 100) + "%";
+      if (best && p.id === best.id) rows[p.id].classList.add("best");
+    });
+    if (res.seoul != null && res.mumbai != null) {
+      var diff = res.seoul - res.mumbai;
+      verdict.innerHTML = diff > 5
+        ? 'Mumbai answers <b>' + Math.round(diff) + ' ms faster</b> than Seoul (' + Math.round(res.seoul) + ' vs ' + Math.round(res.mumbai) + ' ms), about ' + (res.seoul / res.mumbai).toFixed(1) + ' times quicker. Every tap that talks to the database saves that much, and some taps need several round trips.'
+        : 'Mumbai and Seoul are about the same from here (' + Math.round(res.seoul) + ' vs ' + Math.round(res.mumbai) + ' ms). Moving would not change much.';
+      verdict.style.display = "block";
+    }
+    go.disabled = false; go.textContent = "Test again";
+  };
+})();
+</script>
+</body>
+</html>

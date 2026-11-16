@@ -227,10 +227,15 @@ fun Pic(path: String?, modifier: Modifier = Modifier, want: Int = 1280, scale: C
 // color shows through the photo's smoothed edge
 @Composable
 fun RoundPic(src: String?, size: androidx.compose.ui.unit.Dp, bg: androidx.compose.ui.graphics.Brush, modifier: Modifier = Modifier, letter: @Composable () -> Unit) {
-    var ok by remember(src) { mutableStateOf(false) }
+    // the picture that was shown last stays under the new one until the new one is in, so a changed picture never flashes the plain colour and letter
+    var shownSrc by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(src) { if (src == null) shownSrc = null }
+    val ok = shownSrc != null && src != null
     Box(modifier.size(size).clip(androidx.compose.foundation.shape.CircleShape).then(if (ok) Modifier else Modifier.background(bg)), contentAlignment = androidx.compose.ui.Alignment.Center) {
         if (!ok) letter()
-        if (src != null) PicBare(src, Modifier.matchParentSize()) { ok = true }
+        val old = shownSrc
+        if (src != null && old != null && old != src) PicBare(old, Modifier.matchParentSize())
+        if (src != null) PicBare(src, Modifier.matchParentSize()) { shownSrc = src }
     }
 }
 
@@ -251,6 +256,12 @@ fun PicBare(src: String, modifier: Modifier = Modifier, scale: ContentScale = Co
     var failed by remember(src, attempt) { mutableStateOf(false) }
     LaunchedEffect(failed) { if (failed && attempt < 3) { kotlinx.coroutines.delay(1500L * (attempt + 1)); attempt++ } }
     coil.compose.AsyncImage(req, null, modifier = modifier, imageLoader = Img.loader(ctx), contentScale = scale, onError = { failed = true }, onSuccess = { onIn() })
+}
+
+// a picture is asked for ahead of time (the phone keeps it on disk), so when its page opens it is already there
+fun Img.prefetch(ctx: android.content.Context, url: String?) {
+    if (url == null || !url.startsWith("http")) return
+    runCatching { loader(ctx).enqueue(coil.request.ImageRequest.Builder(ctx).data(url).build()) }
 }
 
 // The one image loader of the app: OkHttp of the app (same connections as the server calls), a memory cache of a

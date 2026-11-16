@@ -192,7 +192,10 @@ fun EditProfilePanel(app: AppState, me: Panel) {
 @Composable
 fun BannerPic(banner: String?, avatar: String?, theme: String, modifier: Modifier = Modifier.fillMaxSize()) {
     val c = LocalNook.current
-    var ok by remember(banner, avatar, theme) { mutableStateOf(false) }
+    // the banner that was shown last stays under the new one until the new one is in (no plain gradient in between)
+    var shownBanner by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(banner) { if (banner == null) shownBanner = null }
+    val ok = banner != null && shownBanner != null
     Box(modifier.then(if (ok) Modifier else Modifier.background(Brush.linearGradient(listOf(c.b1, c.b2), Offset.Zero, Offset.Infinite)))) {
         when {
             theme == "avatar" && (banner ?: avatar) != null -> {
@@ -202,10 +205,14 @@ fun BannerPic(banner: String?, avatar: String?, theme: String, modifier: Modifie
                 // box so no edge shows, and a real blur on top where the phone can do it (Android 12 and later)
                 val soft = if (android.os.Build.VERSION.SDK_INT >= 31) Modifier.blur(10.dp, androidx.compose.ui.draw.BlurredEdgeTreatment.Unbounded) else Modifier
                 Box(Modifier.fillMaxSize().clipToBounds()) {
-                    Pic(src, Modifier.fillMaxSize().graphicsLayer { val z = if (banner != null) 1.06f else 1.3f; scaleX = z; scaleY = z }.then(soft), want = (px / 10).toInt().coerceIn(24, 96), smooth = true, small = true, bare = true) { _, _ -> ok = true }
+                    Pic(src, Modifier.fillMaxSize().graphicsLayer { val z = if (banner != null) 1.06f else 1.3f; scaleX = z; scaleY = z }.then(soft), want = (px / 10).toInt().coerceIn(24, 96), smooth = true, small = true, bare = true) { _, _ -> shownBanner = src }
                 }
             }
-            banner != null -> Pic(banner, Modifier.fillMaxSize(), want = 1000, bare = true) { _, _ -> ok = true }
+            banner != null -> {
+                val old = shownBanner
+                if (old != null && old != banner) Pic(old, Modifier.fillMaxSize(), want = 1000, bare = true)
+                Pic(banner, Modifier.fillMaxSize(), want = 1000, bare = true) { _, _ -> shownBanner = banner }
+            }
         }
     }
 }

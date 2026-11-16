@@ -91,7 +91,7 @@ class Online(val app: AppState) {
         val m = cachedAccounts(need)
         need.forEach { id ->
             val a = m.get(id)
-            if (a != null) acctCache[id] = JSONObject(a.toString()).put("name", a.optString("display_name").ifEmpty { a.optString("username") })
+            if (a != null) { acctCache[id] = JSONObject(a.toString()).put("name", a.optString("display_name").ifEmpty { a.optString("username") }); app.ctx?.let { c -> Img.prefetch(c, a.optStr("avatar")); Img.prefetch(c, a.optStr("banner")) } }
             else if (!m.failed) acctCache[id] = JSONObject().put("id", id).put("username", "user").put("name", "user")
         }
         return acctCache

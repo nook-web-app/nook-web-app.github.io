@@ -2,7 +2,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { fetchImage, pagePreview } from "../_shared/preview.ts";
 import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
 import { ringPhone, warnPhone, textPhone, signalPhone } from "../_shared/ring.ts";
-import { activity, applyFeelings, asContents, asTranscript, asleepAt, closenessWords, dailyDrift, type Entry, loadNotebook, loadState, logEntries, type MindState, PAGE_MAX, PAGES, persona, pruneLog, recentEntries, saveNotebook, saveState, wakesAt, localTime, lifeAt, labelsOf, pickReply, REPLY_HELP, typingCps } from "../_shared/mind.ts";
+import { activity, applyFeelings, asContents, asTranscript, asleepAt, closenessWords, dailyDrift, type Entry, loadNotebook, loadState, logEntries, type MindState, PAGE_MAX, PAGES, persona, pruneLog, recentEntries, saveNotebook, saveState, wakesAt, localTime, lifeAt, labelsOf, pickReply, REPLY_HELP, typingCps, varietyNote } from "../_shared/mind.ts";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 const DAY = 864e5, HOUR = 36e5;
@@ -457,7 +457,7 @@ async function answerLate(owner: string, zen: string, st: MindState, recent: Ent
   const prev = firstNew > 0 ? recent[firstNew - 1].t : 0;
   const why = then.asleep ? "You were asleep when he wrote. You just woke up and saw it now." : now - since < 10 * 60000 ? "You saw it a few minutes after he sent it." : "You did not see it right away: you were " + then.what.replace(/ \(.*\)/, "") + ". You only saw it now, like a person would (no need to apologise unless it was long).";
   const tg = Date.now();
-  const text = await gen(persona(st, pages, tz, "text", prev, await activity(admin, owner, zen)) + REPLY_HELP + "\n\n" + why, asContents(recent.slice(-lateCtx), labelsOf(recent)), null, 600);
+  const text = await gen(persona(st, pages, tz, "text", prev, await activity(admin, owner, zen)) + REPLY_HELP + varietyNote(recent) + "\n\n" + why, asContents(recent.slice(-lateCtx), labelsOf(recent)), null, 600);
   tuneLate(Date.now() - tg);
   st.pending = null;
   await saveState(admin, owner, st);

@@ -15,6 +15,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import kotlinx.coroutines.flow.first
 import androidx.compose.ui.graphics.graphicsLayer
@@ -141,6 +142,20 @@ private fun ConvScreenBody(id: String) {
         else if (atBottom) { if (grew) list.glideToBottom() else list.pinBottom() }
     }
     KeepAtBottom(list)
+    // while the reply bar grows (or shrinks) the list follows it frame by frame, so what was at the bottom stays at the bottom, like with the keyboard
+    var replyShown by remember(chat.id) { mutableStateOf(false) }
+    LaunchedEffect(replyShown) {
+        val stick = atBottom
+        var prev = list.layoutInfo.viewportEndOffset
+        val end = System.nanoTime() + 450_000_000L
+        while (System.nanoTime() < end) {
+            androidx.compose.runtime.withFrameNanos { }
+            val now = list.layoutInfo.viewportEndOffset
+            val d = prev - now
+            prev = now
+            if (stick && d != 0) list.scrollBy(d.toFloat())
+        }
+    }
     Page({
         // .bar.chb: back, the chat's picture, name and handle, and its options
         Row(Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -228,14 +243,14 @@ private fun ConvScreenBody(id: String) {
             }
         }
         }
-        ConvDock(chat, fill, replyHook)
+        ConvDock(chat, fill, replyHook) { replyShown = it }
     }
 }
 
 // .cdock: the pending photos and the text box with its photo and send buttons. The typed text lives here, so a keystroke
 // redraws the dock and not the messages. fill is given a way to put a word (Zenith's name) into the box.
 @Composable
-private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>, replyHook: Array<((LMsg) -> Unit)?>) {
+private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>, replyHook: Array<((LMsg) -> Unit)?>, onReplyShown: (Boolean) -> Unit = {}) {
     val app = LocalApp.current
     val c = LocalNook.current
     val isZ = chat.id == ZDM
@@ -249,6 +264,7 @@ private fun ConvDock(chat: LChat, fill: Array<((String) -> Unit)?>, replyHook: A
     // in his chat the typing is noted, so he can see it (he waits for the owner or texts anyway)
     DisposableEffect(chat.id) { if (isZ) ZTyping.open = true; onDispose { if (isZ) { ZTyping.open = false; ZTyping.at = 0 } } }
     var replyTo by remember(chat.id) { mutableStateOf<LMsg?>(null) }
+    LaunchedEffect(replyTo != null) { onReplyShown(replyTo != null) }
     replyHook[0] = { m -> replyTo = m; runCatching { focus.requestFocus() } }
     fill[0] = { pre -> val cur = tv.text; if (!cur.startsWith(pre.trim(), true)) setText(pre + cur); runCatching { focus.requestFocus() } }
     // .cdock: the pending photos and the text box with its photo and send buttons

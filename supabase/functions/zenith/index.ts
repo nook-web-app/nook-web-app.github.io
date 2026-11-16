@@ -3,7 +3,7 @@ import { fetchImage, pagePreview } from "../_shared/preview.ts";
 import { dailyLimitHit, markFull, parseChain, useModel } from "../_shared/aiquota.ts";
 import { peekForSearch, type CallAsk } from "../_shared/chatstream.ts";
 import { ringPhone } from "../_shared/ring.ts";
-import { activity, asleepAt, asContents, asTranscript, type Entry, labelsOf, lifeAt, loadNotebook, loadState, logEntries, nextLook, persona, pickReply, recentEntries, REPLY_HELP, saveState, typingCps } from "../_shared/mind.ts";
+import { activity, asleepAt, asContents, asTranscript, type Entry, labelsOf, lifeAt, loadNotebook, loadState, logEntries, nextLook, persona, pickReply, recentEntries, REPLY_HELP, saveState, typingCps, varietyNote } from "../_shared/mind.ts";
 // Zenith is the name of the owner-only AI; the moderation AI is called Aegis
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
@@ -550,7 +550,7 @@ Deno.serve(async (req) => {
       if (pics.length) last.parts.push(...pics);
       // the links of his newest message are read for him
       try { const ln = await linkNotes(String(newest && !newest.ai ? newest.text : "")); if (ln.note) last.parts.push({ text: ln.note }); if (ln.pics.length) last.parts.push(...ln.pics); } catch { /* no link info */ }
-      const system = persona(st, pages, tz, "text", lastBefore, act) + SEARCH_HELP + REPLY_HELP + (calls ? CALL_HELP : "");
+      const system = persona(st, pages, tz, "text", lastBefore, act) + varietyNote(recent) + SEARCH_HELP + REPLY_HELP + (calls ? CALL_HELP : "");
       const t0 = Date.now();
       let got = await gemini(key, system, history, false, calls ? true : "search", 28000, DM_CHAIN, 9000, "low");
       if (got.call) {

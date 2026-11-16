@@ -122,6 +122,18 @@ fun Modifier.lineAbove(color: Color) = drawBehind { drawRect(color, Offset.Zero,
 @Composable
 fun Line() { Box(Modifier.fillMaxWidth().height(1.dp).background(LocalNook.current.line)) }
 
+// while a sensitive page is open (password, email, deactivate, delete), taps that land where another app's window covers this one
+// are ignored, so an overlay cannot trick a tap onto a button here (tapjacking)
+@Composable
+fun IgnoreCoveredTouches() {
+    val v = androidx.compose.ui.platform.LocalView.current
+    androidx.compose.runtime.DisposableEffect(v) {
+        val old = v.filterTouchesWhenObscured
+        v.filterTouchesWhenObscured = true
+        onDispose { v.filterTouchesWhenObscured = old }
+    }
+}
+
 // .av: the owner's round photo; without one, the first letter of the name on the accent color
 @Composable
 fun MyAvatar(size: Dp = 40.dp, ring: Color? = null, modifier: Modifier = Modifier) {

@@ -96,6 +96,11 @@ Deno.serve(async (req) => {
   const [pic, key] = await Promise.all([fetchPic(url), geminiKey()]);
   if (!pic) { console.error("focus no picture", why); return json({ error: "no picture" }, 422); }
   if (!key) return json({ error: "no key" }, 500);
+  // a daily limit for everybody together (kept in the database, like the other AI checks), so many accounts cannot use up the key
+  try {
+    const { data: got, error: qe } = await admin.rpc("nook_ai_take", { p_name: "focus", p_max: 1500, p_want: 1 });
+    if (!qe && typeof got === "number" && got < 1) return json({ error: "busy" }, 429);
+  } catch { /* without the counter the call goes on */ }
   for (const model of MODELS) {
     const call = (think: boolean) => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
       method: "POST",

@@ -18,7 +18,7 @@ const b64u = o => Buffer.from(JSON.stringify(o)).toString("base64url");
 const jwt = b64u({ alg: "HS256", typ: "JWT" }) + "." + b64u({ sub: UID, role: "authenticated", aud: "authenticated", email: "t@example.com", exp: 4102444800, iat: 1700000000, user_metadata: {}, app_metadata: {} }) + ".sig";
 const USER = { id: UID, aud: "authenticated", role: "authenticated", email: "t@example.com", app_metadata: {}, user_metadata: {}, created_at: "2024-01-01T00:00:00Z" };
 const SESSION = { access_token: jwt, refresh_token: "r", token_type: "bearer", expires_in: 3600000, expires_at: 4102444800, user: USER };
-const MEDIA = "https://cimyolsipjdpibzaebmx.supabase.co/storage/v1/object/public/media/" + UID + "/sample.png";
+const MEDIA = "https://dekvjxjwjknfydswkihy.supabase.co/storage/v1/object/public/media/" + UID + "/sample.png";
 const TABLES = {
   accounts: FX.people.map(p => ({ id: p.id, username: p.handle, display_name: p.name, avatar: null, banner: null, banner_theme: null, bio: p.bio, pinned_post_id: null, deactivated: false, handle_changed_at: null, public_key: null, age_verified: true, created_at: "2024-01-01T00:00:00Z", avatar_mod: "safe", banner_mod: "safe", text_pending: false })),
   posts: FX.posts.map(p => ({ id: p.id, user_id: FX.people[p.by].id, body: p.body, created_at: new Date(NOW - p.min * 60000).toISOString(), parent_id: p.parent || null, media_url: p.pic ? MEDIA : null, media_inline: false, mod_status: "safe", text_pending: false, last_edit_at: null })),
@@ -71,7 +71,7 @@ function query(table, sp) {
   });
   // a seeded Math.random, so the app picks the same placeholder and order on every run
   await ctx.addInitScript(() => { let a = 1234567; Math.random = () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; });
-  await ctx.addInitScript(([s, uid]) => { try { localStorage.setItem("sb-cimyolsipjdpibzaebmx-auth-token", JSON.stringify(s)); localStorage.setItem("nook-local-uid", uid); localStorage.setItem("nook-installed", "1"); } catch (e) {} }, [SESSION, UID]);
+  await ctx.addInitScript(([s, uid]) => { try { localStorage.setItem("sb-dekvjxjwjknfydswkihy-auth-token", JSON.stringify(s)); localStorage.setItem("nook-local-uid", uid); localStorage.setItem("nook-installed", "1"); } catch (e) {} }, [SESSION, UID]);
   const page = await ctx.newPage();
   await page.clock.setFixedTime(NOW);
   const errs = []; page.on("pageerror", e => errs.push(e.message));

@@ -164,6 +164,7 @@ fun RecoverCodePanel(app: AppState, p: Panel.RecoverCode) {
 // two short screens, one field each: the current password first, then the new password (or the new email)
 @Composable
 fun ChangePasswordPanel(app: AppState, p: Panel) {
+    IgnoreCoveredTouches()
     var step by remember { mutableStateOf(0) }
     var cur by remember { mutableStateOf("") }
     var nw by remember { mutableStateOf("") }
@@ -181,6 +182,7 @@ fun ChangePasswordPanel(app: AppState, p: Panel) {
 
 @Composable
 fun ChangeEmailPanel(app: AppState, p: Panel) {
+    IgnoreCoveredTouches()
     var step by remember { mutableStateOf(0) }
     var cur by remember { mutableStateOf("") }
     var e by remember { mutableStateOf("") }
@@ -308,6 +310,7 @@ fun NicknamePanel(app: AppState, p: Panel.Nickname) {
 // confirmLogin(): deleting the account asks for its email and password first
 @Composable
 fun DeleteAccountPanel(app: AppState, p: Panel) {
+    IgnoreCoveredTouches()
     var email by remember { mutableStateOf("") }
     var pw by remember { mutableStateOf("") }
     // after the password is right, a sheet offers the data download; the data is saved, then the next tap deletes
@@ -411,6 +414,7 @@ fun BackupPanel(app: AppState, p: Panel) {
 // deactivating asks for the login password first, or the fingerprint when this account has one saved
 @Composable
 fun DeactivatePanel(app: AppState, p: Panel) {
+    IgnoreCoveredTouches()
     var pw by remember { mutableStateOf("") }
     var keys by remember { mutableStateOf(0) }
     var busy by remember { mutableStateOf(false) }

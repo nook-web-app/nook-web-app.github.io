@@ -292,7 +292,7 @@ async function mindTick(owner: string, zen: string, docs: { doc_id: string; data
 // best and sets it as his picture. It happens when he has none, and then every few weeks. Only safe pictures (nothing suggestive, no real
 // people) are taken, and a second look decides again on the one he picked.
 const AVATAR_QUERIES = [
-  "white anthro hyena furry character art", "white fur black spots anthro hyena fursona art", "snow white hyena anthro furry oc art", "anthro hyena fursona white fur yellow eyes", "cute anthro hyena furry character illustration",
+  "arctic white hyena anthro furry character art", "cream and grey spotted hyena anthro fursona illustration", "white anthro hyena furry character art", "white fur black spots anthro hyena fursona art", "snow white hyena anthro furry oc art", "anthro hyena fursona white fur yellow eyes", "cute anthro hyena furry character illustration",
   "anthro hyena character portrait digital art furry", "hyena fursona character art chill smile", "anthro spotted hyena furry oc art icon",
 ];
 async function tavilyImages(query: string): Promise<string[]> {
@@ -309,6 +309,39 @@ async function tavilyImages(query: string): Promise<string[]> {
 const b64 = (b: Uint8Array) => { let bin = ""; for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode(...b.subarray(i, i + 0x8000)); return btoa(bin); };
 // pictures from stock sites (watermarks, licences) and from places that block hotlinking are not looked at
 const STOCK = /(vecteezy|shutterstock|istockphoto|dreamstime|alamy|freepik|adobe|depositphotos|123rf|gettyimages|pngtree|pngwing|clipart|stockvault|pinimg)/i;
+// a picture made small: a 512 pixel square jpeg (null when this kind of file cannot be read here, like webp)
+async function makeSquare(bytes: Uint8Array): Promise<Uint8Array | null> {
+  try {
+    // loaded only here, so a problem with the library can never stop the rest of his day
+    const { Image } = await import("npm:imagescript@1.3.0");
+    const img = await Image.decode(bytes);
+    const side = Math.min(img.width, img.height);
+    const sq = img.crop(Math.floor((img.width - side) / 2), Math.floor((img.height - side) / 2), side, side).resize(512, 512);
+    const flat = new Image(512, 512).fill(0xffffffff);
+    flat.composite(sq);
+    return await flat.encodeJPEG(86);
+  } catch { return null; }
+}
+// his current picture is made small (once; a picture that is already small is left alone)
+// deno-lint-ignore no-explicit-any
+async function shrinkCurrent(zen: string): Promise<any> {
+  const base = Deno.env.get("SUPABASE_URL")! + "/storage/v1/object/public/media/";
+  const { data: acc } = await admin.from("accounts").select("avatar").eq("id", zen).maybeSingle();
+  const cur = acc && typeof acc.avatar === "string" ? acc.avatar : "";
+  if (!cur.startsWith(base + zen + "/zenith-")) return { ok: false, why: "no picture of his own to shrink" };
+  const f = await fetchImage(cur, ["image/jpeg", "image/png", "image/webp"], 6 * 1024 * 1024);
+  if (!f) return { ok: false, why: "could not load it" };
+  if (f.bytes.length < 120 * 1024) return { ok: true, why: "already small", bytes: f.bytes.length };
+  const small = await makeSquare(f.bytes);
+  if (!small) return { ok: false, why: "this kind of file cannot be made smaller here" };
+  const path = zen + "/zenith-a-" + Date.now() + ".jpg";
+  const up = await admin.storage.from("media").upload(path, small, { contentType: "image/jpeg", upsert: false });
+  if (up.error) return { ok: false, why: up.error.message };
+  const upd = await admin.from("accounts").update({ avatar: base + path }).eq("id", zen);
+  if (upd.error) { await admin.storage.from("media").remove([path]); return { ok: false, why: upd.error.message }; }
+  try { await admin.storage.from("media").remove([decodeURIComponent(cur.slice(base.length))]); } catch { /* an old file left behind is harmless */ }
+  return { ok: true, from: f.bytes.length, to: small.length, url: base + path };
+}
 // deno-lint-ignore no-explicit-any
 async function avatarJob(zen: string, st: MindState, force = false, dry = false): Promise<any> {
   const report: Record<string, unknown> = { ok: false, rounds: [] };
@@ -353,17 +386,8 @@ async function avatarJob(zen: string, st: MindState, force = false, dry = false)
   // the picture is made small before it is saved (a profile picture is shown tiny, and a big file made every profile slow to open): a 512 pixel
   // square, as a jpeg. A format that cannot be read here (webp) is kept as it is.
   let bytes = chosen.bytes, ctype = chosen.type, ext = chosen.type === "image/png" ? "png" : chosen.type === "image/webp" ? "webp" : "jpg";
-  try {
-    // loaded only here, so a problem with the library can never stop the rest of his day
-    const { Image } = await import("npm:imagescript@1.3.0");
-    const img = await Image.decode(chosen.bytes);
-    const side = Math.min(img.width, img.height);
-    const sq = img.crop(Math.floor((img.width - side) / 2), Math.floor((img.height - side) / 2), side, side).resize(512, 512);
-    const flat = new Image(512, 512).fill(0xffffffff);
-    flat.composite(sq);
-    bytes = await flat.encodeJPEG(86); ctype = "image/jpeg"; ext = "jpg";
-    report.resized = { from: chosen.bytes.length, to: bytes.length };
-  } catch (e) { report.resized = "kept as it was: " + String((e as Error).message || e).slice(0, 80); }
+  const small = await makeSquare(chosen.bytes);
+  if (small) { report.resized = { from: chosen.bytes.length, to: small.length }; bytes = small; ctype = "image/jpeg"; ext = "jpg"; } else report.resized = "kept as it was";
   const path = zen + "/zenith-a-" + Date.now() + "." + ext;
   const up = await admin.storage.from("media").upload(path, bytes, { contentType: ctype, upsert: false });
   if (up.error) { report.why = "could not save the file: " + up.error.message; return report; }
@@ -631,8 +655,8 @@ Deno.serve(async (req) => {
   if (!want || !same(want, req.headers.get("x-purge-secret") || "")) return json({ error: "forbidden" }, 403);
   if (!(await geminiKey())) return json({ error: "no gemini key in the vault" }, 500);
   // a dry run writes a post but saves nothing, to check that everything works
-  let dry = false, mode = "", force = false, odds = 0.2;
-  try { const b = await req.json(); dry = b.dry === true; force = b.force === true; mode = b.mode === "reply" ? "reply" : b.mode === "import" ? "import" : b.mode === "avatar" ? "avatar" : ""; if (typeof b.odds === "number" && b.odds >= 0 && b.odds <= 1) odds = b.odds; } catch { dry = false; }
+  let dry = false, mode = "", force = false, odds = 0.2, shrink = false;
+  try { const b = await req.json(); dry = b.dry === true; shrink = b.shrink === true; force = b.force === true; mode = b.mode === "reply" ? "reply" : b.mode === "import" ? "import" : b.mode === "avatar" ? "avatar" : ""; if (typeof b.odds === "number" && b.odds >= 0 && b.odds <= 1) odds = b.odds; } catch { dry = false; }
 
   const { data: owner } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
   if (!owner) return json({ skipped: "no owner" });
@@ -644,6 +668,7 @@ Deno.serve(async (req) => {
   if (mode === "reply") { try { await duePlans(id); await mindTick(id, zen, docs || []); } catch { /* the replies go on */ } return await replies(id, zen, docs || [], odds); }
   if (mode === "import") return await importOld(id, zen);
   // a test run of his picture search (asked for by the owner's helper): it picks and sets a picture now and says what happened
+  if (mode === "avatar" && shrink) return json(await shrinkCurrent(zen));
   if (mode === "avatar") { const st0 = await loadState(admin, id); const rep = await avatarJob(zen, st0, true, dry); if (rep.ok && !dry) await saveState(admin, id, st0); return json(rep); }
   const state = (docs || []).find((d) => d.doc_id === "main");
   const z = ((state && state.data && state.data.z) || {}) as { log?: number[] };

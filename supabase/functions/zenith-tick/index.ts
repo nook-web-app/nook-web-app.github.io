@@ -308,7 +308,7 @@ async function tavilyImages(query: string): Promise<string[]> {
 }
 const b64 = (b: Uint8Array) => { let bin = ""; for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode(...b.subarray(i, i + 0x8000)); return btoa(bin); };
 // deno-lint-ignore no-explicit-any
-async function avatarJob(zen: string, st: MindState, force = false): Promise<any> {
+async function avatarJob(zen: string, st: MindState, force = false, dry = false): Promise<any> {
   const report: Record<string, unknown> = { ok: false };
   const queries = [...AVATAR_QUERIES].sort(() => Math.random() - 0.5).slice(0, 2);
   report.queries = queries;
@@ -336,6 +336,8 @@ async function avatarJob(zen: string, st: MindState, force = false): Promise<any
     report.second = v;
     if (v.acceptable !== true) { report.why = "the second look refused it"; return report; }
   } catch { report.why = "the second look gave no answer"; return report; }
+  // a dry run only says which one he would take (nothing is saved or changed)
+  if (dry) { report.ok = true; report.dry = true; report.url = chosen.u; report.bytes = chosen.bytes.length; return report; }
   const ext = chosen.type === "image/png" ? "png" : chosen.type === "image/webp" ? "webp" : "jpg";
   const path = zen + "/zenith-a-" + Date.now() + "." + ext;
   const up = await admin.storage.from("media").upload(path, chosen.bytes, { contentType: chosen.type, upsert: false });
@@ -617,7 +619,7 @@ Deno.serve(async (req) => {
   if (mode === "reply") { try { await duePlans(id); await mindTick(id, zen, docs || []); } catch { /* the replies go on */ } return await replies(id, zen, docs || [], odds); }
   if (mode === "import") return await importOld(id, zen);
   // a test run of his picture search (asked for by the owner's helper): it picks and sets a picture now and says what happened
-  if (mode === "avatar") { const st0 = await loadState(admin, id); const rep = await avatarJob(zen, st0, true); if (rep.ok) await saveState(admin, id, st0); return json(rep); }
+  if (mode === "avatar") { const st0 = await loadState(admin, id); const rep = await avatarJob(zen, st0, true, dry); if (rep.ok && !dry) await saveState(admin, id, st0); return json(rep); }
   const state = (docs || []).find((d) => d.doc_id === "main");
   const z = ((state && state.data && state.data.z) || {}) as { log?: number[] };
   const now = Date.now();

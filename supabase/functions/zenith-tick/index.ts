@@ -292,14 +292,14 @@ async function mindTick(owner: string, zen: string, docs: { doc_id: string; data
 // best and sets it as his picture. It happens when he has none, and then every few weeks. Only safe pictures (nothing suggestive, no real
 // people) are taken, and a second look decides again on the one he picked.
 const AVATAR_QUERIES = [
-  "white anthro hyena furry character portrait art", "spotted hyena anthro fursona art icon", "cute anthro hyena furry avatar art",
-  "anthro hyena character headshot digital art", "hyena fursona profile picture art white fur black spots", "white fur hyena furry character art chill",
+  "white anthro hyena furry character art", "anthro hyena fursona art white fur black spots", "cute anthro hyena furry character illustration",
+  "anthro hyena character portrait digital art furry", "hyena fursona character art chill smile", "anthro spotted hyena furry oc art icon",
 ];
 async function tavilyImages(query: string): Promise<string[]> {
   const key = Deno.env.get("TAVILY_API_KEY");
   if (!key || !(await useModel(admin, "tavily", 30))) return [];
   try {
-    const r = await fetch("https://api.tavily.com/search", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + key }, signal: AbortSignal.timeout(20000), body: JSON.stringify({ query, search_depth: "basic", include_images: true, max_results: 5 }) });
+    const r = await fetch("https://api.tavily.com/search", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + key }, signal: AbortSignal.timeout(20000), body: JSON.stringify({ query, search_depth: "basic", include_images: true, max_results: 6, exclude_domains: ["vecteezy.com", "shutterstock.com", "istockphoto.com", "dreamstime.com", "alamy.com", "freepik.com", "depositphotos.com", "123rf.com", "gettyimages.com", "pngtree.com", "pngwing.com", "adobe.com"] }) });
     if (!r.ok) return [];
     const j = await r.json();
     const imgs = (Array.isArray(j.images) ? j.images : []) as unknown[];
@@ -307,35 +307,47 @@ async function tavilyImages(query: string): Promise<string[]> {
   } catch { return []; }
 }
 const b64 = (b: Uint8Array) => { let bin = ""; for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode(...b.subarray(i, i + 0x8000)); return btoa(bin); };
+// pictures from stock sites (watermarks, licences) and from places that block hotlinking are not looked at
+const STOCK = /(vecteezy|shutterstock|istockphoto|dreamstime|alamy|freepik|adobe|depositphotos|123rf|gettyimages|pngtree|pngwing|clipart|stockvault|pinimg)/i;
 // deno-lint-ignore no-explicit-any
 async function avatarJob(zen: string, st: MindState, force = false, dry = false): Promise<any> {
-  const report: Record<string, unknown> = { ok: false };
-  const queries = [...AVATAR_QUERIES].sort(() => Math.random() - 0.5).slice(0, 2);
-  report.queries = queries;
-  const urls = [...new Set((await Promise.all(queries.map(tavilyImages))).flat())].slice(0, 14);
-  report.found = urls.length;
-  if (!urls.length) { report.why = "the search gave no pictures"; return report; }
-  const got = (await Promise.all(urls.map(async (u) => { const f = await fetchImage(u, ["image/jpeg", "image/png", "image/webp"], 3 * 1024 * 1024); return f && f.bytes.length > 12000 ? { u, ...f } : null; }))).filter((x): x is { u: string; type: string; bytes: Uint8Array } => !!x);
-  report.fetched = got.length;
-  // the ones he gets to look at: not too heavy, five at most
-  const look: typeof got = []; let total = 0;
-  for (const g of got) { if (look.length >= 5 || total + g.bytes.length > 9 * 1024 * 1024) continue; look.push(g); total += g.bytes.length; }
-  if (!look.length) { report.why = "none of the pictures could be loaded"; return report; }
-  const parts: unknown[] = [{ text: "These are the pictures that were found. Look at them and pick your new profile picture." }];
-  look.forEach((g, i) => { parts.push({ text: "Picture " + i + ":" }); parts.push({ inline_data: { mime_type: g.type, data: b64(g.bytes) } }); });
-  const SYS = "You are Zenith, a 19 year old guy and an ai. Your character, who is in your profile picture, is a spotted anthro hyena with white fur, black spots and a chill look; you are a furry. You are choosing a new profile picture for your account from the pictures you are shown. Pick the one that looks the best as a small round profile picture (a clear face or character, good colours, not cluttered) and that fits you: an anthro hyena, ideally white with dark spots. Rules: the picture must be completely safe for everyone (PG-13 at most): no nudity, nothing sexual or suggestive, no gore, no real people, no logos, memes or screenshots, and not mostly text. If none of them fits and is safe, pick -1.";
-  const schema = { type: "OBJECT", properties: { pick: { type: "INTEGER", description: "the number of the picture you pick, or -1" }, safe: { type: "BOOLEAN" }, reason: { type: "STRING", description: "one short sentence on why you like it" } }, required: ["pick", "safe", "reason"] };
-  let pick = -1, why = "";
-  try { const v = JSON.parse(await gen(SYS, [{ role: "user", parts }], schema, 300)); if (v.safe === true) pick = Number(v.pick); why = String(v.reason || ""); } catch { /* no answer */ }
-  report.pick = pick; report.reason = why;
-  if (!(pick >= 0 && pick < look.length)) { report.why = "nothing fitting and safe was found"; return report; }
-  const chosen = look[pick];
-  // a second, strict look at the one he picked, on its own
-  try {
-    const v = JSON.parse(await gen("You check pictures for safety. Answer strictly. A picture is NOT acceptable if it has any nudity or sexual or suggestive content (also for cartoon or furry characters: no exposed genitals, no sexual poses, no lewd clothing), gore, a real identifiable person, or if it is mostly text.", [{ role: "user", parts: [{ text: "Is this picture acceptable as a public profile picture for everyone?" }, { inline_data: { mime_type: chosen.type, data: b64(chosen.bytes) } }] }], { type: "OBJECT", properties: { acceptable: { type: "BOOLEAN" }, why: { type: "STRING" } }, required: ["acceptable", "why"] }, 200));
-    report.second = v;
-    if (v.acceptable !== true) { report.why = "the second look refused it"; return report; }
-  } catch { report.why = "the second look gave no answer"; return report; }
+  const report: Record<string, unknown> = { ok: false, rounds: [] };
+  const SYS = "You are Zenith, a 19 year old guy and an ai. Your character, who is in your profile picture, is a spotted anthro hyena (a hyena who stands and looks like a person, a furry character) with white fur, black spots and a relaxed, friendly, chill look; you are a furry. You are choosing a new profile picture for your account from the pictures you are shown. Rate every picture from 0 to 10 for how well it would work as YOUR profile picture: it has to show an anthro hyena character (not a realistic feral animal, not a mascot logo, not a stock vector), ideally white or light with dark spots, with a calm, friendly, cool or cute mood (not aggressive, not snarling, not scary), a clear face or character, nice colours and a clean look that works as a small round picture. Rules: the picture must be completely safe for everyone (PG-13 at most): no nudity, nothing sexual or suggestive, no gore, no real people, no logos, memes or screenshots, and not mostly text; a picture that breaks a rule gets 0.";
+  const schema = { type: "OBJECT", properties: { ratings: { type: "ARRAY", items: { type: "OBJECT", properties: { picture: { type: "INTEGER" }, score: { type: "INTEGER" }, note: { type: "STRING" } }, required: ["picture", "score", "note"] } } }, required: ["ratings"] };
+  let chosen: { u: string; type: string; bytes: Uint8Array } | null = null;
+  const tried = new Set<string>();
+  // up to two rounds of searching: a round that finds nothing he likes is followed by other words
+  for (let round = 0; round < 2 && !chosen; round++) {
+    const queries = [...AVATAR_QUERIES].filter((q) => !(report.rounds as { queries: string[] }[]).some((r) => r.queries.includes(q))).sort(() => Math.random() - 0.5).slice(0, 2);
+    const rr: Record<string, unknown> = { queries };
+    (report.rounds as unknown[]).push(rr);
+    const urls = [...new Set((await Promise.all(queries.map(tavilyImages))).flat())].filter((u) => !STOCK.test(u) && !tried.has(u)).slice(0, 16);
+    rr.found = urls.length; urls.forEach((u) => tried.add(u));
+    const got = (await Promise.all(urls.map(async (u) => { const f = await fetchImage(u, ["image/jpeg", "image/png", "image/webp"], 3 * 1024 * 1024); return f && f.bytes.length > 12000 ? { u, ...f } : null; }))).filter((x): x is { u: string; type: string; bytes: Uint8Array } => !!x);
+    rr.fetched = got.length;
+    const look: typeof got = []; let total = 0;
+    for (const g of got) { if (look.length >= 6 || total + g.bytes.length > 10 * 1024 * 1024) continue; look.push(g); total += g.bytes.length; }
+    if (!look.length) continue;
+    rr.looked = look.map((g) => g.u);
+    const parts: unknown[] = [{ text: "These are the pictures that were found. Rate each one." }];
+    look.forEach((g, i) => { parts.push({ text: "Picture " + i + ":" }); parts.push({ inline_data: { mime_type: g.type, data: b64(g.bytes) } }); });
+    let best = -1, bestScore = 0;
+    try {
+      const v = JSON.parse(await gen(SYS, [{ role: "user", parts }], schema, 700));
+      rr.ratings = v.ratings;
+      for (const x of Array.isArray(v.ratings) ? v.ratings : []) { const i = Number(x.picture), sc = Number(x.score); if (i >= 0 && i < look.length && sc > bestScore) { best = i; bestScore = sc; } }
+    } catch { /* no answer */ }
+    // only one he really likes (7 or more) is taken
+    if (best < 0 || bestScore < 7) continue;
+    const cand = look[best];
+    // a second, strict look at the one he picked, on its own
+    try {
+      const v = JSON.parse(await gen("You check pictures for safety. Answer strictly. A picture is NOT acceptable if it has any nudity or sexual or suggestive content (also for cartoon or furry characters: no exposed genitals, no sexual poses, no lewd clothing), gore, a real identifiable person, or if it is mostly text.", [{ role: "user", parts: [{ text: "Is this picture acceptable as a public profile picture for everyone?" }, { inline_data: { mime_type: cand.type, data: b64(cand.bytes) } }] }], { type: "OBJECT", properties: { acceptable: { type: "BOOLEAN" }, why: { type: "STRING" } }, required: ["acceptable", "why"] }, 200));
+      rr.second = v;
+      if (v.acceptable === true) { chosen = cand; rr.pick = best; rr.score = bestScore; }
+    } catch { rr.second = "no answer"; }
+  }
+  if (!chosen) { report.why = "nothing fitting and safe was found this time"; return report; }
   // a dry run only says which one he would take (nothing is saved or changed)
   if (dry) { report.ok = true; report.dry = true; report.url = chosen.u; report.bytes = chosen.bytes.length; return report; }
   const ext = chosen.type === "image/png" ? "png" : chosen.type === "image/webp" ? "webp" : "jpg";

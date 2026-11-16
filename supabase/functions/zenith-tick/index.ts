@@ -310,6 +310,7 @@ const b64 = (b: Uint8Array) => { let bin = ""; for (let i = 0; i < b.length; i +
 // pictures from stock sites (watermarks, licences) and from places that block hotlinking are not looked at
 const STOCK = /(vecteezy|shutterstock|istockphoto|dreamstime|alamy|freepik|adobe|depositphotos|123rf|gettyimages|pngtree|pngwing|clipart|stockvault|pinimg)/i;
 // a picture made small: a 512 pixel square jpeg (null when this kind of file cannot be read here, like webp)
+let squareErr = "";
 async function makeSquare(bytes: Uint8Array): Promise<Uint8Array | null> {
   try {
     // loaded only here, so a problem with the library can never stop the rest of his day
@@ -320,7 +321,7 @@ async function makeSquare(bytes: Uint8Array): Promise<Uint8Array | null> {
     const flat = new Image(512, 512).fill(0xffffffff);
     flat.composite(sq);
     return await flat.encodeJPEG(86);
-  } catch { return null; }
+  } catch (e) { squareErr = String((e as Error).message || e).slice(0, 160); return null; }
 }
 // his current picture is made small (once; a picture that is already small is left alone)
 // deno-lint-ignore no-explicit-any
@@ -333,7 +334,7 @@ async function shrinkCurrent(zen: string): Promise<any> {
   if (!f) return { ok: false, why: "could not load it" };
   if (f.bytes.length < 120 * 1024) return { ok: true, why: "already small", bytes: f.bytes.length };
   const small = await makeSquare(f.bytes);
-  if (!small) return { ok: false, why: "this kind of file cannot be made smaller here" };
+  if (!small) return { ok: false, why: "this kind of file cannot be made smaller here", err: squareErr };
   const path = zen + "/zenith-a-" + Date.now() + ".jpg";
   const up = await admin.storage.from("media").upload(path, small, { contentType: "image/jpeg", upsert: false });
   if (up.error) return { ok: false, why: up.error.message };
@@ -387,7 +388,7 @@ async function avatarJob(zen: string, st: MindState, force = false, dry = false)
   // square, as a jpeg. A format that cannot be read here (webp) is kept as it is.
   let bytes = chosen.bytes, ctype = chosen.type, ext = chosen.type === "image/png" ? "png" : chosen.type === "image/webp" ? "webp" : "jpg";
   const small = await makeSquare(chosen.bytes);
-  if (small) { report.resized = { from: chosen.bytes.length, to: small.length }; bytes = small; ctype = "image/jpeg"; ext = "jpg"; } else report.resized = "kept as it was";
+  if (small) { report.resized = { from: chosen.bytes.length, to: small.length }; bytes = small; ctype = "image/jpeg"; ext = "jpg"; } else report.resized = "kept as it was: " + squareErr;
   const path = zen + "/zenith-a-" + Date.now() + "." + ext;
   const up = await admin.storage.from("media").upload(path, bytes, { contentType: ctype, upsert: false });
   if (up.error) { report.why = "could not save the file: " + up.error.message; return report; }

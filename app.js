@@ -27,10 +27,10 @@ function startFail(why) {
 window.addEventListener("error", e => setTimeout(() => startFail(String((e && e.message) || "")), 300));
 window.addEventListener("unhandledrejection", e => setTimeout(() => startFail(String((e && e.reason && e.reason.message) || "")), 300));
 setTimeout(() => startFail("Check your connection."), 12000);
-const SB_URL = "https://cimyolsipjdpibzaebmx.supabase.co";
+const SB_URL = "https://dekvjxjwjknfydswkihy.supabase.co";
 // only the public columns of a profile are read; the moderation flags are not visible to other people
 const ACC_COLS = "id, username, display_name, bio, avatar, banner, banner_theme, public_key, deactivated, handle_changed_at, pinned_post_id, created_at";
-const SB_KEY = "sb_publishable_BzsW9TXvMRjUQf5BZj3pLg_197wdNpq";
+const SB_KEY = "sb_publishable_ElNJuivxIuEblSs6m29qcg_xIipD9FJ";
 const HASH_ERR = /error_code=/.test(location.hash);
 let RECOVERY = false;
 // the app reads the sign in link of a reset email itself, so a stranger's link cannot silently sign somebody in

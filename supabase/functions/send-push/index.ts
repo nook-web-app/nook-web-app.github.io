@@ -41,7 +41,7 @@ let fcmTok: { t: string; exp: number } | null = null;
 let fcmSa: { client_email: string; private_key: string; project_id: string } | null = null;
 async function fcmToken(): Promise<string | null> {
   if (fcmTok && fcmTok.exp > Date.now() + 60000) return fcmTok.t;
-  if (!fcmSa) { try { fcmSa = JSON.parse(Deno.env.get("FCM_SERVICE_ACCOUNT") || ""); } catch { return null; } }
+  if (!fcmSa) { try { fcmSa = JSON.parse((Deno.env.get("FCM_SERVICE_ACCOUNT") ?? Deno.env.get("firebase notification key")) || ""); } catch { return null; } }
   if (!fcmSa || !fcmSa.private_key) return null;
   const key = await importPKCS8(fcmSa.private_key, "RS256");
   const now = Math.floor(Date.now() / 1000);

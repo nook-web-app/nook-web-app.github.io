@@ -18,7 +18,7 @@ const GENERIC = "Wrong code, or too many tries. Wait 15 minutes and try again.";
 const ENC = "enc1:";
 let encKey: CryptoKey | null = null;
 async function getEncKey(): Promise<CryptoKey | null> {
-  const raw = Deno.env.get("TOTP_ENC_KEY");
+  const raw = (Deno.env.get("TOTP_ENC_KEY") ?? Deno.env.get("encryption key"));
   if (!raw) return null;
   if (!encKey) {
     const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("nook-totp|" + raw));

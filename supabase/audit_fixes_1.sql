@@ -30,7 +30,7 @@ end $function$;
 -- media urls: no percent encoding, so dot segments cannot sneak in
 create or replace function public.nook_media_ok(p_url text, p_bucket text, p_owner uuid) returns boolean language sql immutable set search_path to 'public' as $function$
   select p_url is not null
-     and p_url like 'https://cimyolsipjdpibzaebmx.supabase.co/storage/v1/object/public/' || p_bucket || '/' || p_owner::text || '/%'
+     and p_url like 'https://dekvjxjwjknfydswkihy.supabase.co/storage/v1/object/public/' || p_bucket || '/' || p_owner::text || '/%'
      and length(p_url) <= 400
      and p_url !~ '[[:space:]"''<>\\%]'
      and position('..' in p_url) = 0

@@ -378,7 +378,7 @@ begin
   v_secret := public.nook_purge_secret();
   if v_secret is null then return new; end if;
   perform net.http_post(
-    url := 'https://cimyolsipjdpibzaebmx.supabase.co/functions/v1/send-push',
+    url := 'https://dekvjxjwjknfydswkihy.supabase.co/functions/v1/send-push',
     body := jsonb_build_object('notification_id', new.id),
     headers := jsonb_build_object('Content-Type', 'application/json', 'x-purge-secret', v_secret),
     timeout_milliseconds := 10000);
@@ -520,7 +520,7 @@ begin
   v_secret := public.nook_purge_secret();
   if v_secret is null then return; end if;
   perform net.http_post(
-    url := 'https://cimyolsipjdpibzaebmx.supabase.co/functions/v1/purge-media',
+    url := 'https://dekvjxjwjknfydswkihy.supabase.co/functions/v1/purge-media',
     body := jsonb_build_object('bucket', p_bucket, 'paths', to_jsonb(coalesce(p_paths, '{}'::text[])), 'user_id', p_user),
     headers := jsonb_build_object('Content-Type', 'application/json', 'x-purge-secret', v_secret),
     timeout_milliseconds := 10000);
@@ -741,7 +741,7 @@ notify pgrst, 'reload schema';
 create or replace function public.nook_media_ok(p_url text, p_bucket text, p_owner uuid) returns boolean
 language sql immutable set search_path = public as $$
   select p_url is not null
-     and p_url like 'https://cimyolsipjdpibzaebmx.supabase.co/storage/v1/object/public/' || p_bucket || '/' || p_owner::text || '/%'
+     and p_url like 'https://dekvjxjwjknfydswkihy.supabase.co/storage/v1/object/public/' || p_bucket || '/' || p_owner::text || '/%'
      and length(p_url) <= 400
      and p_url !~ '[[:space:]"''<>\\]'
      and position('..' in p_url) = 0
@@ -757,7 +757,7 @@ begin
   v_secret := public.nook_purge_secret();
   if v_secret is null then return; end if;
   perform net.http_post(
-    url := 'https://cimyolsipjdpibzaebmx.supabase.co/functions/v1/purge-media',
+    url := 'https://dekvjxjwjknfydswkihy.supabase.co/functions/v1/purge-media',
     body := jsonb_build_object('bucket', p_bucket, 'paths', to_jsonb(coalesce(p_paths, '{}'::text[])), 'user_id', p_user),
     headers := jsonb_build_object('Content-Type', 'application/json', 'x-purge-secret', v_secret),
     timeout_milliseconds := 10000);
@@ -772,7 +772,7 @@ begin
   v_secret := public.nook_purge_secret();
   if v_secret is null then return; end if;
   perform net.http_post(
-    url := 'https://cimyolsipjdpibzaebmx.supabase.co/functions/v1/purge-media',
+    url := 'https://dekvjxjwjknfydswkihy.supabase.co/functions/v1/purge-media',
     body := jsonb_build_object('action', case when p_drop then 'drop_archive' else 'archive' end, 'user_id', p_user),
     headers := jsonb_build_object('Content-Type', 'application/json', 'x-purge-secret', v_secret),
     timeout_milliseconds := 10000);
@@ -1265,7 +1265,7 @@ begin
   v_secret := public.nook_purge_secret();
   if v_secret is null then return; end if;
   perform net.http_post(
-    url := 'https://cimyolsipjdpibzaebmx.supabase.co/functions/v1/zenith-tick',
+    url := 'https://dekvjxjwjknfydswkihy.supabase.co/functions/v1/zenith-tick',
     body := '{}'::jsonb,
     headers := jsonb_build_object('Content-Type', 'application/json', 'x-purge-secret', v_secret),
     timeout_milliseconds := 20000);
@@ -1296,7 +1296,7 @@ begin
   v_secret := public.nook_purge_secret();
   if v_secret is null then return; end if;
   perform net.http_post(
-    url := 'https://cimyolsipjdpibzaebmx.supabase.co/functions/v1/zenith-tick',
+    url := 'https://dekvjxjwjknfydswkihy.supabase.co/functions/v1/zenith-tick',
     body := '{"mode":"reply"}'::jsonb,
     headers := jsonb_build_object('Content-Type', 'application/json', 'x-purge-secret', v_secret),
     timeout_milliseconds := 50000);

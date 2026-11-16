@@ -26,8 +26,8 @@ import java.util.concurrent.TimeUnit
 // (PostgREST), the stored functions (rpc), the edge functions, the file storage and the login. Every call runs off the
 // main thread and answers with a result instead of throwing, like supabase-js does ({ data, error }).
 
-const val SB_URL = "https://cimyolsipjdpibzaebmx.supabase.co"
-const val SB_KEY = "sb_publishable_BzsW9TXvMRjUQf5BZj3pLg_197wdNpq"
+const val SB_URL = "https://dekvjxjwjknfydswkihy.supabase.co"
+const val SB_KEY = "sb_publishable_ElNJuivxIuEblSs6m29qcg_xIipD9FJ"
 // only the public columns of a profile are read; the moderation flags are not visible to other people
 const val ACC_COLS = "id, username, display_name, bio, avatar, banner, banner_theme, public_key, deactivated, handle_changed_at, pinned_post_id, created_at"
 const val OWNER_EMAIL = "haythamzoubi960@gmail.com"

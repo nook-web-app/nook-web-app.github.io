@@ -87,7 +87,7 @@ async function runDevice(browser, name, port) {
   const ctx2 = await browser.newContext({ ...devices[name], serviceWorkers: "block" });
   ctx2.__signedIn = true;
   await mock(ctx2, port);
-  await ctx2.addInitScript(s => { try { localStorage.setItem("sb-cimyolsipjdpibzaebmx-auth-token", JSON.stringify(s)); } catch (e) {} }, SESSION);
+  await ctx2.addInitScript(s => { try { localStorage.setItem("sb-dekvjxjwjknfydswkihy-auth-token", JSON.stringify(s)); } catch (e) {} }, SESSION);
   const p2 = await ctx2.newPage();
   const errs2 = [];
   p2.on("pageerror", e => errs2.push("pageerror: " + e.message));

@@ -13,9 +13,9 @@ const cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 // the Gemini key is saved in the database vault (secret name gemini_api_key) or as an edge secret; it is looked up once a minute at most
-let keyCache = { v: Deno.env.get("GEMINI_API_KEY") || "", at: 0 };
+let keyCache = { v: (Deno.env.get("GEMINI_API_KEY") ?? Deno.env.get("gemini api key")) || "", at: 0 };
 async function geminiKey(): Promise<string> {
-  if (keyCache.v && Deno.env.get("GEMINI_API_KEY")) return keyCache.v;
+  if (keyCache.v && (Deno.env.get("GEMINI_API_KEY") ?? Deno.env.get("gemini api key"))) return keyCache.v;
   if (Date.now() - keyCache.at < 60000) return keyCache.v;
   const { data } = await admin.rpc("nook_gemini_key");
   keyCache = { v: typeof data === "string" ? data : "", at: Date.now() };
@@ -112,7 +112,7 @@ const foundNote = (q: string, got: { text: string; sources: string[] }) =>
 // the message that goes to the chat model with what the search found (or with the news that it could not search)
 async function searchNote(query: string): Promise<string> {
   const q = query.replace(/[\r\n]+/g, " ").slice(0, 200);
-  const tk = Deno.env.get("TAVILY_API_KEY");
+  const tk = (Deno.env.get("TAVILY_API_KEY") ?? Deno.env.get("web search api key"));
   if (tk) { const got = await tavilySearch(tk, q); if (got) return foundNote(q, got); }
   return "[You tried to search the web for \"" + q + "\" but searching is not possible right now. Tell the user you could not look it up, and answer only with what you already know.]";
 }

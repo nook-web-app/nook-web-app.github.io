@@ -51,7 +51,7 @@ async function mock(context) {
     const ctx = await browser.newContext({ ...devices["iPhone 13"], serviceWorkers: "block" });
     await mock(ctx);
     await ctx.addInitScript(([s, uid]) => {
-      try { localStorage.setItem("sb-cimyolsipjdpibzaebmx-auth-token", JSON.stringify(s)); localStorage.setItem("nook-local-uid", uid); } catch (e) {}
+      try { localStorage.setItem("sb-dekvjxjwjknfydswkihy-auth-token", JSON.stringify(s)); localStorage.setItem("nook-local-uid", uid); } catch (e) {}
       // counts every read of the picture store
       window.__reads = { getAll: 0, keys: 0, get: [] };
       const P = IDBObjectStore.prototype, ga = P.getAll, gk = P.getAllKeys, g = P.get;

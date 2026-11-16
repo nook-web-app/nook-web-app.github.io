@@ -9,7 +9,7 @@ begin
   v_secret := public.nook_purge_secret();
   if v_secret is null then return new; end if;
   perform net.http_post(
-    url := 'https://cimyolsipjdpibzaebmx.supabase.co/functions/v1/send-push',
+    url := 'https://dekvjxjwjknfydswkihy.supabase.co/functions/v1/send-push',
     body := jsonb_build_object('notification_id', new.id),
     headers := jsonb_build_object('Content-Type', 'application/json', 'x-purge-secret', v_secret),
     timeout_milliseconds := 10000);

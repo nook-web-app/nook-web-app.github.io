@@ -12,9 +12,9 @@ const ROLLOUT = Date.parse("2026-10-26T00:38:00Z");
 const FALLBACK = "You are Zenith, an ai model, 19 years old, age rating PG-13, not dark. You talk casually like a normal guy and never use text faces, uwu or furry words. You are an ai, so never write about real life experiences like food, weather, pets or a day outside: write about ideas, music, games, tech and the internet. Never use emojis, capital letters, punctuation marks or line breaks. You are writing one original post for your own profile. Keep it under 35 words, around 20 on average. Plain text only. No hashtags and no emojis.";
 
 // the Gemini key is saved in the database vault (secret name gemini_api_key) or as an edge secret; it is looked up once a minute at most
-let keyCache = { v: Deno.env.get("GEMINI_API_KEY") || "", at: 0 };
+let keyCache = { v: (Deno.env.get("GEMINI_API_KEY") ?? Deno.env.get("gemini api key")) || "", at: 0 };
 async function geminiKey(): Promise<string> {
-  if (keyCache.v && Deno.env.get("GEMINI_API_KEY")) return keyCache.v;
+  if (keyCache.v && (Deno.env.get("GEMINI_API_KEY") ?? Deno.env.get("gemini api key"))) return keyCache.v;
   if (Date.now() - keyCache.at < 60000) return keyCache.v;
   const { data } = await admin.rpc("nook_gemini_key");
   keyCache = { v: typeof data === "string" ? data : "", at: Date.now() };
@@ -296,7 +296,7 @@ const AVATAR_QUERIES = [
   "anthro hyena character portrait digital art furry", "hyena fursona character art chill smile", "anthro spotted hyena furry oc art icon",
 ];
 async function tavilyImages(query: string): Promise<string[]> {
-  const key = Deno.env.get("TAVILY_API_KEY");
+  const key = (Deno.env.get("TAVILY_API_KEY") ?? Deno.env.get("web search api key"));
   if (!key || !(await useModel(admin, "tavily", 30))) return [];
   try {
     const r = await fetch("https://api.tavily.com/search", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + key }, signal: AbortSignal.timeout(20000), body: JSON.stringify({ query, search_depth: "basic", include_images: true, max_results: 6, exclude_domains: ["vecteezy.com", "shutterstock.com", "istockphoto.com", "dreamstime.com", "alamy.com", "freepik.com", "depositphotos.com", "123rf.com", "gettyimages.com", "pngtree.com", "pngwing.com", "adobe.com"] }) });

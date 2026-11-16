@@ -1,5 +1,5 @@
 # Used by the Supabase GitHub integration: a push to main applies supabase/migrations and deploys supabase/functions.
-project_id = "cimyolsipjdpibzaebmx"
+project_id = "dekvjxjwjknfydswkihy"
 
 # every function does its own sign-in check except age, which Supabase checks for it
 [functions.age]

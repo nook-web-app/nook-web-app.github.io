@@ -296,22 +296,29 @@ fun rememberAtBottom(list: androidx.compose.foundation.lazy.LazyListState): Stat
 // so the chat moves once, smoothly, and not "to the place, stop, a little more"
 // the way down to the newest message is one smooth glide: a far one is first brought near (at once), then it eases the rest of the way
 suspend fun androidx.compose.foundation.lazy.LazyListState.glideToBottom() {
-    val n = layoutInfo.totalItemsCount
-    if (n == 0) return
-    // a very long way is shortened: only the last 25 messages or so are travelled by eye, the rest is skipped at once
+    if (layoutInfo.totalItemsCount == 0) return
+    // only a really long way (more than 120 messages) skips ahead at once; everything else is travelled by eye
     val shown0 = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: firstVisibleItemIndex
-    if (n - 1 - shown0 > 25) scrollToItem(n - 1 - 25)
-    val vis = layoutInfo.visibleItemsInfo
-    val lastVis = vis.lastOrNull() ?: return
-    val avg = vis.map { it.size }.average().toFloat().coerceAtLeast(40f)
-    val itemsLeft = n - 1 - lastVis.index
-    val remaining = (lastVis.offset + lastVis.size - layoutInfo.viewportEndOffset).coerceAtLeast(0) + itemsLeft * avg
-    if (remaining > 4f) {
-        // the longer the way, the longer it takes (but never a long wait), and it slows down at the end
-        val ms = (380 + itemsLeft * 22).coerceAtMost(900)
+    if (layoutInfo.totalItemsCount - 1 - shown0 > 120) scrollToItem(layoutInfo.totalItemsCount - 1 - 120)
+    // the heights of the messages that are not shown yet are guessed, so after each glide the rest is measured again and glided too (a second
+    // and third pass are short): it never stops short and jumps at the end
+    var pass = 0
+    while (pass < 5) {
+        val info = layoutInfo
+        val n = info.totalItemsCount
+        val vis = info.visibleItemsInfo
+        val lastVis = vis.lastOrNull() ?: break
+        val avg = vis.map { it.size }.average().toFloat().coerceAtLeast(40f)
+        val itemsLeft = n - 1 - lastVis.index
+        val remaining = (lastVis.offset + lastVis.size - info.viewportEndOffset).toFloat() + itemsLeft * avg
+        if (remaining <= 2f) break
+        val ms = if (pass == 0) (380 + itemsLeft * 8).coerceAtMost(1000) else 220
         animateScrollBy(remaining, tween(ms, easing = androidx.compose.animation.core.FastOutSlowInEasing))
+        pass++
+        // a frame for the layout to settle (a bubble that grows, a new message)
+        androidx.compose.runtime.withFrameNanos { }
     }
-    pinBottom(150)
+    pinBottom(120)
 }
 suspend fun androidx.compose.foundation.lazy.LazyListState.pinBottom(ms: Long = 380) {
     val end = System.nanoTime() + ms * 1_000_000
@@ -569,7 +576,8 @@ fun Modifier.msgIn(kind: MsgAnim, mine: Boolean): Modifier = if (kind == MsgAnim
         val k = a.value
         transformOrigin = androidx.compose.ui.graphics.TransformOrigin(if (mine) 1f else 0f, 1f)
         when (kind) {
-            MsgAnim.In -> alpha = k
+            // his message comes in from the left with a small grow and a fade
+            MsgAnim.In -> { alpha = k; val sc = 0.9f + 0.1f * k; scaleX = sc; scaleY = sc; translationX = -14.dp.toPx() * (1f - k) }
             MsgAnim.Send -> { alpha = k; val sc = 0.94f + 0.06f * k; scaleX = sc; scaleY = sc }
             MsgAnim.Land -> { val sc = if (k < 0.55f) 0.96f + (1.035f - 0.96f) * (k / 0.55f) else 1.035f - 0.035f * ((k - 0.55f) / 0.45f); scaleX = sc; scaleY = sc }
             else -> {}

@@ -89,6 +89,21 @@ private fun ConvScreenBody(id: String) {
     // and the message flashes
     var flashId by remember(chat.id) { mutableStateOf<String?>(null) }
     val jumpScope = rememberCoroutineScope()
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    // the reply bar takes room above the text box: the message that is answered is scrolled up so it stays clear of it, with a margin
+    val revealForReply: (LMsg) -> Unit = { m0 ->
+        jumpScope.launch {
+            kotlinx.coroutines.delay(300)
+            val idx = chat.msgs.indexOfFirst { it.id == m0.id }
+            if (idx < shownFrom) return@launch
+            val at = (if (chat.msgs.isEmpty()) 1 else 0) + (if (shownFrom > 0) 1 else 0) + (idx - shownFrom)
+            val info = list.layoutInfo
+            val item = info.visibleItemsInfo.firstOrNull { it.index == at } ?: return@launch
+            val margin = with(density) { 20.dp.toPx() }
+            val over = item.offset + item.size - (info.viewportEndOffset - margin)
+            if (over > 1f) list.animateScrollBy(over, tween(260, easing = androidx.compose.animation.core.FastOutSlowInEasing))
+        }
+    }
     val jumpTo: (String) -> Unit = { rid ->
         jumpScope.launch {
             val idx = chat.msgs.indexOfFirst { it.id == rid }
@@ -159,6 +174,14 @@ private fun ConvScreenBody(id: String) {
         }
     }) {
         val typing = app.zenTyping[chat.id]
+        // the dots item is kept while its exit animation plays
+        val dotsOn = typing != null && chat.msgs.none { it.id == typing.id }
+        var dotsKeep by remember(chat.id) { mutableStateOf<LMsg?>(null) }
+        LaunchedEffect(typing?.id, dotsOn) {
+            if (dotsOn) dotsKeep = typing else { kotlinx.coroutines.delay(320); if (app.zenTyping[chat.id] == null) dotsKeep = null }
+        }
+        // the dots appearing take a little room: the view follows when it was at the bottom
+        LaunchedEffect(dotsOn) { if (dotsOn && atBottom) list.glideToBottom() }
         // the length of his answer is read in an effect, so each streamed piece does not redraw the screen
         LaunchedEffect(chat.id) { snapshotFlow { app.zenTyping[chat.id]?.text?.length }.collect { if (it != null && atBottom) list.scrollToItem(chat.msgs.size - shownFrom + 2) } }
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -169,9 +192,9 @@ private fun ConvScreenBody(id: String) {
             items(chat.msgs.drop(shownFrom), key = { it.id }) { m ->
                 // pulling one of Zenith's messages to the right starts an answer to him
                 val anim = remember(m.id) { if (m.id in had || m.id in app.zenNoAnim) MsgAnim.None else if (m.ai) MsgAnim.In else MsgAnim.Send }
-                FoldAway(m.leaving) { Box(Modifier.padding(bottom = 6.dp).msgIn(anim, !m.ai)) { SwipeBubble(left = m.ai, canReply = m.ai, onReply = { if (isZ) replyHook[0]?.invoke(m) else fill[0]?.invoke("@zenith ") }, onTime = { open = if (open == m.id) null else m.id }) { Bubble(m, open == m.id, onTap = {}, flash = flashId == m.id, onQuote = { rid -> jumpTo(rid) }, onDouble = if (isZ) ({ m.liked = !m.liked; app.persist(); app.scope.launch { runCatching { Sb.fn("zenith", org.json.JSONObject().put("action", "like").put("id", m.id).put("on", m.liked)) } } }) else null) {
+                FoldAway(m.leaving) { Box(Modifier.padding(bottom = 6.dp).msgIn(anim, !m.ai)) { SwipeBubble(left = m.ai, canReply = m.ai, onReply = { if (isZ) { replyHook[0]?.invoke(m); revealForReply(m) } else fill[0]?.invoke("@zenith ") }, onTime = { open = if (open == m.id) null else m.id }) { Bubble(m, open == m.id, onTap = {}, flash = flashId == m.id, onQuote = { rid -> jumpTo(rid) }, onDouble = if (isZ) ({ m.liked = !m.liked; app.persist(); app.scope.launch { runCatching { Sb.fn("zenith", org.json.JSONObject().put("action", "like").put("id", m.id).put("on", m.liked)) } } }) else null) {
                     app.open(listOfNotNull(
-                        if (isZ) SheetItem("Reply", "reply") { replyHook[0]?.invoke(m) } else null,
+                        if (isZ) SheetItem("Reply", "reply") { replyHook[0]?.invoke(m); revealForReply(m) } else null,
                         if (m.text.isNotEmpty()) SheetItem("Copy message", "copy") { app.clipboard(m.text) } else null,
                         SheetItem(if (isZ && m.ai) "Delete for me" else "Delete message", "trash", danger = true) {
                             // in his chat: his messages go only for the owner; the owner's own go for both (he forgets them too)
@@ -192,8 +215,16 @@ private fun ConvScreenBody(id: String) {
             }
             // his answer while it is still being typed out
             // (the same key as the message it becomes, so the finished message takes the place of the typed one without a jump)
-            if (typing != null && chat.msgs.none { it.id == typing.id }) item(key = typing.id) {
-                Box(Modifier.padding(bottom = 6.dp).msgIn(MsgAnim.In, false).animateContentSize(tween(120))) { if (typing.text.isEmpty()) Box(Modifier.fillMaxWidth()) { TypingBubble() } else Bubble(typing, false, {}) {} }
+            // the typing dots grow in and shrink away (the item stays a moment after the typing stops, so it can leave with an animation)
+            if (dotsKeep != null) item(key = "typing-dots") {
+                val k = dotsKeep!!
+                val vis = remember { androidx.compose.animation.core.MutableTransitionState(false) }
+                vis.targetState = dotsOn
+                androidx.compose.animation.AnimatedVisibility(vis,
+                    enter = fadeIn(tween(200)) + expandVertically(tween(220)) + androidx.compose.animation.scaleIn(androidx.compose.animation.core.spring(androidx.compose.animation.core.Spring.DampingRatioMediumBouncy, androidx.compose.animation.core.Spring.StiffnessMedium), 0.7f, androidx.compose.ui.graphics.TransformOrigin(0f, 1f)),
+                    exit = fadeOut(tween(160)) + shrinkVertically(tween(220)) + androidx.compose.animation.scaleOut(tween(180), 0.8f, androidx.compose.ui.graphics.TransformOrigin(0f, 1f))) {
+                    Box(Modifier.padding(bottom = 6.dp).animateContentSize(tween(120))) { if (k.text.isEmpty()) Box(Modifier.fillMaxWidth()) { TypingBubble() } else Bubble(k, false, {}) {} }
+                }
             }
         }
         }
@@ -385,14 +416,16 @@ private fun LikeHeart(liked: Boolean, left: Boolean) {
     val pop by androidx.compose.animation.core.animateFloatAsState(if (liked) 1f else 0f, androidx.compose.animation.core.spring(androidx.compose.animation.core.Spring.DampingRatioMediumBouncy, androidx.compose.animation.core.Spring.StiffnessMedium), label = "heart")
     val burst = remember { androidx.compose.animation.core.Animatable(0f) }
     var first by remember { mutableStateOf(true) }
-    LaunchedEffect(liked) { if (first) { first = false; return@LaunchedEffect }; if (liked) { burst.snapTo(0f); burst.animateTo(1f, tween(650)) } }
-    if (pop < 0.01f && burst.value <= 0f) return
+    LaunchedEffect(liked) { if (first) { first = false; return@LaunchedEffect }; if (liked) { burst.snapTo(0f); burst.animateTo(1f, tween(650)); burst.snapTo(0f) } }
+    // the room under the bubble grows with the like and shrinks again when it is taken back
+    val room by androidx.compose.animation.core.animateDpAsState(if (liked) 8.dp else 0.dp, tween(200), label = "heartroom")
+    if (pop < 0.01f && burst.value <= 0.001f && room < 0.5.dp) return
     val pink = Color(0xFFFF4F79)
     // it sits on the bottom corner of the bubble and only takes a few dp of height, so a liked message does not leave a gap under it
     Box(Modifier.offset(x = if (left) 12.dp else (-12).dp).layout { m, c ->
         val p = m.measure(c)
         // its middle is on the bottom edge of the bubble, and only 8dp of height is kept for it
-        layout(p.width, 8.dp.roundToPx()) { p.place(0, -(p.height - 12.dp.roundToPx())) }
+        layout(p.width, room.roundToPx()) { p.place(0, -(p.height - 12.dp.roundToPx())) }
     }.size(24.dp), contentAlignment = Alignment.Center) {
         if (burst.value in 0.01f..0.99f) NIcon("heart", 22.dp, pink.copy(alpha = 0.55f * (1f - burst.value)), fill = true, modifier = Modifier.graphicsLayer { scaleX = 1f + burst.value * 1.6f; scaleY = 1f + burst.value * 1.6f; translationY = -burst.value * 18.dp.toPx() })
         Box(Modifier.graphicsLayer { scaleX = pop; scaleY = pop; alpha = pop.coerceIn(0f, 1f) }, contentAlignment = Alignment.Center) {

@@ -554,7 +554,8 @@ suspend fun AppState.zenDeliver(items: List<JSONObject>) {
             ai.text = text; ai.t = maxOf(System.currentTimeMillis(), e.optLong("t"))
             val re = e.opt("re")
             ai.reply = if (re is JSONObject) reOf(re) else (re as? String)?.takeIf { it.isNotEmpty() }?.let { rid -> chat.msgs.firstOrNull { it.id == rid }?.let { ReplyRef(it.id, replySnippet(it), it.ai) } }
-            zenNoAnim.add(id)
+            // an old one that is only now found just appears; a new one comes in with an animation
+            if (!fresh) zenNoAnim.add(id)
             chat.msgs.add(ai); chat.t = maxOf(chat.t, ai.t); any = true
             persist(); zenVersion++
             if (foreground && fresh && i < items.lastIndex) kotlinx.coroutines.delay(300L + (kotlin.random.Random.nextFloat() * 700).toLong())

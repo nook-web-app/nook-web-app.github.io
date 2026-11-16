@@ -204,10 +204,10 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
     fun loadZ() {
         // ONE TIME: his chat starts over with his memory (his first messages were not how a stranger texts)
         ctx?.getSharedPreferences("zstate", 0)?.let { p ->
-            if (!p.getBoolean("reset3", false)) {
+            if (!p.getBoolean("reset4", false)) {
                 // ONE TIME (asked by the owner): his chat starts over, like his memory on the server
                 store.chats.firstOrNull { it.id == ZDM }?.msgs?.clear()
-                p.edit().clear().putBoolean("reset2", true).putBoolean("reset3", true).apply()
+                p.edit().clear().putBoolean("reset2", true).putBoolean("reset3", true).putBoolean("reset4", true).apply()
                 persist()
                 runCatching { on.zenSyncSoon() }
             }

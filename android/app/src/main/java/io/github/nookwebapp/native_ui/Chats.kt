@@ -95,7 +95,7 @@ fun ChatsScreen() {
             // rows of the same shape as the chats shimmer until the real ones are drawn, so the page never looks empty
             if (dm.inbox == null && on.me != null) items((Cache.read("inbox-n")?.v as? Int ?: 1).coerceIn(1, 6)) { SkelRow() }
             // Zenith's own chat, pinned on top (the owner only)
-            if (zOn()) item(key = "zdm") {
+            if (zOn() && s.chats.firstOrNull { it.id == ZDM }?.msgs?.isNotEmpty() == true) item(key = "zdm") {
                 val last = s.chats.firstOrNull { it.id == ZDM }?.msgs?.lastOrNull()
                 val sub = when { last == null -> "Say hi"; callLogOf(last.text) != null -> "Call"; last.text.isEmpty() -> "Sent a photo"; else -> last.text }
                 LRow({ ZenAv(48.dp) }, s.chats.firstOrNull { it.id == ZDM }?.name ?: "Zenith", sub, last?.let { ago(it.t) }) { app.zenDm(); app.go(Route.Conv(ZDM)) }
@@ -298,11 +298,20 @@ fun rememberAtBottom(list: androidx.compose.foundation.lazy.LazyListState): Stat
 suspend fun androidx.compose.foundation.lazy.LazyListState.glideToBottom() {
     val n = layoutInfo.totalItemsCount
     if (n == 0) return
-    if (n - 1 - firstVisibleItemIndex > 8) scrollToItem(maxOf(0, n - 7))
-    val last = layoutInfo.visibleItemsInfo.lastOrNull()
-    val remaining = if (last != null && last.index == n - 1) (last.offset + last.size - layoutInfo.viewportEndOffset).toFloat() else 1500f
-    if (remaining > 0f) animateScrollBy(remaining, tween(420, easing = androidx.compose.animation.core.FastOutSlowInEasing))
-    pinBottom(120)
+    // a very long way is shortened: only the last 25 messages or so are travelled by eye, the rest is skipped at once
+    val shown0 = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: firstVisibleItemIndex
+    if (n - 1 - shown0 > 25) scrollToItem(n - 1 - 25)
+    val vis = layoutInfo.visibleItemsInfo
+    val lastVis = vis.lastOrNull() ?: return
+    val avg = vis.map { it.size }.average().toFloat().coerceAtLeast(40f)
+    val itemsLeft = n - 1 - lastVis.index
+    val remaining = (lastVis.offset + lastVis.size - layoutInfo.viewportEndOffset).coerceAtLeast(0) + itemsLeft * avg
+    if (remaining > 4f) {
+        // the longer the way, the longer it takes (but never a long wait), and it slows down at the end
+        val ms = (380 + itemsLeft * 22).coerceAtMost(900)
+        animateScrollBy(remaining, tween(ms, easing = androidx.compose.animation.core.FastOutSlowInEasing))
+    }
+    pinBottom(150)
 }
 suspend fun androidx.compose.foundation.lazy.LazyListState.pinBottom(ms: Long = 380) {
     val end = System.nanoTime() + ms * 1_000_000

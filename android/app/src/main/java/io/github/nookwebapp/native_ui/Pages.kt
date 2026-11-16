@@ -76,6 +76,8 @@ fun UserScreen(id: String, fromMenu: Boolean = false) {
                                 val st = pg.st
                                 // the owner can follow Zenith like everybody else, the button first as on every profile
                                 if (st?.blocked != true) Pill(if (st?.following == true) "Following" else "Follow", if (st?.following == true) Btn.FOn else Btn.F, small = true, enabled = st != null) { on.toggleFollow(pg) }
+                                // his chat is opened from here, like the Message button of any other profile (it is not in the chat list before that)
+                                Pill("Message", Btn.Ghost, small = true) { app.zenDm(); app.go(Route.Conv(ZDM)) }
                                 Pill("Edit Profile", Btn.Ghost, small = true) { app.panels.add(Panel.ZenEdit) }
                             } else {
                                 val st = pg.st

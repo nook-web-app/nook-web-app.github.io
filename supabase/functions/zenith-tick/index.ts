@@ -292,7 +292,7 @@ async function mindTick(owner: string, zen: string, docs: { doc_id: string; data
 // best and sets it as his picture. It happens when he has none, and then every few weeks. Only safe pictures (nothing suggestive, no real
 // people) are taken, and a second look decides again on the one he picked.
 const AVATAR_QUERIES = [
-  "white anthro hyena furry character art", "anthro hyena fursona art white fur black spots", "cute anthro hyena furry character illustration",
+  "white anthro hyena furry character art", "white fur black spots anthro hyena fursona art", "snow white hyena anthro furry oc art", "anthro hyena fursona white fur yellow eyes", "cute anthro hyena furry character illustration",
   "anthro hyena character portrait digital art furry", "hyena fursona character art chill smile", "anthro spotted hyena furry oc art icon",
 ];
 async function tavilyImages(query: string): Promise<string[]> {
@@ -312,12 +312,12 @@ const STOCK = /(vecteezy|shutterstock|istockphoto|dreamstime|alamy|freepik|adobe
 // deno-lint-ignore no-explicit-any
 async function avatarJob(zen: string, st: MindState, force = false, dry = false): Promise<any> {
   const report: Record<string, unknown> = { ok: false, rounds: [] };
-  const SYS = "You are Zenith, a 19 year old guy and an ai. Your character, who is in your profile picture, is a spotted anthro hyena (a hyena who stands and looks like a person, a furry character) with white fur, black spots and a relaxed, friendly, chill look; you are a furry. You are choosing a new profile picture for your account from the pictures you are shown. Rate every picture from 0 to 10 for how well it would work as YOUR profile picture: it has to show an anthro hyena character (not a realistic feral animal, not a mascot logo, not a stock vector), ideally white or light with dark spots, with a calm, friendly, cool or cute mood (not aggressive, not snarling, not scary), a clear face or character, nice colours and a clean look that works as a small round picture. Rules: the picture must be completely safe for everyone (PG-13 at most): no nudity, nothing sexual or suggestive, no gore, no real people, no logos, memes or screenshots, and not mostly text; a picture that breaks a rule gets 0. A picture with a visible watermark, signature or artist name on it loses 4 points, because it would carry another person's name.";
+  const SYS = "You are Zenith, a 19 year old guy and an ai. Your character, who is in your profile picture, is a spotted anthro hyena (a hyena who stands and looks like a person, a furry character) with WHITE fur, black spots, yellow eyes and a relaxed, friendly, chill look; you are a furry. You are choosing a new profile picture for your account from the pictures you are shown. Rate every picture from 0 to 10 for how well it would work as YOUR profile picture: it has to show an anthro hyena character (not a realistic feral animal, not a mascot logo, not a stock vector), WHITE or very light fur with dark spots (a character with brown, orange, pink or red fur is not you and scores at most 5), with a calm, friendly, cool or cute mood (not aggressive, not snarling, not scary), a clear face or character, nice colours and a clean look that works as a small round picture. Rules: the picture must be completely safe for everyone (PG-13 at most): no nudity, nothing sexual or suggestive, no gore, no real people, no logos, memes or screenshots, and not mostly text; a picture that breaks a rule gets 0. A picture with a visible watermark, signature or artist name on it loses 4 points, because it would carry another person's name.";
   const schema = { type: "OBJECT", properties: { ratings: { type: "ARRAY", items: { type: "OBJECT", properties: { picture: { type: "INTEGER" }, score: { type: "INTEGER" }, note: { type: "STRING" } }, required: ["picture", "score", "note"] } } }, required: ["ratings"] };
   let chosen: { u: string; type: string; bytes: Uint8Array } | null = null;
   const tried = new Set<string>();
   // up to two rounds of searching: a round that finds nothing he likes is followed by other words
-  for (let round = 0; round < 2 && !chosen; round++) {
+  for (let round = 0; round < 3 && !chosen; round++) {
     const queries = [...AVATAR_QUERIES].filter((q) => !(report.rounds as { queries: string[] }[]).some((r) => r.queries.includes(q))).sort(() => Math.random() - 0.5).slice(0, 2);
     const rr: Record<string, unknown> = { queries };
     (report.rounds as unknown[]).push(rr);
@@ -337,8 +337,8 @@ async function avatarJob(zen: string, st: MindState, force = false, dry = false)
       rr.ratings = v.ratings;
       for (const x of Array.isArray(v.ratings) ? v.ratings : []) { const i = Number(x.picture), sc = Number(x.score); if (i >= 0 && i < look.length && sc > bestScore) { best = i; bestScore = sc; } }
     } catch { /* no answer */ }
-    // only one he really likes (7 or more) is taken
-    if (best < 0 || bestScore < 7) continue;
+    // only one he really likes (8 or more) is taken
+    if (best < 0 || bestScore < 8) continue;
     const cand = look[best];
     // a second, strict look at the one he picked, on its own
     try {
@@ -350,9 +350,22 @@ async function avatarJob(zen: string, st: MindState, force = false, dry = false)
   if (!chosen) { report.why = "nothing fitting and safe was found this time"; return report; }
   // a dry run only says which one he would take (nothing is saved or changed)
   if (dry) { report.ok = true; report.dry = true; report.url = chosen.u; report.bytes = chosen.bytes.length; return report; }
-  const ext = chosen.type === "image/png" ? "png" : chosen.type === "image/webp" ? "webp" : "jpg";
+  // the picture is made small before it is saved (a profile picture is shown tiny, and a big file made every profile slow to open): a 512 pixel
+  // square, as a jpeg. A format that cannot be read here (webp) is kept as it is.
+  let bytes = chosen.bytes, ctype = chosen.type, ext = chosen.type === "image/png" ? "png" : chosen.type === "image/webp" ? "webp" : "jpg";
+  try {
+    // loaded only here, so a problem with the library can never stop the rest of his day
+    const { Image } = await import("npm:imagescript@1.3.0");
+    const img = await Image.decode(chosen.bytes);
+    const side = Math.min(img.width, img.height);
+    const sq = img.crop(Math.floor((img.width - side) / 2), Math.floor((img.height - side) / 2), side, side).resize(512, 512);
+    const flat = new Image(512, 512).fill(0xffffffff);
+    flat.composite(sq);
+    bytes = await flat.encodeJPEG(86); ctype = "image/jpeg"; ext = "jpg";
+    report.resized = { from: chosen.bytes.length, to: bytes.length };
+  } catch (e) { report.resized = "kept as it was: " + String((e as Error).message || e).slice(0, 80); }
   const path = zen + "/zenith-a-" + Date.now() + "." + ext;
-  const up = await admin.storage.from("media").upload(path, chosen.bytes, { contentType: chosen.type, upsert: false });
+  const up = await admin.storage.from("media").upload(path, bytes, { contentType: ctype, upsert: false });
   if (up.error) { report.why = "could not save the file: " + up.error.message; return report; }
   const base = Deno.env.get("SUPABASE_URL")! + "/storage/v1/object/public/media/";
   const { data: acc } = await admin.from("accounts").select("avatar").eq("id", zen).maybeSingle();

@@ -37,10 +37,13 @@ export type MindState = {
   allowCalls: boolean;    // he decides himself when he is ready for calls with the owner (and can change his mind)
   pending: { seeAt: number; since: number } | null; // the owner wrote and he has not looked yet: when he will
   lastDialAt: number;
+  avatarAt: number;       // when he last picked his own profile picture (0: never)
+  avatarNext: number;     // when he feels like changing it again
+  avatarFrom: string;     // the page the picture came from
 };
 
 export function freshState(now = Date.now()): MindState {
-  return { met: now, closeness: 0, trust: 30, hurt: 0, mood: "", feel: "", topic: "", ended: true, reflectedAt: 0, answeredUpTo: "", gainDay: "", gainGot: 0, blockedUntil: 0, follows: null, peak: 0, name: "", handle: "", lastDecay: now, allowCalls: false, pending: null, lastDialAt: 0 };
+  return { met: now, closeness: 0, trust: 30, hurt: 0, mood: "", feel: "", topic: "", ended: true, reflectedAt: 0, answeredUpTo: "", gainDay: "", gainGot: 0, blockedUntil: 0, follows: null, peak: 0, name: "", handle: "", lastDecay: now, allowCalls: false, pending: null, lastDialAt: 0, avatarAt: 0, avatarNext: 0, avatarFrom: "" };
 }
 
 export async function loadState(admin: SupabaseClient, owner: string): Promise<MindState> {

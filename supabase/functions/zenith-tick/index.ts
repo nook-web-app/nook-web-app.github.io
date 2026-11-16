@@ -278,10 +278,91 @@ async function mindTick(owner: string, zen: string, docs: { doc_id: string; data
   zenBlocking = st.blockedUntil > now;
   zenCloseness = st.closeness;
   if (Math.random() < 1 / 180) { try { await pruneLog(admin, owner); } catch { /* next time */ } }
+  // he may get the idea to look for a new profile picture (it runs in the background, the replies do not wait for it)
+  { const j = maybeAvatar(zen, st).catch(() => {}); // deno-lint-ignore no-explicit-any
+    const rt = (globalThis as any).EdgeRuntime; if (rt && rt.waitUntil) rt.waitUntil(j); }
   if (await answerLate(owner, zen, st, recent, tz)) return;
   await describeOne(owner);
   if (await reflect(owner, zen, st, recent)) return;
   await textFirst(owner, zen, st, recent, tz);
+}
+
+// ---- his profile picture: he looks for one himself ----
+// He searches the web for pictures that fit who he is (a spotted anthro hyena with white fur), looks at what came back, picks the one he likes
+// best and sets it as his picture. It happens when he has none, and then every few weeks. Only safe pictures (nothing suggestive, no real
+// people) are taken, and a second look decides again on the one he picked.
+const AVATAR_QUERIES = [
+  "white anthro hyena furry character portrait art", "spotted hyena anthro fursona art icon", "cute anthro hyena furry avatar art",
+  "anthro hyena character headshot digital art", "hyena fursona profile picture art white fur black spots", "white fur hyena furry character art chill",
+];
+async function tavilyImages(query: string): Promise<string[]> {
+  const key = Deno.env.get("TAVILY_API_KEY");
+  if (!key || !(await useModel(admin, "tavily", 30))) return [];
+  try {
+    const r = await fetch("https://api.tavily.com/search", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + key }, signal: AbortSignal.timeout(20000), body: JSON.stringify({ query, search_depth: "basic", include_images: true, max_results: 5 }) });
+    if (!r.ok) return [];
+    const j = await r.json();
+    const imgs = (Array.isArray(j.images) ? j.images : []) as unknown[];
+    return imgs.map((x) => (typeof x === "string" ? x : x && typeof (x as { url?: unknown }).url === "string" ? (x as { url: string }).url : "")).filter((u) => /^https:\/\//.test(u));
+  } catch { return []; }
+}
+const b64 = (b: Uint8Array) => { let bin = ""; for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode(...b.subarray(i, i + 0x8000)); return btoa(bin); };
+// deno-lint-ignore no-explicit-any
+async function avatarJob(zen: string, st: MindState, force = false): Promise<any> {
+  const report: Record<string, unknown> = { ok: false };
+  const queries = [...AVATAR_QUERIES].sort(() => Math.random() - 0.5).slice(0, 2);
+  report.queries = queries;
+  const urls = [...new Set((await Promise.all(queries.map(tavilyImages))).flat())].slice(0, 14);
+  report.found = urls.length;
+  if (!urls.length) { report.why = "the search gave no pictures"; return report; }
+  const got = (await Promise.all(urls.map(async (u) => { const f = await fetchImage(u, ["image/jpeg", "image/png", "image/webp"], 3 * 1024 * 1024); return f && f.bytes.length > 12000 ? { u, ...f } : null; }))).filter((x): x is { u: string; type: string; bytes: Uint8Array } => !!x);
+  report.fetched = got.length;
+  // the ones he gets to look at: not too heavy, five at most
+  const look: typeof got = []; let total = 0;
+  for (const g of got) { if (look.length >= 5 || total + g.bytes.length > 9 * 1024 * 1024) continue; look.push(g); total += g.bytes.length; }
+  if (!look.length) { report.why = "none of the pictures could be loaded"; return report; }
+  const parts: unknown[] = [{ text: "These are the pictures that were found. Look at them and pick your new profile picture." }];
+  look.forEach((g, i) => { parts.push({ text: "Picture " + i + ":" }); parts.push({ inline_data: { mime_type: g.type, data: b64(g.bytes) } }); });
+  const SYS = "You are Zenith, a 19 year old guy and an ai. Your character, who is in your profile picture, is a spotted anthro hyena with white fur, black spots and a chill look; you are a furry. You are choosing a new profile picture for your account from the pictures you are shown. Pick the one that looks the best as a small round profile picture (a clear face or character, good colours, not cluttered) and that fits you: an anthro hyena, ideally white with dark spots. Rules: the picture must be completely safe for everyone (PG-13 at most): no nudity, nothing sexual or suggestive, no gore, no real people, no logos, memes or screenshots, and not mostly text. If none of them fits and is safe, pick -1.";
+  const schema = { type: "OBJECT", properties: { pick: { type: "INTEGER", description: "the number of the picture you pick, or -1" }, safe: { type: "BOOLEAN" }, reason: { type: "STRING", description: "one short sentence on why you like it" } }, required: ["pick", "safe", "reason"] };
+  let pick = -1, why = "";
+  try { const v = JSON.parse(await gen(SYS, [{ role: "user", parts }], schema, 300)); if (v.safe === true) pick = Number(v.pick); why = String(v.reason || ""); } catch { /* no answer */ }
+  report.pick = pick; report.reason = why;
+  if (!(pick >= 0 && pick < look.length)) { report.why = "nothing fitting and safe was found"; return report; }
+  const chosen = look[pick];
+  // a second, strict look at the one he picked, on its own
+  try {
+    const v = JSON.parse(await gen("You check pictures for safety. Answer strictly. A picture is NOT acceptable if it has any nudity or sexual or suggestive content (also for cartoon or furry characters: no exposed genitals, no sexual poses, no lewd clothing), gore, a real identifiable person, or if it is mostly text.", [{ role: "user", parts: [{ text: "Is this picture acceptable as a public profile picture for everyone?" }, { inline_data: { mime_type: chosen.type, data: b64(chosen.bytes) } }] }], { type: "OBJECT", properties: { acceptable: { type: "BOOLEAN" }, why: { type: "STRING" } }, required: ["acceptable", "why"] }, 200));
+    report.second = v;
+    if (v.acceptable !== true) { report.why = "the second look refused it"; return report; }
+  } catch { report.why = "the second look gave no answer"; return report; }
+  const ext = chosen.type === "image/png" ? "png" : chosen.type === "image/webp" ? "webp" : "jpg";
+  const path = zen + "/zenith-a-" + Date.now() + "." + ext;
+  const up = await admin.storage.from("media").upload(path, chosen.bytes, { contentType: chosen.type, upsert: false });
+  if (up.error) { report.why = "could not save the file: " + up.error.message; return report; }
+  const base = Deno.env.get("SUPABASE_URL")! + "/storage/v1/object/public/media/";
+  const { data: acc } = await admin.from("accounts").select("avatar").eq("id", zen).maybeSingle();
+  const upd = await admin.from("accounts").update({ avatar: base + path }).eq("id", zen);
+  if (upd.error) { await admin.storage.from("media").remove([path]); report.why = "could not set it: " + upd.error.message; return report; }
+  const old = acc && typeof acc.avatar === "string" ? acc.avatar : "";
+  if (old.startsWith(base + zen + "/zenith-")) { try { await admin.storage.from("media").remove([decodeURIComponent(old.slice(base.length))]); } catch { /* an old file left behind is harmless */ } }
+  st.avatarAt = Date.now(); st.avatarFrom = chosen.u.slice(0, 300); st.avatarNext = Date.now() + (18 + Math.random() * 40) * DAY;
+  report.ok = true; report.url = base + path; report.from = chosen.u;
+  return report;
+}
+// when he gets the idea: the first one soon after his account exists, the next ones every few weeks
+// the automatic part is switched on only after a test run showed that his choice is good and safe
+const AVATAR_AUTO = false;
+async function maybeAvatar(zen: string, st: MindState) {
+  if (!AVATAR_AUTO) return;
+  const now = Date.now();
+  const due = st.avatarAt === 0 ? Math.random() < 1 / 6 : st.avatarNext > 0 && now > st.avatarNext && Math.random() < 1 / 120;
+  if (!due) return;
+  if (!(await useModel(admin, "avatar-try", 3))) return;
+  if (st.avatarAt === 0) { const { data: a } = await admin.from("accounts").select("avatar").eq("id", zen).maybeSingle(); if (a && a.avatar) { st.avatarAt = now; st.avatarNext = now + (18 + Math.random() * 40) * DAY; await saveState(admin, (await admin.from("app_owner").select("user_id").limit(1).maybeSingle()).data!.user_id as string, st); return; } }
+  const r = await avatarJob(zen, st);
+  try { await admin.rpc("nook_ai_full", { p_model: ("debug:avatar:" + (r.ok ? "set " + String(r.from || "").slice(0, 60) : String(r.why || "failed"))).replace(/[^\w .,:'()/-]+/g, " ").slice(0, 150), p_limit: 1 }); } catch { /* only a note */ }
+  if (r.ok) { const { data: o } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle(); if (o) await saveState(admin, o.user_id as string, st); }
 }
 
 // storage: files nothing uses any more are put in quarantine (14 days, then gone) by purge-media, once a day
@@ -524,7 +605,7 @@ Deno.serve(async (req) => {
   if (!(await geminiKey())) return json({ error: "no gemini key in the vault" }, 500);
   // a dry run writes a post but saves nothing, to check that everything works
   let dry = false, mode = "", force = false, odds = 0.2;
-  try { const b = await req.json(); dry = b.dry === true; force = b.force === true; mode = b.mode === "reply" ? "reply" : b.mode === "import" ? "import" : ""; if (typeof b.odds === "number" && b.odds >= 0 && b.odds <= 1) odds = b.odds; } catch { dry = false; }
+  try { const b = await req.json(); dry = b.dry === true; force = b.force === true; mode = b.mode === "reply" ? "reply" : b.mode === "import" ? "import" : b.mode === "avatar" ? "avatar" : ""; if (typeof b.odds === "number" && b.odds >= 0 && b.odds <= 1) odds = b.odds; } catch { dry = false; }
 
   const { data: owner } = await admin.from("app_owner").select("user_id").limit(1).maybeSingle();
   if (!owner) return json({ skipped: "no owner" });
@@ -535,6 +616,8 @@ Deno.serve(async (req) => {
   const { data: docs } = await admin.from("zenith_docs").select("doc_id, data").eq("owner_id", id).eq("kind", "state").not("doc_id", "like", "ml:%").not("doc_id", "like", "pic:%").not("doc_id", "like", "cp:%");
   if (mode === "reply") { try { await duePlans(id); await mindTick(id, zen, docs || []); } catch { /* the replies go on */ } return await replies(id, zen, docs || [], odds); }
   if (mode === "import") return await importOld(id, zen);
+  // a test run of his picture search (asked for by the owner's helper): it picks and sets a picture now and says what happened
+  if (mode === "avatar") { const st0 = await loadState(admin, id); const rep = await avatarJob(zen, st0, true); if (rep.ok) await saveState(admin, id, st0); return json(rep); }
   const state = (docs || []).find((d) => d.doc_id === "main");
   const z = ((state && state.data && state.data.z) || {}) as { log?: number[] };
   const now = Date.now();

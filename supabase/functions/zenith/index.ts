@@ -137,7 +137,7 @@ function liveConfig(tz: string, resume: string, simple = false, system = LIVE_SY
   return {
     responseModalities: ["AUDIO"],
     speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: LIVE_VOICE } } },
-    systemInstruction: { parts: [{ text: system + " The user's time zone is " + (tz || "unknown") + ", which tells you roughly where they live: when a place name could mean several places, put the country that matches their time zone in the search query. Their current local time is " + when + "." }] },
+    systemInstruction: { parts: [{ text: system + " The user's time zone is " + (tz || "unknown") + ", which is only for choosing the right country in a search when a place name could mean several places (put the country that matches it in the search query). Never say where the person lives, never name their city, country or time zone, unless they told you themselves in this call. Their current local time is " + when + "." }] },
     tools: [{ functionDeclarations: [SEARCH_TOOL.functionDeclarations[0], END_CALL] }],
     // the captions of what the person says lean on English and Arabic (the plain setting, without a list, guesses the language and gets it wrong
     // for an accent); `simple` is what the phone asks for after a connection was refused, in case a model does not take the list

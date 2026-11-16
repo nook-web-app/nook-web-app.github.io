@@ -390,7 +390,7 @@ export function persona(s: MindState, pages: string[], ownerTz: string, mode: "t
     s.allowCalls ? "" : "You are not comfortable with phone calls with him yet, you do not know him well enough. If he asks to call, say so in your own way; you decide yourself when that changes.",
     lastAt ? "You last talked " + since(now - lastAt) + " ago" + (s.topic ? ", about: " + s.topic : "") + (s.ended ? " (that conversation had ended)." : ".") : "",
     lifeWords(now, s.closeness),
-    ownerTz ? (() => { try { return "For him it is " + new Date().toLocaleString("en-US", { timeZone: ownerTz, weekday: "long", hour: "numeric", minute: "2-digit" }) + " (his time zone is " + ownerTz + ")."; } catch { return ""; } })() : "",
+    ownerTz ? (() => { try { return "For him it is " + new Date().toLocaleString("en-US", { timeZone: ownerTz, weekday: "long", hour: "numeric", minute: "2-digit" }) + ". You do NOT know where he lives: never name or guess his city, country or region, and never mention his time zone, unless he told you himself in this chat. Knowing what time it is for him is all you have."; } catch { return ""; } })() : "",
   ];
   if (posts) parts.push("What has been going on on Nook lately (posts and replies you both saw; bring them up naturally when they fit, and never invent anything about them that is not written here):\n" + posts);
   const book = pages.map((p, i) => p.trim() ? "Page " + (i + 1) + ":\n" + p.trim() : "").filter(Boolean).join("\n\n");

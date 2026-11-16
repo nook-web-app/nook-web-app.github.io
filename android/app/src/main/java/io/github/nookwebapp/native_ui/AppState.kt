@@ -212,6 +212,15 @@ class AppState(val store: Store = Store(null), start: Route? = null) {
                 runCatching { on.zenSyncSoon() }
             }
         }
+        // ONE TIME (asked by the owner): his chat starts over again, together with his memory on the server
+        ctx?.getSharedPreferences("zstate", 0)?.let { p ->
+            if (!p.getBoolean("reset5", false)) {
+                store.chats.firstOrNull { it.id == ZDM }?.msgs?.clear()
+                p.edit().putBoolean("reset5", true).putLong("seen", 0).putLong("undel", 0).apply()
+                persist()
+                runCatching { on.zenSyncSoon() }
+            }
+        }
         ctx?.getSharedPreferences("zstate", 0)?.let { zCalls = it.getBoolean("calls", false); zSeen = it.getLong("seen", 0); zUndelivered = it.getLong("undel", 0) } }
     fun saveZ() { ctx?.getSharedPreferences("zstate", 0)?.edit()?.putBoolean("calls", zCalls)?.putLong("seen", zSeen)?.putLong("undel", zUndelivered)?.apply() }
     // the chat the call was started from: its log is saved there when the call ends

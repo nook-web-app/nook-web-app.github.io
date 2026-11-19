@@ -591,9 +591,11 @@ object MediaGrab {
     }
 
     // ---- saving the file ----
-    private fun safeName(title: String, ext: String): String {
+    private fun safeName(title: String, ext: String, site: String = ""): String {
         val base = title.replace(Regex("[^\\p{L}\\p{N} _.-]+"), " ").replace(Regex("\\s+"), " ").trim().take(60).ifEmpty { "nook" }
-        return "$base ${System.currentTimeMillis() % 100000}.$ext"
+        // a file that came from X has an "x" in front of its name
+        val tag = if (site == "x") "x " else ""
+        return "$tag$base ${System.currentTimeMillis() % 100000}.$ext"
     }
 
     // a file in pieces of 2 to 4 MB with eight connections at once: one connection to YouTube is slowed down by the site, pieces are not;
@@ -822,7 +824,7 @@ object MediaGrab {
                     extractAudio(part, out, webm)
                     ext = if (webm) "webm" else "m4a"; mime = if (webm) "audio/webm" else "audio/mp4"
                 }
-                val name = safeName(info.title, ext)
+                val name = safeName(info.title, ext, info.site)
                 val resolver = ctx.contentResolver
                 val result: Uri
                 val place = target("audio", folder)
@@ -896,7 +898,7 @@ object MediaGrab {
             val ext = sn?.first ?: file.extension.ifEmpty { src.ext }
             val mime = sn?.second ?: if (ext == "gif") "image/gif" else if (ext == "webm") "video/webm" else if (src.mime.startsWith("image/")) src.mime else "video/mp4"
             val image = mime.startsWith("image/")
-            val name = safeName(info.title, ext)
+            val name = safeName(info.title, ext, info.site)
             val resolver = ctx.contentResolver
             val result: Uri
             val place = target(if (image) "image" else "video", folder)
